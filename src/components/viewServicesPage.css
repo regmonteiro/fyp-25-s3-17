@@ -1,0 +1,99 @@
+/* Container styling */
+.services-page {
+  max-width: 1060px;
+  margin: 3rem auto;
+  padding: 1rem 2rem;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #2c3e50;
+}
+
+/* Title and subtitle */
+.services-title {
+  font-size: 2.5rem;
+  text-align: center;
+  margin-bottom: 0.5rem;
+  color: #2874a6; 
+}
+
+.services-subtitle {
+  font-size: 1.25rem;
+  color: #4d5656;
+  text-align: center;
+  margin-bottom: 2rem;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* Grid container for cards */
+.services-list {
+  display: grid;
+  gap: 1.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  padding-bottom: 2rem;
+}
+
+/* Each service card */
+.service-card {
+  background-color: #ffffff;
+  padding: 1.8rem 1.5rem;
+  border-radius: 16px;
+  box-shadow: 0 5px 15px rgba(25, 111, 61, 0.15);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.service-card:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 8px 20px rgba(25, 111, 61, 0.3);
+}
+
+/* Service title */
+.service-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  margin-bottom: 0.8rem;
+  color: #1b4d3e;
+}
+
+/* Description text */
+.service-description {
+  font-size: 1rem;
+  line-height: 1.5;
+  color: #3d4f4f;
+  flex-grow: 1;
+  margin-bottom: 1.5rem;
+}
+
+/* Button styling */
+.service-btn {
+  align-self: flex-start;
+  background-color: #2874a6;
+  border: none;
+  color: white;
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.55rem 1.25rem;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.service-btn:hover,
+.service-btn:focus {
+  background-color: #7177ea;
+  outline: none;
+}
+
+/* Responsive text size */
+@media (max-width: 400px) {
+  .services-title {
+    font-size: 2rem;
+  }
+
+  .services-subtitle {
+    font-size: 1.1rem;
+  }
+}

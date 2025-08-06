@@ -1,0 +1,83 @@
+.membership-page {
+  max-width: 960px;
+  margin: 3rem auto;
+  padding: 1rem 2rem;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #2c3e50;
+  text-align: center;
+}
+.hero-image {
+  width: 80%;
+  height: 100px;
+  display: block;
+  object-fit: cover;
+  padding: 0;
+}
+.membership-page h1 {
+  font-size: 2.5rem;
+  color: #2874a6;
+  margin-bottom: 0.5rem;
+}
+
+.membership-page p {
+  font-size: 1.2rem;
+  margin-bottom: 2rem;
+  color: #4d5656;
+}
+
+.membership-list {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 2rem;
+}
+
+.membership-card {
+  background: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 4px 14px rgba(25, 111, 61, 0.1);
+  padding: 1.5rem;
+  width: 250px;
+  text-align: left;
+  transition: transform 0.2s ease;
+}
+
+.membership-card:hover {
+  transform: translateY(-5px);
+}
+
+.membership-card h2 {
+  font-size: 1.5rem;
+  color: #1b4d3e;
+  margin-bottom: 0.5rem;
+}
+
+.membership-card .price {
+  font-size: 1.3rem;
+  font-weight: bold;
+  color: #2874a6;
+  margin-bottom: 1rem;
+}
+
+.membership-card ul {
+  list-style: none;
+  padding: 0;
+  margin-bottom: 1.5rem;
+}
+
+.membership-card li {
+  font-size: 1rem;
+  padding: 0.3rem 0;
+  color: #34495e;
+}
+
+.join-button {
+  background-color: #2874a6;
+  color: #fff;
+  border: none;
+  border-radius: 10px;
+  padding: 0.7rem 1.2rem;
+  font-size: 1rem;
+  cursor: not-allowed;      
+  opacity: 0.7;
+}
