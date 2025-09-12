@@ -1,7 +1,5 @@
-# Uncomment this line to define a global platform for your project
-# platform :ios, '13.0'
-
-# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+source 'https://cdn.cocoapods.org/'
+platform :ios, '16.0'
 ENV['COCOAPODS_DISABLE_STATS'] = 'true'
 
 project 'Runner', {
@@ -12,32 +10,76 @@ project 'Runner', {
 
 def flutter_root
   generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
-  unless File.exist?(generated_xcode_build_settings_path)
-    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
-  end
-
+  raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first" unless File.exist?(generated_xcode_build_settings_path)
   File.foreach(generated_xcode_build_settings_path) do |line|
-    matches = line.match(/FLUTTER_ROOT\=(.*)/)
-    return matches[1].strip if matches
+    match = line.match(/FLUTTER_ROOT\=(.*)/)
+    return match[1].strip if match
   end
-  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}."
 end
 
 require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
-
 flutter_ios_podfile_setup
 
 target 'Runner' do
-  use_frameworks!
-
+  use_frameworks! :linkage => :static
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+
   target 'RunnerTests' do
     inherit! :search_paths
   end
 end
 
 post_install do |installer|
+  # --- Clean ALL Pod targets ---
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # target-level flags
+    target.build_configurations.each do |config|
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+      config.build_settings['ENABLE_BITCODE'] = 'NO'
+      config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
+      %w[OTHER_CFLAGS OTHER_CPLUSPLUSFLAGS OTHER_LDFLAGS OTHER_SWIFT_FLAGS].each do |key|
+        val = config.build_settings[key]; next unless val
+        arr = val.is_a?(Array) ? val : val.to_s.split(' ')
+        # remove any -G* tokens
+        arr.reject! { |f| f == '-G' || f == '"-G"' || f.start_with?('-G') }
+        config.build_settings[key] = arr
+      end
+    end
+
+   
+    if target.respond_to?(:sources_build_phase) && target.sources_build_phase
+      target.sources_build_phase.files.each do |build_file|
+        s = build_file.settings
+        next unless s && s['COMPILER_FLAGS']
+        flags = s['COMPILER_FLAGS'].to_s.split(' ')
+        flags.reject! { |f| f == '-G' || f == '"-G"' || f.start_with?('-G') }
+        s['COMPILER_FLAGS'] = flags.join(' ')
+      end
+    end
+  end
+
+  
+  installer.pods_project.save
+
+  
+  installer.aggregate_targets.each do |agg|
+    user_proj = agg.user_project
+    next unless user_proj
+    user_proj.native_targets.each do |t|
+      t.build_configurations.each do |config|
+        config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+        config.build_settings['ENABLE_BITCODE'] = 'NO'
+        %w[OTHER_CFLAGS OTHER_CPLUSPLUSFLAGS OTHER_LDFLAGS OTHER_SWIFT_FLAGS].each do |key|
+          val = config.build_settings[key]; next unless val
+          arr = val.is_a?(Array) ? val : val.to_s.split(' ')
+          arr.reject! { |f| f == '-G' || f == '"-G"' || f.start_with?('-G') }
+          config.build_settings[key] = arr
+        end
+      end
+    end
+    user_proj.save
   end
 end
