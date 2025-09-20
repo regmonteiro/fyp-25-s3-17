@@ -8,9 +8,7 @@ import 'models/user_profile.dart'; // Import the UserProfile model
 enum SubscriptionPlan { monthly, annual, threeYear, none }
 
 class PaymentPage extends StatefulWidget {
-  final Map<String, dynamic> userData;
-
-  const PaymentPage({super.key, required this.userData});
+  const PaymentPage({Key? key}) : super(key: key);
 
   @override
   State<PaymentPage> createState() => _PaymentPageState();
@@ -38,117 +36,109 @@ class _PaymentPageState extends State<PaymentPage> {
   // Form key for additional caregiver details
   final _caregiverFormKey = GlobalKey<FormState>();
 
-  // Method to handle a successful subscription (either paid or trial)
-  Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool isTrial = false}) async {
-    try {
-      // 1. Create the user's Firebase account
-      final userCredential = await FirebaseAuth.instance
-          .createUserWithEmailAndPassword(
-        email: widget.userData['email'],
-        password: widget.userData['password'],
+Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool isTrial = false}) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("User not authenticated. Please log in again.")),
       );
+    }
+    return;
+  }
 
-      // Send email verification
-      await userCredential.user!.sendEmailVerification();
-      
-      // Calculate the subscription end date
-      DateTime endDate;
-      switch (plan) {
-        case SubscriptionPlan.monthly:
-          endDate = DateTime.now().add(const Duration(days: 30));
-          break;
-        case SubscriptionPlan.annual:
-          endDate = DateTime.now().add(const Duration(days: 365));
-          break;
-        case SubscriptionPlan.threeYear:
-          endDate = DateTime.now().add(const Duration(days: 3 * 365));
-          break;
-        default:
-          endDate = DateTime.now().add(const Duration(days: 15)); // For free trial
-          break;
+  try {
+    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    if (!userDoc.exists) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("User profile not found in database.")),
+        );
       }
+      return;
+    }
+    final userProfileData = userDoc.data()!;
 
-      // Add subscription details and a uid to the userData map
-      final Map<String, dynamic> userProfileData = {
-        ...widget.userData,
-        'uid': userCredential.user!.uid, // Add UID here for the UserProfile model
-        'subscriptionStatus': isTrial ? 'freeTrial' : plan.name,
-        'subscriptionEndDate': endDate.toIso8601String(),
-        'isTrialing': isTrial,
-        'createdAt': DateTime.now(),
-      };
+    // Calculate the subscription end date
+    DateTime endDate;
+    switch (plan) {
+      case SubscriptionPlan.monthly:
+        endDate = DateTime.now().add(const Duration(days: 30));
+        break;
+      case SubscriptionPlan.annual:
+        endDate = DateTime.now().add(const Duration(days: 365));
+        break;
+      case SubscriptionPlan.threeYear:
+        endDate = DateTime.now().add(const Duration(days: 3 * 365));
+        break;
+      default:
+        endDate = DateTime.now().add(const Duration(days: 15)); // For free trial
+        break;
+    }
 
-      // 2. Save user profile details to Firestore
+    // Create an updated map to send to Firestore
+    final Map<String, dynamic> updatedData = {
+      'subscriptionStatus': isTrial ? 'freeTrial' : plan.name,
+      'subscriptionEndDate': endDate.toIso8601String(),
+      'isTrialing': isTrial,
+    };
+
+    // Update the user's profile in Firestore with subscription details
+    await FirebaseFirestore.instance.collection('users').doc(user.uid).update(updatedData);
+
+    // Save additional caregiver details if provided
+    if (_addCaregiver) {
       await FirebaseFirestore.instance
           .collection('users')
-          .doc(userCredential.user!.uid)
-          .set(userProfileData);
-      
-      // 3. Save additional caregiver details if provided
-      if (_addCaregiver) {
-        // You should have a separate process to create this caregiver's account and link it.
-        // For this project, we'll just save their details to a sub-collection.
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userCredential.user!.uid)
-            .collection('caregivers')
-            .add({
-          'name': _caregiverNameController.text.trim(),
-          'email': _caregiverEmailController.text.trim(),
-          'phone': _caregiverPhoneController.text.trim(),
-          'linkedAt': DateTime.now(),
-        });
-      }
+          .doc(user.uid)
+          .collection('caregivers')
+          .add({
+        'name': _caregiverNameController.text.trim(),
+        'email': _caregiverEmailController.text.trim(),
+        'phone': _caregiverPhoneController.text.trim(),
+        'linkedAt': DateTime.now(),
+      });
+    }
 
-      // 4. Show success message and navigate
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(isTrial 
-                ? "Free trial activated! Enjoy Allcare."
-                : "Payment successful! Your subscription is now active."
-            ),
+    // Show success message and navigate
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(isTrial
+              ? "Free trial activated! Enjoy Allcare."
+              : "Payment successful! Your subscription is now active."
           ),
-        );
-        
-        // Create the UserProfile object from the data we just saved
-        final UserProfile userProfile = UserProfile.fromMap(userProfileData);
-        
-        // Navigate to the main app page, passing the userProfile object
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => ElderlyDashboardPage(userProfile: userProfile)),
-        );
-      }
+        ),
+      );
+
+      // Now, use the userProfileData variable to create the UserProfile object
+      final UserProfile userProfile = UserProfile.fromMap(userProfileData, user.uid);
       
-    } on FirebaseAuthException catch (e) {
-      String errorMessage;
-      if (e.code == 'email-already-in-use') {
-        errorMessage = "Email is already registered. Please login instead.";
-      } else {
-        errorMessage = "Signup failed: ${e.message}";
-      }
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMessage)),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("An unexpected error occurred: ${e.toString()}")),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isProcessingPayment = false;
-        });
-      }
+      // Navigate to the main app page, passing the userProfile object
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (context) => ElderlyDashboardPage(userProfile: userProfile)),
+      );
+    }
+
+  } catch (e) {
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("An unexpected error occurred: ${e.toString()}")),
+      );
+    }
+  } finally {
+    if (mounted) {
+      setState(() {
+        _isProcessingPayment = false;
+      });
     }
   }
+}
 
   // Method to simulate a payment process
   Future<void> _processPayment() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     if (_selectedPlan == SubscriptionPlan.none) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Please select a subscription plan.")),
@@ -169,12 +159,8 @@ class _PaymentPageState extends State<PaymentPage> {
     try {
       // Simulate a network delay for payment processing
       await Future.delayed(const Duration(seconds: 2));
-
       await _handleSubscriptionSuccess(plan: _selectedPlan);
 
-    } on FirebaseAuthException catch (e) {
-      // Catch and re-throw Firebase errors to be handled by _handleSubscriptionSuccess
-      rethrow;
     } finally {
       if (mounted) {
         setState(() {
@@ -186,11 +172,13 @@ class _PaymentPageState extends State<PaymentPage> {
   
   // Method to handle the free trial option
   Future<void> _startFreeTrial() async {
+    FocusManager.instance.primaryFocus?.unfocus();
+
     setState(() {
       _isProcessingPayment = true;
     });
     
-    // Caregiver validation is not needed for the free trial button
+    // Caregiver validation is needed for the free trial button
     if (_addCaregiver && !_caregiverFormKey.currentState!.validate()) {
       setState(() { _isProcessingPayment = false; });
       return;
@@ -200,9 +188,6 @@ class _PaymentPageState extends State<PaymentPage> {
       await Future.delayed(const Duration(seconds: 1)); // Simulate a short delay
       await _handleSubscriptionSuccess(plan: SubscriptionPlan.none, isTrial: true);
 
-    } on FirebaseAuthException catch (e) {
-      // Catch and re-throw Firebase errors to be handled by _handleSubscriptionSuccess
-      rethrow;
     } finally {
       if (mounted) {
         setState(() {
@@ -212,6 +197,17 @@ class _PaymentPageState extends State<PaymentPage> {
     }
   }
   
+  @override
+  void dispose() {
+    _cardNumberController.dispose();
+    _expiryDateController.dispose();
+    _cvcController.dispose();
+    _cardNameController.dispose();
+    _caregiverNameController.dispose();
+    _caregiverEmailController.dispose();
+    _caregiverPhoneController.dispose();
+    super.dispose();
+  }
 
   // Widget to display a single subscription card
   Widget _buildPlanCard({
@@ -424,12 +420,5 @@ class _PaymentPageState extends State<PaymentPage> {
               ),
             ),
     );
-  }
-
-  // Method to build a navigation item
-  Widget _buildNavItem(IconData icon, String label, int index) {
-    // Note: This method is not used in this specific widget, but is a good practice.
-    // It's part of the ElderlyDashboardPage code.
-    return Container();
   }
 }

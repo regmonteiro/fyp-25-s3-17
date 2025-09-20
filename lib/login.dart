@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-
+import 'package:elderly_aiassistant/main_wrapper.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({Key? key}) : super(key: key);
@@ -14,37 +14,57 @@ class _LoginPageState extends State<LoginPage> {
   final TextEditingController _passwordController = TextEditingController();
   final FirebaseAuth _auth = FirebaseAuth.instance;
 
+  bool _isLoading = false;
 
-  void _login() async {
+  @override
+  void dispose() {
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _login() async {
+    if (_isLoading) return;
+    setState(() => _isLoading = true);
+
+    FocusScope.of(context).unfocus();
     try {
-      final String email = _emailController.text.trim();
-      final String password = _passwordController.text.trim();
+      final email = _emailController.text.trim();
+      final password = _passwordController.text.trim();
 
-      await _auth.signInWithEmailAndPassword(
+      final cred = await _auth.signInWithEmailAndPassword(
         email: email,
         password: password,
       );
 
+      // refresh custom claims so RoleRouter sees the right role immediately
+      await cred.user?.getIdTokenResult(true);
+
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Login successful!')),
-      );
 
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const MainWrapper()),
+        (route) => false,
+      );
     } on FirebaseAuthException catch (e) {
-      // Check if the widget is still mounted before using context.
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Login failed: ${e.message}')),
+        SnackBar(content: Text('Login failed: ${e.message ?? 'Unknown error'}')),
       );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Login failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _resetPassword() async {
-    final String email = _emailController.text.trim();
+  Future<void> _resetPassword() async {
+    final email = _emailController.text.trim();
     if (email.isEmpty) {
-      // This context usage is safe because there's no await before it.
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter your email to reset password.')),
       );
@@ -53,17 +73,12 @@ class _LoginPageState extends State<LoginPage> {
 
     try {
       await _auth.sendPasswordResetEmail(email: email);
-
-      // Check if the widget is still mounted before using context.
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Password reset email sent. Check your inbox.')),
       );
     } on FirebaseAuthException catch (e) {
-      // Check if the widget is still mounted before using context.
       if (!mounted) return;
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to send reset email: ${e.message}')),
       );
@@ -83,25 +98,30 @@ class _LoginPageState extends State<LoginPage> {
               controller: _emailController,
               decoration: const InputDecoration(labelText: 'Email'),
               keyboardType: TextInputType.emailAddress,
+              enabled: !_isLoading,
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _passwordController,
               decoration: const InputDecoration(labelText: 'Password'),
               obscureText: true,
+              enabled: !_isLoading,
             ),
             const SizedBox(height: 24),
             ElevatedButton(
-              onPressed: _login,
-              child: const Text('Log In'),
+              onPressed: _isLoading ? null : _login,
+              child: _isLoading
+                  ? const SizedBox(
+                      height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Log In'),
             ),
             TextButton(
-              onPressed: _resetPassword,
+              onPressed: _isLoading ? null : _resetPassword,
               child: const Text('Forgot Password?'),
             ),
           ],
         ),
       ),
-    );
+      );
   }
 }

@@ -1,11 +1,16 @@
+import 'package:elderly_aiassistant/welcome.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io';
 import '../../controller/account/account_controller.dart';
 import 'profile_details_page.dart';
 import 'payment_details_page.dart';
 import 'caregiver_access_page.dart';
 import 'password_settings_page.dart';
 import 'support_feedback_page.dart';
+import 'settings_page.dart';
+import 'package:flutter/foundation.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({Key? key}) : super(key: key);
@@ -26,6 +31,15 @@ class AccountPage extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const ProfileDetailsPage()),
+            ),
+          ),
+          _tile(
+            icon: Icons.settings,
+            title: "Account Settings",
+            subtitle: "Notification, privacy, data",
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SettingsPage()),
             ),
           ),
           _tile(
@@ -73,8 +87,13 @@ class AccountPage extends StatelessWidget {
               padding: const EdgeInsets.symmetric(vertical: 14),
             ),
             onPressed: () async {
-              await ctrl.signOut(context);
-              // Optional: Navigator.of(context).pushReplacementNamed('/login');
+              await FirebaseAuth.instance.signOut();
+              if (!context.mounted) return;
+
+              Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+                _logoutRoute(),
+                (route) => false,
+              );
             },
             label: const Text("Log out"),
           ),
@@ -87,6 +106,29 @@ class AccountPage extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+  Route _logoutRoute(){
+    if (!kIsWeb && Platform.isIOS){
+      return PageRouteBuilder(
+        pageBuilder: (context, animation, secondaryAnimation) => const WelcomeScreen(),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          const begin = Offset(0.0, 1.0);
+          const end = Offset.zero;
+          const curve = Curves.ease;
+
+          var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+          final offsetAnimation = animation.drive(tween);
+
+          return SlideTransition(
+            position: offsetAnimation,
+            child: child,
+          );
+        },
+      );
+    }
+    return MaterialPageRoute(
+      builder:(context) => const WelcomeScreen(),
     );
   }
 

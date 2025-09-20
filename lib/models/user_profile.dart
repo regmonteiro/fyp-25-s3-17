@@ -1,23 +1,51 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 class UserProfile {
   final String uid;
-  final String name;
-  final String role;
-  final String? caregiverName; // Nullable for non-elderly users
+  final String? email;
+  final String? firstName;
+  final String? lastName;
+  final String? role;
+  final String? uidOfElder;
 
   UserProfile({
     required this.uid,
-    required this.name,
-    required this.role,
-    this.caregiverName,
+    this.email,
+    this.firstName,
+    this.lastName,
+    this.role,
+    this.uidOfElder,
   });
 
-  // Factory constructor to create a UserProfile instance from a Firestore document map.
-  factory UserProfile.fromMap(Map<String, dynamic> data) {
+  String get displayName {
+    if (firstName != null && lastName != null) return '$firstName $lastName';
+    if (firstName != null) return firstName!;
+    return 'User';
+  }
+
+  factory UserProfile.fromMap(Map<String, dynamic> map, String uid) {
+    final rawRole = map['role'];
     return UserProfile(
-      uid: data['uid'] as String? ?? '',
-      name: data['name'] as String? ?? '',
-      role: data['role'] as String? ?? '',
-      caregiverName: data['caregiverName'] as String?,
+      uid: uid,
+      email: map['email'] as String?,
+      firstName: map['firstName'] as String?,
+      lastName: map['lastName'] as String?,
+      role: rawRole is String ? rawRole.trim().toLowerCase() : null,
+      uidOfElder: map['uidOfElder'] as String?,
     );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'uid': uid,
+      'email': email,
+      'firstName': firstName,
+      'lastName': lastName,
+      'role': role,
+      'uidOfElder': uidOfElder,
+    };
+  }
+
+  factory UserProfile.fromDocumentSnapshot(DocumentSnapshot doc) {
+    return UserProfile.fromMap(doc.data() as Map<String, dynamic>, doc.id);
   }
 }

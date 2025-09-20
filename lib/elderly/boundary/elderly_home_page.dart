@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../controller/elderly_home_controller.dart';
 import '../../models/user_profile.dart';
+import 'account/caregiver_access_page.dart';
 
 class ElderlyHomePage extends StatefulWidget {
   final UserProfile userProfile;
@@ -24,12 +25,12 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(widget.userProfile.name),
+              _buildHeader(context),
               const SizedBox(height: 24),
               _buildElderlyInfoCard(
-                widget.userProfile.name,
+                widget.userProfile.displayName,
                 widget.userProfile.uid,
-                widget.userProfile.caregiverName ?? 'No Caregiver',
+                'Loading Caregiver...',
               ),
               const SizedBox(height: 24),
               _buildSectionTitle(context, "Announcements"),
@@ -47,71 +48,80 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 
-  Widget _buildHeader(String name) {
+  Widget _buildHeader(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text("Welcome Back,", style: TextStyle(fontSize: 18, color: Colors.white70)),
         Text(
-          name,
-          style: const TextStyle(
-            fontSize: 28,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
+          "Welcome Back,",
+          style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black54),
+        ),
+        Text(
+          widget.userProfile.displayName,
+          style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
         ),
       ],
     );
   }
 
   Widget _buildElderlyInfoCard(String name, String id, String caregiver) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF6A1B9A), Color(0xFF42A5F5)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: const [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 10,
-            offset: Offset(0, 5),
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const CaregiverAccessPage()),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF6A1B9A), Color(0xFF42A5F5)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  id,
-                  style: const TextStyle(color: Colors.white70),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Caregiver: $caregiver',
-                  style: const TextStyle(color: Colors.white, fontSize: 16),
-                ),
-              ],
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: const [
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 10,
+              offset: Offset(0, 5),
             ),
-          ),
-          const Icon(Icons.favorite_border, color: Colors.white, size: 60),
-        ],
+          ],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    id,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Caregiver: $caregiver',
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.favorite_border, color: Colors.white, size: 60),
+            const SizedBox(width: 10),
+            const Icon(Icons.arrow_forward_ios, color: Colors.white),
+          ],
+        ),
       ),
     );
   }
@@ -149,7 +159,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         }
 
         final announcements = snapshot.data!.docs.map((doc) => doc['title'] as String).toList();
-        
+
         return Column(
           children: announcements.map((announcement) {
             return Card(
@@ -178,7 +188,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return const Center(child: Text("No upcoming events."));
         }
-        
+
         final events = snapshot.data!.docs.map((doc) => doc['title'] as String).toList();
 
         return Column(
@@ -209,9 +219,9 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
           return const Center(child: Text("No recommendations for you."));
         }
-        
+
         final recommendations = snapshot.data!.docs.map((doc) => doc['title'] as String).toList();
-        
+
         return Column(
           children: recommendations.map((topic) {
             return Card(

@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "598007516552",
+    "firebase_url": "https://elderly-aiassistant-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "elderly-aiassistant",
+    "storage_bucket": "elderly-aiassistant.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598007516552:android:66cc00b51c06bfc787fe3d",
+        "android_client_info": {
+          "package_name": "com.allcare.allcare"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxf2NywtwXc6jnAIIRBsh0M2dSMexkf-U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598007516552:android:6f018b60b0ce92c787fe3d",
+        "android_client_info": {
+          "package_name": "com.example.elderly_aiassistant"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxf2NywtwXc6jnAIIRBsh0M2dSMexkf-U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
