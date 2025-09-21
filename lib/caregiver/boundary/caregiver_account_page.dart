@@ -31,7 +31,7 @@ class CaregiverAccountPage extends StatelessWidget {
                 const Text('Your Caregiver Code:', style: TextStyle(color: Colors.grey)),
                 SelectableText(caregiverCode, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 16),
-                // Add more caregiver-specific actions here…
+                
               ],
             ),
           );
