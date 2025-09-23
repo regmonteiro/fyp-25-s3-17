@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:intl/intl.dart';
 import '../controller/events_controller.dart';
 import 'package:table_calendar/table_calendar.dart';
@@ -251,7 +248,7 @@ class _EventsPageState extends State<EventsPage> {
         final filteredAppointments = allAppointments.where((doc) {
           final appointmentData = doc.data() as Map<String, dynamic>;
           final docDate = (appointmentData['dateTime'] as Timestamp).toDate();
-          final title = appointmentData['title'].toLowerCase();
+          final title = appointmentData['title']?.toLowerCase() ?? '';
           final description = appointmentData['description']?.toLowerCase() ?? '';
           final type = appointmentData['type']?.toLowerCase() ?? '';
           final searchQueryLower = _searchQuery.toLowerCase();
@@ -598,8 +595,4 @@ class _EventsPageState extends State<EventsPage> {
       },
     );
   }
-}
-
-bool isSameDay(DateTime a, DateTime b) {
-  return a.year == b.year && a.month == b.month && a.day == b.day;
 }

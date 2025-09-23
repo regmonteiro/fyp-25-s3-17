@@ -1,407 +1,277 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:collection/collection.dart';
 import '../../models/user_profile.dart';
+import '../../ui/widgets/kpi_card.dart';
+import 'package:intl/intl.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../controller/caregiver_home_controller.dart';
+import 'create_events_page.dart';
 
 class CaregiverHomeTab extends StatefulWidget {
   final UserProfile userProfile;
-  const CaregiverHomeTab({Key? key, required this.userProfile}) : super(key: key);
+  final Function(String)? onElderSelected; // This is the callback from the parent
+
+  const CaregiverHomeTab({Key? key, required this.userProfile, this.onElderSelected}) : super(key: key);
 
   @override
   State<CaregiverHomeTab> createState() => _CaregiverHomeTabState();
 }
 
 class _CaregiverHomeTabState extends State<CaregiverHomeTab> {
-  late String? _elderId;
-  final _elderController = TextEditingController();
+  String? _selectedElderId;
+  late final CaregiverHomeController _controller;
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _caregiverStream;
 
   @override
   void initState() {
     super.initState();
-    _elderId = widget.userProfile.uidOfElder; // expects you added this field to UserProfile
+    _controller = CaregiverHomeController();
+    _caregiverStream = _controller.getCaregiverStream();
+    _selectedElderId = widget.userProfile.uidOfElder;
+
+    // The Fix: Delay the state update until the end of the frame.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_selectedElderId != null) {
+        widget.onElderSelected?.call(_selectedElderId!);
+      }
+    });
   }
 
-  @override
-  void dispose() {
-    _elderController.dispose();
-    super.dispose();
+  void _onElderSelected(String elderId) {
+    setState(() {
+      _selectedElderId = elderId;
+    });
+    // Call the parent's callback to update the dashboard
+    widget.onElderSelected?.call(elderId);
   }
 
   @override
   Widget build(BuildContext context) {
-    // If caregiver not yet linked to an elder → show quick link card
-    if (_elderId == null || _elderId!.isEmpty) {
-      return _LinkElderCard(
-        onSave: (entered) async {
-          final uid = widget.userProfile.uid; // caregiver’s uid
-          await FirebaseFirestore.instance.collection('users').doc(uid).update({
-            'uidOfElder': entered.trim(),
-          });
-          setState(() => _elderId = entered.trim());
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Elder linked successfully')),
-            );
-          }
-        },
-      );
-    }
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _caregiverStream,
+      builder: (context, caregiverSnap) {
+        final caregiverData = caregiverSnap.data?.data();
+        final List<dynamic> linkedElders = caregiverData?['linkedElders'] ?? [];
+        _selectedElderId = _selectedElderId ?? linkedElders.firstOrNull;
 
-    final elderId = _elderId!;
-    final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
-    final endOfDay = DateTime(now.year, now.month, now.day + 1);
-    final dayKey =
-        "${now.year.toString().padLeft(4, '0')}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}";
+        if (linkedElders.isEmpty) {
+          return const _LinkElderCard();
+        }
 
+        if (_selectedElderId == null) {
+          return _ElderSelector(linkedElders: linkedElders, onSelected: _onElderSelected);
+        }
+
+        return _buildCaregiverView(context, _selectedElderId!, linkedElders);
+      },
+    );
+  }
+
+  Widget _buildCaregiverView(BuildContext context, String elderId, List<dynamic> linkedElders) {
     return RefreshIndicator(
       onRefresh: () async => Future.delayed(const Duration(milliseconds: 250)),
-      child: CustomScrollView(
-        slivers: [
-          // Welcome + elder name
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.all(12),
-              child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance.collection('users').doc(elderId).snapshots(),
-                builder: (context, snap) {
-                  final elderName = (snap.hasData && snap.data!.exists)
-                      ? (snap.data!.data()?['displayName'] ?? 'Elder')
-                      : 'Elder';
-                  return Card(
-                    child: ListTile(
-                      leading: const CircleAvatar(child: Icon(Icons.person)),
-                      title: Text('Welcome, ${widget.userProfile.displayName}'),
-                      subtitle: Text('Elder: $elderName'),
-                      trailing: IconButton(
-                        tooltip: 'Relink Elder',
-                        icon: const Icon(Icons.link_off),
-                        onPressed: () => _showRelinkDialog(context),
+      child: Stack(
+        children: [
+          CustomScrollView(
+            slivers: [
+              _buildHeader(context, elderId, linkedElders),
+              _buildMetricsSection(context, elderId),
+              _buildScheduleSection(context, elderId),
+              const SliverToBoxAdapter(child: SizedBox(height: 24)),
+            ],
+          ),
+          Positioned(
+            bottom: 16,
+            right: 16,
+            child: FloatingActionButton(
+              onPressed: () {
+                if (_selectedElderId != null) {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => CreateEventsPage(
+                        userProfile: widget.userProfile,
+                        elderlyId: _selectedElderId!,
                       ),
                     ),
                   );
-                },
-              ),
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Please select an elder first.')),
+                  );
+                }
+              },
+              child: const Icon(Icons.add),
             ),
           ),
+        ],
+      ),
+    );
+  }
 
-          // Alerts rail (open alerts)
-          SliverToBoxAdapter(
-            child: SizedBox(
-              height: 56,
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('alerts')
-                    .where('elderId', isEqualTo: elderId)
-                    .where('status', isEqualTo: 'open')
-                    .orderBy('createdAt', descending: true)
-                    .limit(12)
-                    .snapshots(),
+  SliverToBoxAdapter _buildHeader(BuildContext context, String elderId, List<dynamic> linkedElders) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: _controller.getElderStream(elderId),
+          builder: (context, snap) {
+            final elderName = (snap.hasData && snap.data!.exists)
+                ? (snap.data!.data()?['displayName'] ?? 'Elder')
+                : 'Elder';
+            return Card(
+              child: ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.person)),
+                title: Text('Welcome, ${widget.userProfile.displayName}'),
+                subtitle: Text('Viewing: $elderName'),
+                trailing: linkedElders.length > 1
+                    ? IconButton(
+                        tooltip: 'Change Elder',
+                        icon: const Icon(Icons.swap_horiz),
+                        onPressed: () => _showElderSelectionDialog(context, linkedElders),
+                      )
+                    : null,
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showElderSelectionDialog(BuildContext context, List<dynamic> linkedElders) {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Select an Elder'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            itemCount: linkedElders.length,
+            itemBuilder: (context, index) {
+              final elderId = linkedElders[index];
+              return FutureBuilder<DocumentSnapshot>(
+                future: FirebaseFirestore.instance.collection('users').doc(elderId).get(),
                 builder: (context, snap) {
-                  if (!snap.hasData) {
-                    return const Center(
-                      child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator()),
-                    );
-                  }
-                  final docs = snap.data!.docs;
-                  if (docs.isEmpty) {
-                    return ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      children: const [
-                        Padding(
-                          padding: EdgeInsets.symmetric(horizontal: 4),
-                          child: Chip(
-                            label: Text('No active alerts'),
-                            backgroundColor: Colors.grey,
-                            labelStyle: TextStyle(color: Colors.white),
-                          ),
-                        ),
-                      ],
-                    );
-                  }
-                  return ListView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
-                    children: docs.map((d) {
-                      final data = d.data();
-                      final type = (data['type'] as String?) ?? 'alert';
-                      final label = (data['message'] as String?) ?? _labelForAlertType(type);
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 4),
-                        child: ActionChip(
-                          avatar: Icon(_iconForAlertType(type), color: Colors.white),
-                          label: Text(label, style: const TextStyle(color: Colors.white)),
-                          backgroundColor: _colorForAlertType(type),
-                          onPressed: () => _ackAlert(context, d.reference),
-                        ),
-                      );
-                    }).toList(),
+                  final elderName = snap.data?.get('displayName') ?? 'Elder';
+                  return ListTile(
+                    title: Text(elderName),
+                    onTap: () {
+                      _onElderSelected(elderId);
+                      Navigator.pop(context);
+                    },
                   );
                 },
-              ),
-            ),
+              );
+            },
           ),
+        ),
+      ),
+    );
+  }
 
-          // KPI grid (metricsDaily/{elderId}_YYYY-MM-DD)
-          SliverPadding(
+  SliverToBoxAdapter _buildMetricsSection(BuildContext context, String elderId) {
+    final now = DateTime.now();
+    final dayKey = DateFormat('yyyy-MM-dd').format(now);
+    return SliverToBoxAdapter(
+      child: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: _controller.getMetricsStream(elderId, dayKey),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        // Step 2: Handle no data or error state
+        if (!snap.hasData || !snap.data!.exists) {
+          return const Center(child: Text('No metrics available for this elder.'));
+        }
+          final metrics = snap.data?.data();
+          final tasksSummary = metrics?['tasksSummary'] ?? '—';
+          final medAdherence = '${metrics?['medAdherence7dPct'] ?? 0}%';
+          final steps = metrics?['steps'] ?? '—';
+          final sleepMinutes = metrics?['sleepMinutes'] ?? 0;
+          final sleep = sleepMinutes > 0 ? '${sleepMinutes ~/ 60}h ${sleepMinutes % 60}m' : '—';
+          final nextAppointmentTs = metrics?['nextAppointmentAt'] as Timestamp?;
+          final nextAppointment = nextAppointmentTs != null ? DateFormat.jm().format(nextAppointmentTs.toDate()) : '—';
+          final location = metrics?['location'] ?? '—';
+
+          return Padding(
             padding: const EdgeInsets.all(12),
-            sliver: SliverGrid.count(
+            child: GridView.count(
+              physics: const NeverScrollableScrollPhysics(),
+              shrinkWrap: true,
               crossAxisCount: 2,
               crossAxisSpacing: 12,
               mainAxisSpacing: 12,
               childAspectRatio: 1.4,
               children: [
-                _metricDocBuilder(elderId, dayKey, (m) => _kpiCard(
-                      title: 'Tasks Due',
-                      value: (m?['tasksSummary'] ?? '—').toString(),
-                      icon: Icons.check_circle_outline,
-                    )),
-                _metricDocBuilder(elderId, dayKey, (m) => _kpiCard(
-                      title: 'Med Adherence',
-                      value: '${m?['medAdherence7dPct'] ?? 0}% (7-day)',
-                      icon: Icons.medication_liquid,
-                    )),
-                _metricDocBuilder(elderId, dayKey, (m) => _kpiCard(
-                      title: 'Activity',
-                      value: '${m?['steps'] ?? '—'} steps',
-                      icon: Icons.directions_run,
-                    )),
-                _metricDocBuilder(elderId, dayKey, (m) {
-                  final mins = (m?['sleepMinutes'] ?? 0) as int;
-                  final h = mins ~/ 60;
-                  final mm = (mins % 60).toString().padLeft(2, '0');
-                  return _kpiCard(
-                    title: 'Sleep',
-                    value: mins == 0 ? '—' : '${h}h ${mm}m',
-                    icon: Icons.nightlight_round,
-                  );
-                }),
-                _metricDocBuilder(elderId, dayKey, (m) {
-                  final ts = m?['nextAppointmentAt'] as Timestamp?;
-                  final t = ts?.toDate();
-                  return _kpiCard(
-                    title: 'Next Appointment',
-                    value: t == null ? '—' : _hhmm(t),
-                    icon: Icons.calendar_today,
-                  );
-                }),
-                _metricDocBuilder(elderId, dayKey, (m) => _kpiCard(
-                      title: 'Location',
-                      value: (m?['location'] ?? '—').toString(),
-                      icon: Icons.location_on,
-                    )),
+                KpiCard(title: 'Tasks Due', value: tasksSummary.toString(), icon: Icons.check_circle_outline),
+                KpiCard(title: 'Med Adherence', value: medAdherence, icon: Icons.medication_liquid),
+                KpiCard(title: 'Activity', value: '$steps steps', icon: Icons.directions_run),
+                KpiCard(title: 'Sleep', value: sleep, icon: Icons.nightlight_round),
+                KpiCard(title: 'Next Appointment', value: nextAppointment, icon: Icons.calendar_today),
+                KpiCard(title: 'Location', value: location.toString(), icon: Icons.location_on),
               ],
             ),
-          ),
-
-          // Today header
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(12),
-              child: Text('Today\'s Schedule',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ),
-          ),
-
-          // Today’s tasks/meds
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                stream: FirebaseFirestore.instance
-                    .collection('tasks')
-                    .where('elderId', isEqualTo: elderId)
-                    .where('dueAt', isGreaterThanOrEqualTo: startOfDay)
-                    .where('dueAt', isLessThan: endOfDay)
-                    .orderBy('dueAt')
-                    .snapshots(),
-                builder: (context, snap) {
-                  if (!snap.hasData) {
-                    return const Card(
-                      child: Padding(
-                        padding: EdgeInsets.all(16),
-                        child: Center(child: CircularProgressIndicator()),
-                      ),
-                    );
-                  }
-                  final items = snap.data!.docs;
-                  if (items.isEmpty) {
-                    return const Card(
-                      child: ListTile(
-                        leading: Icon(Icons.inbox_outlined),
-                        title: Text('No items for today'),
-                      ),
-                    );
-                  }
-                  return Card(
-                    child: Column(
-                      children: items.map((d) {
-                        final data = d.data();
-                        final dueAt = (data['dueAt'] as Timestamp).toDate();
-                        final done = (data['done'] as bool?) ?? false;
-                        final kind = (data['kind'] as String?) ?? 'task';
-                        return ListTile(
-                          leading: Icon(
-                            kind == 'med' ? Icons.medical_services : Icons.task_alt_outlined,
-                            color: kind == 'med' ? Colors.blue : Colors.teal,
-                          ),
-                          title: Text('${_hhmm(dueAt)} — ${data['title'] ?? 'Untitled'}'),
-                          trailing: IconButton(
-                            icon: Icon(done ? Icons.done_all : Icons.check_box_outline_blank,
-                                color: done ? Colors.green : null),
-                            onPressed: () => _toggleDone(d.reference, done),
-                          ),
-                          onTap: () => _openTask(context, d.id, data),
-                        );
-                      }).toList(),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-
-          const SliverToBoxAdapter(child: SizedBox(height: 24)),
-        ],
+          );
+        },
       ),
     );
   }
 
-  Widget _metricDocBuilder(
-    String elderId,
-    String dayKey,
-    Widget Function(Map<String, dynamic>? m) builder,
-  ) {
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('metricsDaily')
-          .doc('${elderId}_$dayKey')
-          .snapshots(),
-      builder: (context, snap) => builder(snap.data?.data()),
-    );
-  }
-
-  static String _labelForAlertType(String t) {
-    switch (t) {
-      case 'fall':
-        return 'Fall Detected';
-      case 'med_missed':
-        return 'Missed Medication';
-      case 'device_offline':
-        return 'Device Offline';
-      default:
-        return 'Alert';
-    }
-  }
-
-  Widget _kpiCard({
-  required String title,
-  required String value,
-  required IconData icon,
-}) {
-  return Card(
-    elevation: 3,
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-    child: Padding(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Icon(icon, size: 28),
-          const SizedBox(height: 6),
-          Text(title, style: const TextStyle(fontSize: 13, color: Colors.grey)),
-          Text(
-            value,
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
-  static Color _colorForAlertType(String t) {
-    switch (t) {
-      case 'fall':
-        return Colors.red;
-      case 'med_missed':
-        return Colors.orange;
-      case 'device_offline':
-        return Colors.redAccent;
-      default:
-        return Colors.grey;
-    }
-  }
-
-  static IconData _iconForAlertType(String t) {
-    switch (t) {
-      case 'fall':
-        return Icons.warning;
-      case 'med_missed':
-        return Icons.medical_services;
-      case 'device_offline':
-        return Icons.signal_cellular_off;
-      default:
-        return Icons.notifications;
-    }
-  }
-
-  static String _hhmm(DateTime t) {
-    final h = t.hour.toString().padLeft(2, '0');
-    final m = t.minute.toString().padLeft(2, '0');
-    return '$h:$m';
-  }
-
-  Future<void> _toggleDone(DocumentReference ref, bool wasDone) async {
+  SliverToBoxAdapter _buildScheduleSection(BuildContext context, String elderId) {
     final now = DateTime.now();
-    await ref.update({'done': !wasDone, 'completedAt': !wasDone ? now : null});
-  }
-
-  Future<void> _ackAlert(BuildContext context, DocumentReference ref) async {
-    await ref.update({'status': 'ack'});
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Alert acknowledged')),
-      );
-    }
-  }
-
-  void _showRelinkDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Relink Elder'),
-        content: TextField(
-          controller: _elderController,
-          decoration: const InputDecoration(
-            labelText: 'Elder User UID',
-            hintText: 'paste Elder UID here',
-          ),
+    final startOfDay = DateTime(now.year, now.month, now.day);
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: _controller.getTasksStream(elderId, startOfDay, endOfDay),
+          builder: (context, snap) {
+            if (!snap.hasData) {
+              return const Card(
+                child: Padding(
+                  padding: EdgeInsets.all(16),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              );
+            }
+            final items = snap.data!.docs;
+            if (items.isEmpty) {
+              return const Card(
+                child: ListTile(
+                  leading: Icon(Icons.inbox_outlined),
+                  title: Text('No items for today'),
+                ),
+              );
+            }
+            return Card(
+              child: Column(
+                children: items.map((d) {
+                  final data = d.data();
+                  final dueAt = (data['dueAt'] as Timestamp).toDate();
+                  final done = (data['done'] as bool?) ?? false;
+                  final kind = (data['kind'] as String?) ?? 'task';
+                  return ListTile(
+                    leading: Icon(
+                      kind == 'med' ? Icons.medical_services : Icons.task_alt_outlined,
+                      color: kind == 'med' ? Colors.blue : Colors.teal,
+                    ),
+                    title: Text('${DateFormat.jm().format(dueAt)} — ${data['title'] ?? 'Untitled'}'),
+                    trailing: IconButton(
+                      icon: Icon(done ? Icons.done_all : Icons.check_box_outline_blank,
+                          color: done ? Colors.green : null),
+                      onPressed: () => _controller.toggleTaskDone(d.reference, done),
+                    ),
+                    onTap: () => _openTask(context, d.id, data),
+                  );
+                }).toList(),
+              ),
+            );
+          },
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            onPressed: () async {
-              final entered = _elderController.text.trim();
-              if (entered.isEmpty) return;
-              await FirebaseFirestore.instance
-                  .collection('users')
-                  .doc(widget.userProfile.uid) // caregiver doc
-                  .update({'uidOfElder': entered});
-              if (mounted) {
-                setState(() => _elderId = entered);
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Elder linked successfully')),
-                );
-              }
-            },
-            child: const Text('Save'),
-          ),
-        ],
       ),
     );
   }
@@ -419,7 +289,7 @@ class _CaregiverHomeTabState extends State<CaregiverHomeTab> {
           children: [
             Text(data['title'] ?? 'Task', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            Text('Due: ${_hhmm(dueAt)}'),
+            Text('Due: ${DateFormat.jm().format(dueAt)}'),
             const SizedBox(height: 12),
             Text(data['notes'] ?? 'No notes'),
             const SizedBox(height: 12),
@@ -438,10 +308,8 @@ class _CaregiverHomeTabState extends State<CaregiverHomeTab> {
   }
 }
 
-// Small helper widget to link an elder when none is set
 class _LinkElderCard extends StatefulWidget {
-  final Future<void> Function(String elderUid) onSave;
-  const _LinkElderCard({Key? key, required this.onSave}) : super(key: key);
+  const _LinkElderCard({Key? key}) : super(key: key);
 
   @override
   State<_LinkElderCard> createState() => _LinkElderCardState();
@@ -450,11 +318,29 @@ class _LinkElderCard extends StatefulWidget {
 class _LinkElderCardState extends State<_LinkElderCard> {
   final _controller = TextEditingController();
   bool _saving = false;
+  final CaregiverHomeController _homeController = CaregiverHomeController();
 
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveLink() async {
+    final entered = _controller.text.trim();
+    if (entered.isEmpty) return;
+
+    setState(() => _saving = true);
+    try {
+      await _homeController.linkElder(entered);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Elder linked successfully')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 
   @override
@@ -468,29 +354,57 @@ class _LinkElderCardState extends State<_LinkElderCard> {
           controller: _controller,
           decoration: const InputDecoration(
             labelText: 'Elder User UID',
-            hintText: 'Paste the elder’s Firebase UID',
+            hintText: 'Paste the elder’s UID',
             prefixIcon: Icon(Icons.link),
           ),
         ),
         const SizedBox(height: 12),
         FilledButton.icon(
-          onPressed: _saving
-              ? null
-              : () async {
-                  final v = _controller.text.trim();
-                  if (v.isEmpty) return;
-                  setState(() => _saving = true);
-                  try {
-                    await widget.onSave(v);
-                  } finally {
-                    if (mounted) setState(() => _saving = false);
-                  }
-                },
+          onPressed: _saving ? null : _saveLink,
           icon: _saving
               ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
               : const Icon(Icons.save),
           label: const Text('Save Link'),
         ),
+      ],
+    );
+  }
+}
+
+class _ElderSelector extends StatelessWidget {
+  final List<dynamic> linkedElders;
+  final Function(String) onSelected;
+
+  const _ElderSelector({
+    required this.linkedElders,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        const Text('Select an Elder to view their profile:', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 16),
+        ...linkedElders.map((elderId) {
+          return FutureBuilder<DocumentSnapshot>(
+            future: FirebaseFirestore.instance.collection('users').doc(elderId).get(),
+            builder: (context, snapshot) {
+              if (!snapshot.hasData) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final elderName = snapshot.data?.get('displayName') ?? 'Elder';
+              return Card(
+                child: ListTile(
+                  leading: const CircleAvatar(child: Icon(Icons.person)),
+                  title: Text(elderName),
+                  onTap: () => onSelected(elderId),
+                ),
+              );
+            },
+          );
+        }).toList(),
       ],
     );
   }

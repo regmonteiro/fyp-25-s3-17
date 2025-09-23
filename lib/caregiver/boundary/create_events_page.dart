@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import '../controller/create_events_controller.dart';
 import '../../models/user_profile.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class CreateEventsPage extends StatefulWidget {
   final UserProfile userProfile;
+  final String? elderlyId;
 
-  const CreateEventsPage({Key? key, required this.userProfile}) : super(key: key);
+  const CreateEventsPage({Key? key, required this.userProfile, this.elderlyId}) : super(key: key);
 
   @override
   _CreateEventsPageState createState() => _CreateEventsPageState();
@@ -17,6 +19,7 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
   final _descriptionController = TextEditingController();
   final CreateEventsController _controller = CreateEventsController();
 
+  String? _selectedElderId;
   DateTime _selectedDate = DateTime.now();
   TimeOfDay _selectedTime = TimeOfDay.now();
   Duration _selectedDuration = const Duration(minutes: 30);
@@ -31,6 +34,12 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
     const Duration(hours: 3),
     const Duration(hours: 4),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedElderId = widget.elderlyId;
+  }
 
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
@@ -60,6 +69,13 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
 
   void _createEvent() async {
     if (_formKey.currentState!.validate()) {
+      if (_selectedElderId == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please select an elder.')),
+        );
+        return;
+      }
+
       DateTime finalDateTime = _selectedDate;
       if (!_isAllDay) {
         finalDateTime = DateTime(
@@ -72,12 +88,13 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
       }
 
       await _controller.createAppointment(
-        elderlyId: widget.userProfile.uid,
+        elderlyId: _selectedElderId!,
         title: _titleController.text.trim(),
         description: _descriptionController.text.trim(),
         dateTime: finalDateTime,
         type: _eventType,
         isAllDay: _isAllDay,
+        caregiverId: widget.userProfile.uid,
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -100,6 +117,54 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
           key: _formKey,
           child: ListView(
             children: [
+              // New: Elder Selection Dropdown
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(widget.userProfile.uid)
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (!snapshot.hasData || snapshot.data?.data()?['linkedElders'] == null) {
+                    return const CircularProgressIndicator();
+                  }
+
+                  final linkedElders = snapshot.data!.data()?['linkedElders'] as List<dynamic>;
+
+                  if (linkedElders.isEmpty) {
+                    return const Text('No elders linked to your account.', style: TextStyle(color: Colors.red));
+                  }
+
+                  return DropdownButtonFormField<String>(
+                    value: _selectedElderId,
+                    decoration: InputDecoration(
+                      labelText: 'Select Elder',
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    items: linkedElders.map<DropdownMenuItem<String>>((elderId) {
+                      return DropdownMenuItem<String>(
+                        value: elderId,
+                        child: FutureBuilder<DocumentSnapshot>(
+                          future: FirebaseFirestore.instance.collection('users').doc(elderId).get(),
+                          builder: (context, elderSnapshot) {
+                            if (!elderSnapshot.hasData) {
+                              return const Text('Loading...');
+                            }
+                            final elderName = elderSnapshot.data?.get('displayName') ?? 'Elder';
+                            return Text(elderName);
+                          },
+                        ),
+                      );
+                    }).toList(),
+                    onChanged: (String? newValue) {
+                      setState(() {
+                        _selectedElderId = newValue;
+                      });
+                    },
+                    validator: (value) => value == null ? 'Please select an elder' : null,
+                  );
+                },
+              ),
+              const SizedBox(height: 16),
               TextFormField(
                 controller: _titleController,
                 decoration: InputDecoration(
@@ -127,7 +192,6 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
                 maxLines: 3,
               ),
               const SizedBox(height: 16),
-              // Event Type
               DropdownButtonFormField<String>(
                 value: _eventType,
                 decoration: InputDecoration(
@@ -149,7 +213,6 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
                 },
               ),
               const SizedBox(height: 16),
-              // Date Picker
               ListTile(
                 title: const Text('Date'),
                 subtitle: Text('${_selectedDate.day}/${_selectedDate.month}/${_selectedDate.year}'),
@@ -161,7 +224,6 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
                 ),
               ),
               const SizedBox(height: 16),
-              // All Day Toggle
               Row(
                 children: [
                   const Text('All Day Event'),
@@ -177,9 +239,7 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
                 ],
               ),
               const SizedBox(height: 16),
-              // Time and Duration pickers (conditionally displayed)
               if (!_isAllDay) ...[
-                // Time Picker
                 ListTile(
                   title: const Text('Time'),
                   subtitle: Text(_selectedTime.format(context)),
@@ -191,7 +251,6 @@ class _CreateEventsPageState extends State<CreateEventsPage> {
                   ),
                 ),
                 const SizedBox(height: 16),
-                // Duration Dropdown
                 DropdownButtonFormField<Duration>(
                   value: _selectedDuration,
                   decoration: InputDecoration(
