@@ -5,6 +5,8 @@ import '../../models/user_profile.dart';
 import 'account/caregiver_access_page.dart';
 import 'community_page.dart';
 import 'link_caregiver_page.dart';
+import '../controller/events_controller.dart';
+import 'events_page.dart';
 
 class ElderlyHomePage extends StatefulWidget {
   final UserProfile userProfile;
@@ -16,12 +18,18 @@ class ElderlyHomePage extends StatefulWidget {
 }
 
 class _ElderlyHomePageState extends State<ElderlyHomePage> {
-  late final ElderlyHomeController _controller;
+  // --- FIX 1: Use 'late' to allow initialization in initState ---
+  late ElderlyHomeController _homeController;
+  late EventsController _eventsController; // Retain if used elsewhere, initialize in initState.
 
   @override
   void initState() {
     super.initState();
-    _controller = ElderlyHomeController(elderlyUid: widget.userProfile.uid);
+    final String elderlyUid = widget.userProfile.uid;
+
+    // --- FIX 2: Initialize both controllers correctly ---
+    _homeController = ElderlyHomeController(elderlyUid: elderlyUid);
+    _eventsController = EventsController(); // Assuming EventsController does not require UID in constructor
   }
 
   @override
@@ -35,14 +43,13 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
             children: [
               _buildHeader(context),
               const SizedBox(height: 24),
-              // Updated to use a StreamBuilder for real-time caregiver info
               _buildCaregiverInfoCard(context),
               const SizedBox(height: 24),
               _buildSectionTitle(context, "Announcements"),
               _buildAnnouncementsSection(),
               const SizedBox(height: 24),
               _buildSectionTitle(context, "Upcoming Events"),
-              _buildEventsSection(),
+              _buildEventsSection(), // --- FIX 3: Remove unnecessary userId parameter ---
               const SizedBox(height: 24),
               _buildSectionTitle(context, "Learning Recommendations"),
               _buildLearningRecommendationsSection(),
@@ -93,7 +100,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
               builder: (context, caregiverSnap) {
                 if (caregiverSnap.hasData && caregiverSnap.data!.exists) {
                   final caregiverData = caregiverSnap.data!.data() as Map<String, dynamic>?;
-                  caregiverName = caregiverData?['displayName'] ?? 'Caregiver';
+                  caregiverName = caregiverData?['firstName'] ?? caregiverData?['displayName'] ?? 'Caregiver';
                 }
                 return _buildElderlyInfoCard(
                   context, // Pass context
@@ -114,7 +121,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
               );
             };
             return _buildElderlyInfoCard(
-              context, // Pass context
+              context,
               name: widget.userProfile.displayName,
               id: widget.userProfile.uid,
               caregiver: caregiverName,
@@ -134,7 +141,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         );
       };
       return _buildElderlyInfoCard(
-        context, // Pass context
+        context,
         name: widget.userProfile.displayName,
         id: widget.userProfile.uid,
         caregiver: 'No Caregiver Linked',
@@ -192,7 +199,8 @@ Widget _buildElderlyInfoCard(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  id,
+                  // Show the elderly user's UID (or a shortened version)
+                  'ID: ${id.substring(0, 8)}...',
                   style: const TextStyle(color: Colors.white70),
                 ),
                 const SizedBox(height: 8),
@@ -213,7 +221,7 @@ Widget _buildElderlyInfoCard(
             ),
           ),
           isLinked
-              ? const Icon(Icons.favorite_border, color: Colors.white, size: 60)
+              ? const Icon(Icons.favorite, color: Colors.white, size: 40) // Changed icon for better feedback
               : ElevatedButton.icon(
                   onPressed: onPressed,
                   icon: const Icon(Icons.person_add, size: 18),
@@ -242,7 +250,15 @@ Widget _buildElderlyInfoCard(
         ),
         TextButton(
           onPressed: () {
-            print("See all $title");
+            // Navigate to the respective 'See All' page (e.g., EventsPage)
+            if (title == "Upcoming Events") {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const EventsPage()), // Assuming you import EventsPage
+                );
+            } else {
+                print("See all $title");
+            }
           },
           child: const Text("See all", style: TextStyle(color: Colors.blue)),
         ),
@@ -252,7 +268,7 @@ Widget _buildElderlyInfoCard(
 
   Widget _buildAnnouncementsSection() {
     return StreamBuilder<QuerySnapshot>(
-      stream: _controller.getAnnouncementsStream(),
+      stream: _homeController.getAnnouncementsStream(), // Using _homeController
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());
@@ -281,42 +297,46 @@ Widget _buildElderlyInfoCard(
     );
   }
 
+  // --- FIX 4: Corrected _buildEventsSection ---
+  // Uses _homeController and the correct Stream type (List<UpcomingEvent>)
   Widget _buildEventsSection() {
-  return StreamBuilder<List<DocumentSnapshot>>( // <--- Change this type
-    stream: _controller.getEventsStream(),
-    builder: (context, snapshot) {
-      if (snapshot.connectionState == ConnectionState.waiting) {
-        return const Center(child: CircularProgressIndicator());
-      }
-      if (snapshot.hasError) {
-        return const Center(child: Text("Error loading events."));
-      }
-      if (!snapshot.hasData || snapshot.data!.isEmpty) { // <--- Check for empty list
-        return const Center(child: Text("No upcoming events."));
-      }
+    return StreamBuilder<List<UpcomingEvent>>( 
+      stream: _homeController.getUpcomingEventsStream(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          print("Events Home Page Error: ${snapshot.error}");
+          return Center(child: Text("Error loading events. ${snapshot.error}"));
+        }
 
-      final events = snapshot.data!; // Now a List<DocumentSnapshot>
+        final events = snapshot.data;
+        if (events == null || events.isEmpty) {
+          return const Center(child: Text("No upcoming events."));
+        }
 
-      return Column(
-        children: events.map((doc) {
-          final eventData = doc.data() as Map<String, dynamic>;
-          final eventTitle = eventData['title'] as String;
-          return Card(
-            margin: const EdgeInsets.only(bottom: 8),
-            child: ListTile(
-              leading: const Icon(Icons.event, color: Colors.orange),
-              title: Text(eventTitle),
-            ),
-          );
-        }).toList(),
-      );
-    },
-  );
-}
+        return Column(
+          children: events.map((event) {
+            final eventTitle = event.title;
+            // Use event.dateTime for date/time if needed
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                leading: const Icon(Icons.event, color: Colors.orange),
+                title: Text(eventTitle),
+                subtitle: Text(event.description ?? 'Tap to see details'),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
 
   Widget _buildLearningRecommendationsSection() {
     return StreamBuilder<QuerySnapshot>(
-      stream: _controller.getLearningRecommendationsStream(),
+      stream: _homeController.getLearningRecommendationsStream(), // Using _homeController
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(child: CircularProgressIndicator());

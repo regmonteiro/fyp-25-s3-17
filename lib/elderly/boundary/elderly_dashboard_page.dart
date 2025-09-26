@@ -27,7 +27,7 @@ class _ElderlyDashboardPageState extends State<ElderlyDashboardPage> {
       ElderlyHomePage(userProfile: widget.userProfile),
       const EventsPage(),
       const AIAssistantPage(),
-      const LearningPage(),
+      const LearningResourcesPageRT(),
       const AccountPage(),
     ];
   }
