@@ -1,41 +1,23 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rxdart/rxdart.dart';
 
+
 class UpcomingEvent {
   final String id;
   final String title;
-  final DateTime dateTime;
-  final String? location;
-  final String? description;
-  final String? caregiverId;
-  final String elderlyUserId;
-
-  UpcomingEvent({
-    required this.id,
-    required this.title,
-    required this.dateTime,
-    required this.elderlyUserId,
-    this.location,
-    this.description,
-    this.caregiverId,
-  });
+  final DateTime start;
+  final DateTime end;
+  UpcomingEvent({required this.id, required this.title, required this.start, required this.end});
 
   factory UpcomingEvent.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? const {};
-    final ts = data['dateTime'];
-    final dt = ts is Timestamp
-        ? ts.toDate()
-        : ts is DateTime
-            ? ts
-            : DateTime.now();
+    final d = doc.data() ?? {};
+    final tsStart = d['start'] as Timestamp?;
+    final tsEnd   = d['end'] as Timestamp?;
     return UpcomingEvent(
       id: doc.id,
-      title: (data['title'] ?? '').toString(),
-      dateTime: dt,
-      elderlyUserId: (data['elderlyUserId'] ?? '').toString(),
-      location: data['location'] as String?,
-      description: data['description'] as String?,
-      caregiverId: data['caregiverId'] as String?,
+      title: (d['title'] as String?) ?? 'Untitled',
+      start: tsStart?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0),
+      end:   tsEnd?.toDate()   ?? DateTime.fromMillisecondsSinceEpoch(0),
     );
   }
 }
@@ -61,16 +43,19 @@ class ElderlyHomeController {
         .limit(5)
         .snapshots();
   }
+
   Stream<List<DocumentSnapshot<Map<String, dynamic>>>> getEventsStream({int limit = 5}) {
+    // 1) Stream of events created by the elderly user (or general events targeted at them)
     final elderlyEventsStream = _db
         .collection('events')
         .where('elderlyUserId', isEqualTo: elderlyUid)
         .where('dateTime', isGreaterThanOrEqualTo: Timestamp.now())
         .orderBy('dateTime')
-        .limit(limit)
+        // Removed .limit(limit) here to ensure we get a full pool for the final sort and take.
         .snapshots()
         .map((snap) => snap.docs);
 
+    // 2) Stream of events created by linked caregivers for this elderly user
     final caregiverEventsStream = _db
         .collection('users')
         .doc(elderlyUid)
@@ -81,6 +66,7 @@ class ElderlyHomeController {
           ? linkedCaregiversRaw.map((e) => e.toString()).toList()
           : <String>[];
 
+      // Firestore whereIn has a limit of 10 items.
       final caregiversForQuery = linkedCaregivers.length > 10
           ? linkedCaregivers.sublist(0, 10)
           : linkedCaregivers;
@@ -93,14 +79,15 @@ class ElderlyHomeController {
           .collection('events')
           .where('elderlyUserId', isEqualTo: elderlyUid)
           .where('caregiverId', whereIn: caregiversForQuery)
-          .where('dateTime', isGreaterThanOrEqualTo: Timestamp.now())
-          .orderBy('dateTime')
-          .limit(limit)
           .snapshots()
-          .map((snap) => snap.docs);
+          .map((snap) => snap.docs.where((doc) {
+            final dt = doc.data()['dateTime'];
+            final timestamp = dt is Timestamp ? dt : null;
+            return timestamp != null && timestamp.toDate().isAfter(DateTime.now());
+          }).toList());
     });
 
-    // 3) combine + sort + truncate to limit
+    // 3) combine + deduplicate + sort + truncate to limit
     return Rx.combineLatest2<
         List<DocumentSnapshot<Map<String, dynamic>>>,
         List<DocumentSnapshot<Map<String, dynamic>>>,
@@ -108,11 +95,14 @@ class ElderlyHomeController {
       elderlyEventsStream,
       caregiverEventsStream,
       (elderlyDocs, caregiverDocs) {
-        final all = <DocumentSnapshot<Map<String, dynamic>>>[
-          ...elderlyDocs,
-          ...caregiverDocs,
-        ];
+        // FIX: Use a Map to deduplicate documents based on their unique ID
+        final allDocsMap = <String, DocumentSnapshot<Map<String, dynamic>>>{
+          for (var doc in elderlyDocs) doc.id: doc,
+          for (var doc in caregiverDocs) doc.id: doc,
+        };
+        final all = allDocsMap.values.toList();
 
+        // Sort the combined, deduplicated list by date
         all.sort((a, b) {
           final aDt = a.data()?['dateTime'];
           final bDt = b.data()?['dateTime'];
@@ -124,6 +114,7 @@ class ElderlyHomeController {
           return aTs.compareTo(bTs);
         });
 
+        // Apply the limit after sorting
         return all.take(limit).toList(growable: false);
       },
     );

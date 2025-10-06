@@ -68,22 +68,21 @@ class MainWrapper extends StatelessWidget {
             print('[MainWrapper] uid=${user.uid} roleRaw="$rawRole" roleNorm="$role"');
 
             // 4) Route by role
-            final userProfile = UserProfile.fromMap(data, user.uid);
+                final userProfile = UserProfile.fromMap(data, user.uid);
 
-            switch (role) {
-              case 'caregiver':
-                // If your page constructor DOES NOT accept `userProfile`, remove the argument.
-                return CaregiverDashboardPage(userProfile: userProfile);
-              case 'elderly':
-                return ElderlyDashboardPage(userProfile: userProfile);
-              case 'admin':
-                return AdminDashboard(userProfile: userProfile);
-              default:
-                return _ProblemScreen(
-                  message: 'Profile exists but role is missing/invalid. Read: "$rawRole"',
-                  tip: 'Set role to one of: Elderly, Caregiver, Admin.',
-                );
-            }
+                switch (role) {
+                  case 'caregiver':
+                    return CaregiverDashboardPage(userProfile: userProfile);
+                  case 'elderly':
+                    return ElderlyDashboardPage(userProfile: userProfile);
+                  case 'admin':
+                    return AdminDashboard(userProfile: userProfile);
+                  default:
+                    return _ProblemScreen(
+                      message: 'Profile exists but role is missing/invalid. Read: "$rawRole"',
+                      tip: 'Set role to one of: Elderly, Caregiver, Admin.',
+                    );
+                }
           },
         );
       },
@@ -142,7 +141,7 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
     try {
       await FirebaseFirestore.instance.collection('users').doc(widget.uid).set({
         'email': widget.email ?? '',
-        'role': _role,
+        'role': _role.toLowerCase(),
         'firstName': '',
         'lastName': '',
         'createdAt': FieldValue.serverTimestamp(),

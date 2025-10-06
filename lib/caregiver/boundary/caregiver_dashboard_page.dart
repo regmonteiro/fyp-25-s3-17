@@ -55,7 +55,7 @@ class _CaregiverDashboardPageState extends State<CaregiverDashboardPage> {
       _TabSpec(
         title: 'Reports',
         icon: Icons.insert_chart_outlined,
-        content: ReportPage(userProfile: widget.userProfile),
+        content: ViewReportsCaregiverPage(userProfile: widget.userProfile),
       ),
       _TabSpec(
         title: 'Account',

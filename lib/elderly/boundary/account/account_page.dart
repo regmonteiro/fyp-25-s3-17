@@ -10,7 +10,6 @@ import 'caregiver_access_page.dart';
 import 'password_settings_page.dart';
 import 'support_feedback_page.dart';
 import 'settings_page.dart';
-import 'package:flutter/foundation.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({Key? key}) : super(key: key);

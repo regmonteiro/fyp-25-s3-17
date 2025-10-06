@@ -38,16 +38,24 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSPhotoLibraryUsageDescription</key>
-	<string>This app needs access to your photo library to upload profile pictures </string>
 	<key>NSCameraUsageDescription</key>
-	<string>This app needs access to your camera to take new profile pictures.</string>
-	<key>UISupportedInterfaceOrientations~ipad</key>
-	<array>
-		<string>UIInterfaceOrientationPortrait</string>
-		<string>UIInterfaceOrientationPortraitUpsideDown</string>
-		<string>UIInterfaceOrientationLandscapeLeft</string>
-		<string>UIInterfaceOrientationLandscapeRight</string>
-	</array>
+  <string>This app needs camera access to capture health record photos.</string>
+  <key>NSPhotoLibraryUsageDescription</key>
+  <string>This app needs photo library access to select health record images.</string>
+  <key>NSPhotoLibraryAddUsageDescription</key>
+  <string>This app saves images to your photo library.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>This app uses the microphone during consultations.</string>
+
+  <!-- Flutter defaults -->
+  <key>UIApplicationSupportsIndirectInputEvents</key>
+  <true/>
+
+  <!-- If you open arbitrary URLs (e.g., Firebase Dynamic Links or external links), ATS relax: -->
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <false/>
+  </dict>
 </dict>
 </plist>
