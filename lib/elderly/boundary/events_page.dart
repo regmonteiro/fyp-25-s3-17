@@ -454,6 +454,7 @@ class _EventsPageState extends State<EventsPage> {
                         dateTime: finalDateTime,
                         type: selectedType,
                         isAllDay: isAllDay,
+                        durationMinutes: durationMinutes,
                       );
                       Navigator.of(context).pop();
                     }

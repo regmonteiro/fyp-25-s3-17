@@ -1,10 +1,20 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../controller/communicate_controller.dart';
 import '../../models/user_profile.dart';
+import '../boundary/models/chat_message.dart';
+import 'package:firebase_database/firebase_database.dart';
+import '../../webrtc/video_call_widgets.dart';
 
 class CommunicatePage extends StatefulWidget {
-  const CommunicatePage({super.key});
+  final UserProfile userProfile;
+  final String? partnerUid;
+
+  const CommunicatePage({
+    super.key,
+    required this.userProfile,
+    this.partnerUid,
+  });
 
   @override
   State<CommunicatePage> createState() => _CommunicatePageState();
@@ -13,24 +23,34 @@ class CommunicatePage extends StatefulWidget {
 class _CommunicatePageState extends State<CommunicatePage> {
   late final CommunicateController _controller;
   final _textCtrl = TextEditingController();
+
   String? _partnerUid;
   String? _myUid;
   bool _loading = true;
 
+  // call UI
+  bool _showCallInit = false;
+  bool _showCall = false;
+  String _callType = 'video';
+  String _roomId = ''; // signaling room id for elder-caregiver direct calls
+
   @override
   void initState() {
     super.initState();
-    final profile = Provider.of<UserProfile>(context, listen: false);
-    _controller = CommunicateController(currentUser: profile);
+    _controller = CommunicateController(currentUser: widget.userProfile);
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
-    final profile = context.read<UserProfile>();
+    final profile = widget.userProfile;
+
     final firebaseUser = _controller.firebaseUser;
     _myUid = firebaseUser?.uid ?? profile.uid;
 
-    final partner = await _controller.resolvePartnerUid(profile);
+    String? partner = widget.partnerUid;
+    partner ??= await _controller.resolvePartnerUid(profile);
+
+    if (!mounted) return;
     setState(() {
       _partnerUid = partner;
       _loading = false;
@@ -43,15 +63,75 @@ class _CommunicatePageState extends State<CommunicatePage> {
     super.dispose();
   }
 
+  // ---------- calling (shared UI) ----------
+  void _openCallInit() {
+    if (_myUid == null || _partnerUid == null) return;
+    // Make a deterministic room id for this pair
+    final a = _myUid!;
+    final b = _partnerUid!;
+    _roomId = (a.compareTo(b) < 0) ? 'chat_${a}_$b' : 'chat_${b}_$a';
+    setState(() => _showCallInit = true);
+  }
+
+  Future<void> _onStartCall(String type) async {
+    setState(() {
+      _callType = type;
+      _showCallInit = false;
+      _showCall = true;
+    });
+
+    // optional log
+    await FirebaseDatabase.instance.ref('calls').push().set({
+      'consultationId': _roomId, // using same field name for simplicity
+      'callType': type,
+      'startedAt': DateTime.now().toIso8601String(),
+      'status': 'active',
+      'context': 'elder-caregiver-chat',
+      'from': _myUid,
+      'to': _partnerUid,
+    });
+  }
+
+  Future<void> _onEndCall(int seconds) async {
+    // best-effort: mark last active matching room as completed
+    final callsSnap = await FirebaseDatabase.instance.ref('calls').get();
+    if (callsSnap.value is Map) {
+      final map = callsSnap.value as Map;
+      for (final e in map.entries) {
+        final v = e.value;
+        if (v is Map && v['consultationId'] == _roomId && v['status'] == 'active') {
+          await FirebaseDatabase.instance.ref('calls/${e.key}').update({
+            'endedAt': DateTime.now().toIso8601String(),
+            'duration': seconds,
+            'status': 'completed',
+          });
+          break;
+        }
+      }
+    }
+
+    if (!mounted) return;
+    setState(() => _showCall = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Call ended. Duration: ${seconds}s')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final profile = context.watch<UserProfile>();
+    final profile = widget.userProfile;
 
-    return Scaffold(
+    final scaffold = Scaffold(
       appBar: AppBar(
         title: const Text('Communication Hub'),
-        backgroundColor: Colors.indigo.shade700,
-        elevation: 0,
+        actions: [
+          if (!_loading && _partnerUid != null)
+            IconButton(
+              tooltip: 'Start call',
+              onPressed: _openCallInit,
+              icon: const Icon(Icons.call),
+            ),
+        ],
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
@@ -66,6 +146,29 @@ class _CommunicatePageState extends State<CommunicatePage> {
                   ],
                 ),
     );
+
+    return scaffold
+        ._overlay(
+          visible: _showCallInit,
+          child: CallInitiationDialog(
+            consultation: {
+              'elderlyName': profile.role == 'caregiver' ? 'Elder' : 'Caregiver',
+              'reason': 'Direct communication',
+            },
+            onCancel: () => setState(() => _showCallInit = false),
+            onStart: _onStartCall,
+          ),
+        )
+        ._overlay(
+          visible: _showCall,
+          child: VideoCallDialog(
+            callType: _callType,
+            onEnd: _onEndCall,
+            withWhom: profile.role == 'caregiver' ? 'Elder' : 'Caregiver',
+            topic: 'Direct communication',
+            consultationId: _roomId,
+          ),
+        );
   }
 
   Widget _buildNoPartner(UserProfile user) {
@@ -86,7 +189,8 @@ class _CommunicatePageState extends State<CommunicatePage> {
   Widget _buildHeader(UserProfile user, String partnerUid) {
     final isCaregiver = user.role == 'caregiver';
     final title = isCaregiver ? 'Chat with Elder' : 'Chat with Caregiver';
-    final subtitle = 'Partner UID: ${partnerUid.substring(0, partnerUid.length.clamp(0, 6))}...';
+    final prefixLen = partnerUid.length < 6 ? partnerUid.length : 6;
+    final subtitle = 'Partner UID: ${partnerUid.substring(0, prefixLen)}...';
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -95,12 +199,7 @@ class _CommunicatePageState extends State<CommunicatePage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title,
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Colors.indigo.shade800,
-              )),
+          Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.indigo.shade800)),
           const SizedBox(height: 4),
           Text(subtitle, style: TextStyle(color: Colors.indigo.shade400)),
         ],
@@ -109,32 +208,30 @@ class _CommunicatePageState extends State<CommunicatePage> {
   }
 
   Widget _buildMessageList(String myUid, String partnerUid) {
+    final stream = _controller.messagesStream(myUid: myUid, partnerUid: partnerUid);
+
     return StreamBuilder<List<ChatMessage>>(
-      stream: _controller.messagesStream(myUid: myUid, partnerUid: partnerUid),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(
-            child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator()),
-          );
+      stream: stream,
+      builder: (_, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
         }
-        if (snapshot.hasError) {
-          return Center(child: Text('Error loading messages: ${snapshot.error}'));
-        }
-        final messages = snapshot.data ?? const <ChatMessage>[];
+        final messages = snap.data ?? const <ChatMessage>[];
         if (messages.isEmpty) {
-          return const Center(child: Text('Say hello 👋'));
+          return const Center(child: Padding(padding: EdgeInsets.all(24), child: Text('Say hello 👋')));
         }
         return ListView.builder(
           reverse: true,
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+          padding: const EdgeInsets.all(12),
           itemCount: messages.length,
           itemBuilder: (_, i) {
             final m = messages[i];
-            final isMe = m.senderId == myUid;
+            final isMe = m.senderUid == myUid;
             return _bubble(m, isMe);
           },
         );
-    });
+      },
+    );
   }
 
   Widget _bubble(ChatMessage m, bool isMe) {
@@ -175,7 +272,7 @@ class _CommunicatePageState extends State<CommunicatePage> {
                 textInputAction: TextInputAction.send,
                 onSubmitted: (_) => _send(myUid, partnerUid),
                 decoration: InputDecoration(
-                  hintText: 'Type a message...',
+                  hintText: 'Type a message…',
                   filled: true,
                   fillColor: Colors.grey.shade50,
                   border: OutlineInputBorder(
@@ -201,16 +298,31 @@ class _CommunicatePageState extends State<CommunicatePage> {
   }
 
   Future<void> _send(String myUid, String partnerUid) async {
-    final text = _textCtrl.text.trim();
-    if (text.isEmpty) return;
-    _textCtrl.clear();
+    final message = _textCtrl.text.trim();
+    if (message.isEmpty) return;
+
     try {
-      await _controller.send(myUid: myUid, partnerUid: partnerUid, text: text);
+      await _controller.send(myUid: myUid, partnerUid: partnerUid, text: message);
+      _textCtrl.clear();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to send: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error sending message: $e')));
     }
+  }
+}
+
+extension _OverlayX on Widget {
+  Widget _overlay({required bool visible, required Widget child}) {
+    if (!visible) return this;
+    return Stack(children: [
+      this,
+      Positioned.fill(
+        child: Container(
+          color: Colors.black.withOpacity(0.4),
+          alignment: Alignment.center,
+          child: child,
+        ),
+      ),
+    ]);
   }
 }

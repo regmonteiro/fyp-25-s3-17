@@ -1,92 +1,150 @@
-import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:rxdart/rxdart.dart'; // ← for Rx.combineLatest2
+import 'package:rxdart/rxdart.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
 import '../../models/user_profile.dart';
 import '../modelling/gp_appointment.dart';
 
 class _FS {
+  // Collections
   static const users = 'users';
   static const caregiversSub = 'caregivers';
   static const gpSlots = 'gp_slots';
   static const appointments = 'appointments';
 
+  // Common fields
+  static const elderlyUid = 'elderlyUid';
+  static const createdAt = 'createdAt';
+  static const status = 'status';
+
+  // Consultation fields
+  static const createdBy = 'createdBy';
+  static const caregiverUid = 'caregiverUid';
+  static const startedAt = 'startedAt';
+  static const endedAt = 'endedAt';
+  static const reason = 'reason';
+  static const notes = 'notes';
+  static const channelId = 'channelId';
+  static const participants = 'participants';
+
+  // Users helpers
   static const primaryCaregiverId = 'primaryCaregiverId';
 
+  // GP slot fields
   static const available = 'available';
   static const start = 'start';
   static const end = 'end';
   static const doctorName = 'doctorName';
   static const clinic = 'clinic';
-
-  static const elderlyUid = 'elderlyUid';
-  static const createdAt = 'createdAt';
-  static const status = 'status';
 }
 
 class ElderlyGPController {
   final String elderlyUid;
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  final FirebaseFirestore _db;
+  final FirebaseAuth _auth;
 
-  ElderlyGPController({required this.elderlyUid});
+  ElderlyGPController({required this.elderlyUid})
+      : assert(elderlyUid != '', 'elderlyUid must not be empty'),
+        _db = FirebaseFirestore.instance,
+        _auth = FirebaseAuth.instance;
 
-  /// Start a live consultation record (caregiverUid optional)
+  Future<User> _requireSignedIn() async {
+    final u = _auth.currentUser;
+    if (u == null) {
+      throw StateError('You must be signed in before starting a consultation.');
+    }
+    return u;
+  }
+
+  CollectionReference<Map<String, dynamic>> _consultsCol(String uid) =>
+      _db.collection(_FS.users).doc(uid).collection('consultations');
+
+  /// Create users/{elderlyUid}/consultations/{cid}
   Future<String> startConsultation({
+    required String reason,
     String? caregiverUid,
-    String? reason,
     String? notes,
   }) async {
-    final doc = await _db.collection('consultations').add({
-      'elderlyUid': elderlyUid,
-      'caregiverUid': caregiverUid, // may be null
-      'status': 'active',
-      'startedAt': FieldValue.serverTimestamp(),
-      'endedAt': null,
-      'reason': reason,
-      'notes': notes,
-      'channelId': null,
+    final user = await _requireSignedIn();
+
+    final participants = <String>{
+      user.uid,
+      elderlyUid,
+      if (caregiverUid != null && caregiverUid.isNotEmpty) caregiverUid,
+    }.toList();
+
+    final nowServer = FieldValue.serverTimestamp();
+    final includeCaregiver = caregiverUid != null && caregiverUid.isNotEmpty;
+
+    final docRef = await _consultsCol(elderlyUid).add({
+      // identity for queries/rules
+      _FS.elderlyUid: elderlyUid,
+
+      // attribution
+      _FS.createdBy: user.uid,
+      _FS.caregiverUid: caregiverUid,
+      _FS.participants: participants,
+
+      // timing
+      'requestedAt': nowServer, // history UI uses this
+      _FS.startedAt: nowServer,
+      _FS.endedAt: null,
+
+      // content
+      'symptoms': reason, // history UI reads 'symptoms'
+      _FS.reason: reason,
+      _FS.notes: notes,
+      _FS.channelId: null,
+
+      // status flags
+      _FS.status: 'Pending GP Connection',
+      'includeCaregiver': includeCaregiver,
     });
-    return doc.id;
+
+    return docRef.id;
   }
 
   Future<void> endConsultation(String consultationId) async {
-    await _db.collection('consultations').doc(consultationId).update({
-      'status': 'ended',
-      'endedAt': FieldValue.serverTimestamp(),
+    await _consultsCol(elderlyUid).doc(consultationId).update({
+      _FS.status: 'ended',
+      _FS.endedAt: FieldValue.serverTimestamp(),
     });
   }
 
+  /// Latest in-progress consultation for the elderly
   Stream<QuerySnapshot<Map<String, dynamic>>> activeConsultationsStream() {
-    return _db
-        .collection('consultations')
-        .where('elderlyUid', isEqualTo: elderlyUid)
-        .where('status', isEqualTo: 'active')
-        .orderBy('startedAt', descending: true)
+    // whereIn cannot be empty; keep a small set of “in progress” labels you use
+    const inProgress = ['active', 'Pending GP Connection'];
+    return _consultsCol(elderlyUid)
+        .where(_FS.status, whereIn: inProgress)
+        .orderBy(_FS.startedAt, descending: true)
         .limit(1)
         .snapshots();
   }
 
-  /// PRIMARY CAREGIVER as UserProfile
-  /// A) users/{elderly}.primaryCaregiverId → users/{cgId}
-  /// B) users/{elderly}/caregivers/primary (expects fields like firstName/lastName/email)
+  /// Primary caregiver from either:
+  ///  A) users/{elderly}.primaryCaregiverId → users/{cgId}
+  ///  B) users/{elderly}/caregivers/primary (embedded)
   Stream<UserProfile?> getPrimaryCaregiverStream() {
     final userDoc = _db.collection(_FS.users).doc(elderlyUid);
 
-    // A) pointer field on user
-    final a$ = userDoc.snapshots().asyncExpand((userSnap) {
-      if (!userSnap.exists) return Stream<UserProfile?>.value(null);
-      final cgId = userSnap.data()?[_FS.primaryCaregiverId] as String?;
-      if (cgId == null || cgId.isEmpty) return Stream<UserProfile?>.value(null);
+    final a$ = userDoc.snapshots().asyncExpand((snap) {
+      if (!snap.exists) return Stream.value(null);
+      final cgId = snap.data()?[_FS.primaryCaregiverId] as String?;
+      if (cgId == null || cgId.isEmpty) return Stream.value(null);
       return _db.collection(_FS.users).doc(cgId).snapshots().map((cgSnap) {
         if (!cgSnap.exists) return null;
         return UserProfile.fromMap(cgSnap.data()!, cgSnap.id);
       });
     });
 
-    // B) embedded sub-doc
-    final b$ = userDoc.collection(_FS.caregiversSub).doc('primary').snapshots().map((doc) {
+    final b$ = userDoc
+        .collection(_FS.caregiversSub)
+        .doc('primary')
+        .snapshots()
+        .map((doc) {
       if (!doc.exists) return null;
       final data = doc.data()!;
-      // Build a lightweight UserProfile
       return UserProfile(
         uid: (data['uid'] ?? doc.id).toString(),
         email: data['email'] as String?,
@@ -97,21 +155,19 @@ class ElderlyGPController {
       );
     });
 
-    // Prefer A, else B
     return Rx.combineLatest2<UserProfile?, UserProfile?, UserProfile?>(
-      a$,
-      b$,
-      (a, b) => a ?? b,
+      a$, b$, (a, b) => a ?? b,
     );
   }
 
-  // ----- slots & booking (unchanged) -----
+  // ── GP slots & booking ────────────────────────────────────────────────────
+
   Stream<List<GPAppointment>> getUpcomingSlots() {
     final now = DateTime.now();
     return _db
         .collection(_FS.gpSlots)
         .where(_FS.available, isEqualTo: true)
-        .where(_FS.start, isGreaterThanOrEqualTo: now)
+        .where(_FS.start, isGreaterThanOrEqualTo: Timestamp.fromDate(now))
         .orderBy(_FS.start)
         .limit(20)
         .snapshots()
@@ -148,6 +204,7 @@ class ElderlyGPController {
       if (!available) throw StateError('Slot already booked.');
 
       tx.update(slotRef, {_FS.available: false});
+
       final apptRef = _db.collection(_FS.appointments).doc();
       tx.set(apptRef, {
         _FS.elderlyUid: elderlyUid,

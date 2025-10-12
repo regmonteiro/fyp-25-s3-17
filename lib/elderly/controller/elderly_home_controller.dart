@@ -47,45 +47,31 @@ class ElderlyHomeController {
   Stream<List<DocumentSnapshot<Map<String, dynamic>>>> getEventsStream({int limit = 5}) {
     // 1) Stream of events created by the elderly user (or general events targeted at them)
     final elderlyEventsStream = _db
-        .collection('events')
-        .where('elderlyUserId', isEqualTo: elderlyUid)
-        .where('dateTime', isGreaterThanOrEqualTo: Timestamp.now())
-        .orderBy('dateTime')
-        // Removed .limit(limit) here to ensure we get a full pool for the final sort and take.
-        .snapshots()
-        .map((snap) => snap.docs);
+  .collection('events')
+  .where('elderlyUserId', isEqualTo: elderlyUid)
+  .where('start', isGreaterThanOrEqualTo: Timestamp.now())
+  .orderBy('start')
+  .snapshots()
+  .map((snap) => snap.docs);
 
-    // 2) Stream of events created by linked caregivers for this elderly user
-    final caregiverEventsStream = _db
-        .collection('users')
-        .doc(elderlyUid)
-        .snapshots()
-        .switchMap((userSnap) {
-      final linkedCaregiversRaw = userSnap.data()?['linkedCaregivers'];
-      final linkedCaregivers = (linkedCaregiversRaw is List)
-          ? linkedCaregiversRaw.map((e) => e.toString()).toList()
-          : <String>[];
-
-      // Firestore whereIn has a limit of 10 items.
-      final caregiversForQuery = linkedCaregivers.length > 10
-          ? linkedCaregivers.sublist(0, 10)
-          : linkedCaregivers;
-
-      if (caregiversForQuery.isEmpty) {
-        return Stream.value(<DocumentSnapshot<Map<String, dynamic>>>[]);
-      }
-
-      return _db
-          .collection('events')
-          .where('elderlyUserId', isEqualTo: elderlyUid)
-          .where('caregiverId', whereIn: caregiversForQuery)
-          .snapshots()
-          .map((snap) => snap.docs.where((doc) {
-            final dt = doc.data()['dateTime'];
-            final timestamp = dt is Timestamp ? dt : null;
-            return timestamp != null && timestamp.toDate().isAfter(DateTime.now());
-          }).toList());
-    });
+final caregiverEventsStream = _db
+  .collection('users')
+  .doc(elderlyUid)
+  .snapshots()
+  .switchMap((userSnap) {
+    final linked = (userSnap.data()?['linkedCaregivers'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
+    final caregiversForQuery = linked.length > 10 ? linked.sublist(0, 10) : linked;
+    if (caregiversForQuery.isEmpty) {
+      return Stream.value(<QueryDocumentSnapshot<Map<String, dynamic>>>[]);
+    }
+    return _db.collection('events')
+      .where('elderlyUserId', isEqualTo: elderlyUid)
+      .where('caregiverId', whereIn: caregiversForQuery)
+      .where('start', isGreaterThanOrEqualTo: Timestamp.now())
+      .orderBy('start')
+      .snapshots()
+      .map((snap) => snap.docs);
+  });
 
     // 3) combine + deduplicate + sort + truncate to limit
     return Rx.combineLatest2<

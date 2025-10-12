@@ -4,7 +4,6 @@ import 'package:intl/intl.dart';
 import '../controller/elderly_home_controller.dart' as ehc;
 import '../../models/user_profile.dart';
 import 'community_page.dart';
-import 'events_page.dart';
 import 'communicate_page.dart';
 import '../../medical/gp_consultation_page.dart';
 import '../../medical/appointment_booking_page.dart';
@@ -16,6 +15,27 @@ import 'link_caregiver_page.dart';
 import 'account/caregiver_access_page.dart';
 import '../../medical/controller/cart_controller.dart';
 import 'package:provider/provider.dart';
+import '../controller/community_controller.dart';
+import 'create_post_page.dart';
+import 'post.dart';
+
+List<Map<String, dynamic>> normalizeCaregivers(Object? raw) {
+  final list = (raw as List?) ?? const [];
+  return list.map<Map<String, dynamic>>((e) {
+    if (e is String) {
+      return {'uid': e, 'displayName': null, 'role': 'caregiver'};
+    } else if (e is Map) {
+      final m = Map<String, dynamic>.from(e);
+      return {
+        'uid': (m['uid'] as String?) ?? '',
+        'displayName': m['displayName'],
+        'role': (m['role'] as String?) ?? 'caregiver',
+      };
+    } else {
+      return {'uid': '', 'displayName': null, 'role': 'caregiver'};
+    }
+  }).where((m) => (m['uid'] as String).isNotEmpty).toList();
+}
 
 class ElderlyHomePage extends StatefulWidget {
   final UserProfile userProfile;
@@ -33,7 +53,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
   final GlobalKey _announcementsKey = GlobalKey();
   final GlobalKey _eventsKey = GlobalKey();
   final GlobalKey _recommendationsKey = GlobalKey();
-  final GlobalKey _communityKey = GlobalKey();
+  final GlobalKey _communityKey = GlobalKey(); // Key now points to the feed section
 
   @override
   void initState() {
@@ -99,7 +119,12 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                   _buildLearningRecommendationsSection(),
                   const SizedBox(height: 24),
 
-                  _buildCommunityButton(context, _communityKey),
+                  // Community Button to go to the full community page
+                  _buildCommunityButton(context),
+                  const SizedBox(height: 32),
+
+                  _buildSectionTitle(context, "Community Feed", _communityKey, showSeeAll: true),
+                  _buildCommunityFeedSection(context),
                   const SizedBox(height: 32),
 
                   _buildSectionTitle(context, "Shared Posts & Memories", GlobalKey(), showSeeAll: false),
@@ -118,68 +143,52 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 
-  Widget _buildCaregiverInfoCard(BuildContext context) {
+Widget _buildCaregiverInfoCard(BuildContext context) {
   return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
     stream: FirebaseFirestore.instance
         .collection('users')
         .doc(widget.userProfile.uid)
         .snapshots(),
     builder: (context, snapshot) {
-      // Defaults
-      String caregiverName = 'No Caregiver Linked';
+      String caregiverNames = 'No Caregiver Linked';
       bool isLinked = false;
-      VoidCallback? onPressed;
-      String? buttonText;
 
       if (snapshot.hasData && snapshot.data!.exists) {
-        final data = snapshot.data!.data();
-        final caregivers = (data?['linkedCaregivers'] as List?)?.cast<String>() ?? const <String>[];
+        final data = snapshot.data!.data() ?? {};
+        final caregivers = normalizeCaregivers(data['linkedCaregivers']);
 
         if (caregivers.isNotEmpty) {
-          final primaryCaregiverId = caregivers.first;
-          // Load caregiver display name
-          return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-            future: FirebaseFirestore.instance.collection('users').doc(primaryCaregiverId).get(),
-            builder: (context, cgSnap) {
-              if (cgSnap.hasData && cgSnap.data!.exists) {
-                final cg = cgSnap.data!.data();
-                caregiverName = (cg?['displayName'] as String?) ??
-                                (cg?['firstName'] as String? ?? 'Caregiver');
-                isLinked = true;
-              }
-              return _buildElderlyInfoCard(
-                context,
-                name: widget.userProfile.displayName,
-                id: widget.userProfile.uid,
-                caregiver: caregiverName,
-                isLinked: isLinked,
-              );
-            },
-          );
-        } else {
-          // No caregivers linked yet
-          onPressed = () {
-            Navigator.push(context, MaterialPageRoute(builder: (_) => LinkCaregiverPage()));
-          };
-          buttonText = 'Link First Caregiver';
+          final caregiverNamesList = caregivers.map((cg) {
+            final role = (cg['role'] as String?) ?? 'caregiver';
+            final nameOrUid = (cg['displayName'] as String?)?.trim();
+            final label = (nameOrUid != null && nameOrUid.isNotEmpty)
+                ? nameOrUid
+                : (cg['uid'] as String).substring(0, 8) + '…';
+            // Show “Primary/Secondary” nicely if you use that, else just role
+            return (role.toLowerCase() == 'primary')
+                ? 'Primary: $label'
+                : (role.toLowerCase() == 'secondary')
+                    ? 'Secondary: $label'
+                    : 'Caregiver: $label';
+          }).toList();
+
+          caregiverNames = caregiverNamesList.join(', ');
+          isLinked = true;
         }
       }
 
-      // Fallback (no data or still loading caregiver)
       return _buildElderlyInfoCard(
         context,
         name: widget.userProfile.displayName,
         id: widget.userProfile.uid,
-        caregiver: caregiverName,
+        caregiver: caregiverNames,
         isLinked: isLinked,
-        onPressed: onPressed,
-        buttonText: buttonText ?? 'Link First Caregiver',
       );
     },
   );
 }
 
-// Pretty card showing Elder info + caregiver status.
+
 Widget _buildElderlyInfoCard(
   BuildContext context, {
   required String name,
@@ -274,7 +283,7 @@ Widget _buildElderlyInfoCard(
         Expanded(
           child: ElevatedButton.icon(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => const CommunicatePage()));
+              Navigator.push(context, MaterialPageRoute(builder: (_) => CommunicatePage(userProfile: widget.userProfile)));
             },
             icon: const Icon(Icons.call, size: 24),
             label: const Text("Call Caregiver", style: TextStyle(fontSize: 16)),
@@ -311,7 +320,7 @@ Widget _buildElderlyInfoCard(
         _buildSectionTitle(context, "Immediate Medical Access", GlobalKey(), showSeeAll: false),
         const SizedBox(height: 10),
         _buildActionGrid([
-          _buildActionButton(context, 'See GP now', Icons.local_hospital, Colors.red.shade100, Colors.red.shade800, GPConsultationPage()),
+          _buildActionButton(context, 'See GP now', Icons.local_hospital, Colors.red.shade100, Colors.red.shade800, GPConsultationPage(userProfile: widget.userProfile)),
           _buildActionButton(context, 'Book an appointment', Icons.calendar_month, Colors.blue.shade100, Colors.blue.shade800, AppointmentBookingPage(userProfile: widget.userProfile)),
           _buildActionButton(context, 'Consultation History', Icons.history, Colors.purple.shade100, Colors.purple.shade800, ch.ConsultationHistoryPage()),
         ]),
@@ -440,8 +449,8 @@ Widget _buildElderlyInfoCard(
         if (showSeeAll)
           TextButton(
             onPressed: () {
-              if (title == "Upcoming Events") {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => EventsPage()));
+              if (title == "Upcoming Events" || title == "Community Feed") {
+                Navigator.push(context, MaterialPageRoute(builder: (_) => CommunityPage()));
               } else {
                 debugPrint("See all $title");
               }
@@ -569,9 +578,9 @@ Widget _buildElderlyInfoCard(
     );
   }
 
-  Widget _buildCommunityButton(BuildContext context, GlobalKey key) {
+  // Updated to remove the key, as the key is now on the feed section title
+  Widget _buildCommunityButton(BuildContext context) {
     return Padding(
-      key: key,
       padding: const EdgeInsets.only(top: 8.0),
       child: ElevatedButton.icon(
         onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CommunityPage())),
@@ -584,6 +593,89 @@ Widget _buildElderlyInfoCard(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         ),
       ),
+    );
+  }
+
+  Widget _buildCommunityFeedSection(BuildContext context) {
+    final communityController = context.read<CommunityController>();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: ElevatedButton.icon(
+            onPressed: () => Navigator.push(
+              context, MaterialPageRoute(builder: (_) => const CreatePostPage())),
+            icon: const Icon(Icons.add_comment),
+            label: const Text("Share a New Post"),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.teal.shade400,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(double.infinity, 45),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
+        ),
+
+        // Take only the first 3 posts for preview
+        StreamBuilder<List<Post>>(
+          stream: communityController.postsStream.map((ps) => ps.take(3).toList()),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const Center(child: LinearProgressIndicator());
+            }
+            if (snapshot.hasError) {
+              debugPrint("Community Feed Error: ${snapshot.error}");
+              return const Center(child: Text("Error loading feed."));
+            }
+
+            final posts = snapshot.data ?? const <Post>[];
+            if (posts.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.all(32.0),
+                child: Center(child: Text("Be the first to share in the community!")),
+              );
+            }
+
+            return ListView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: posts.length,
+              itemBuilder: (context, index) {
+                final p = posts[index];
+                final content = p.content.isEmpty
+                    ? 'No Content'
+                    : (p.content.length > 80 ? '${p.content.substring(0, 80)}…' : p.content);
+                final author = p.authorDisplayName.isEmpty ? 'Anonymous' : p.authorDisplayName;
+                final dt = p.timestamp.toDate();
+                final formattedTime = DateFormat('MMM d, h:mm a').format(dt);
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  elevation: 3,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.all(16.0),
+                    title: Text(content, style: const TextStyle(fontSize: 15, height: 1.4, fontWeight: FontWeight.w500)),
+                    subtitle: Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('by $author', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.deepPurple.shade700)),
+                          Text(formattedTime, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
+                        ],
+                      ),
+                    ),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CommunityPage())),
+                  ),
+                );
+              },
+            );
+          },
+        ),
+      ],
     );
   }
 }

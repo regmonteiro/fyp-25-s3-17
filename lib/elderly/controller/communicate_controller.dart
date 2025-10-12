@@ -1,88 +1,31 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../../models/user_profile.dart';
-
-class ChatMessage {
-  final String id;
-  final String senderId;
-  final String text;
-  final DateTime timestamp;
-
-  ChatMessage({
-    required this.id,
-    required this.senderId,
-    required this.text,
-    required this.timestamp,
-  });
-
-  factory ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final data = doc.data() ?? const <String, dynamic>{};
-    final ts = data['timestamp'];
-    return ChatMessage(
-      id: doc.id,
-      senderId: (data['senderId'] as String?) ?? '',
-      text: (data['text'] as String?) ?? '',
-      timestamp: ts is Timestamp ? ts.toDate() : DateTime.fromMillisecondsSinceEpoch(0),
-    );
-  }
-}
+import 'package:elderly_aiassistant/elderly/boundary/models/chat_message.dart';
+import 'package:elderly_aiassistant/models/user_profile.dart';
 
 class CommunicateController {
-  final FirebaseFirestore _db;
-  final FirebaseAuth _auth;
   final UserProfile currentUser;
+  CommunicateController({required this.currentUser});
 
-  CommunicateController({
-    FirebaseFirestore? db,
-    FirebaseAuth? auth,
-    required this.currentUser,
-  })  : _db = db ?? FirebaseFirestore.instance,
-        _auth = auth ?? FirebaseAuth.instance;
+  User? get firebaseUser => FirebaseAuth.instance.currentUser;
 
-  User? get firebaseUser => _auth.currentUser;
-
-  /// If caregiver → partner is uidOfElder; else find a caregiver linked to this elder.
-  Future<String?> resolvePartnerUid(UserProfile user) async {
-    if (user.role == 'caregiver') {
-      final elder = user.uidOfElder;
-      return (elder != null && elder.isNotEmpty) ? elder : null;
-    }
-
-    // user is elder → find first caregiver whose uidOfElder == user.uid
-    final q = await _db
-        .collection('users')
-        .where('role', isEqualTo: 'caregiver')
-        .where('uidOfElder', isEqualTo: user.uid)
-        .limit(1)
-        .get();
-
-    if (q.docs.isEmpty) return null;
-    return q.docs.first.id;
-  }
-
-  String _threadId(String a, String b) {
-    final s = [a, b]..sort();
-    return '${s.first}_${s.last}';
+  String _convId(String a, String b) {
+    final pair = [a, b]..sort();
+    return '${pair[0]}_${pair[1]}';
   }
 
   Stream<List<ChatMessage>> messagesStream({
     required String myUid,
     required String partnerUid,
-    int limit = 100,
   }) {
-    final threadId = _threadId(myUid, partnerUid);
-    return _db
-        .collection('chats')
-        .doc(threadId)
+    final convId = _convId(myUid, partnerUid);
+    return FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(convId)
         .collection('messages')
-        .orderBy('timestamp', descending: true)
-        .limit(limit)
-        .withConverter<Map<String, dynamic>>(
-          fromFirestore: (snap, _) => snap.data() ?? <String, dynamic>{},
-          toFirestore: (data, _) => data,
-        )
+        .orderBy('sentAt', descending: false)
         .snapshots()
-        .map((s) => s.docs.map(ChatMessage.fromDoc).toList());
+        .map((qs) => qs.docs.map((d) => ChatMessage.fromDoc(d)).toList());
   }
 
   Future<void> send({
@@ -90,22 +33,38 @@ class CommunicateController {
     required String partnerUid,
     required String text,
   }) async {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) return;
+    final convId = _convId(myUid, partnerUid);
+    final msgs = FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(convId)
+        .collection('messages');
 
-    final threadId = _threadId(myUid, partnerUid);
-    final msg = {
-      'senderId': myUid,
-      'text': trimmed,
-      'timestamp': FieldValue.serverTimestamp(),
-    };
+    await msgs.add({
+      'text': text,
+      'senderUid': myUid,
+      'receiverUid': partnerUid,
+      'sentAt': FieldValue.serverTimestamp(),
+    });
 
-    await _db.collection('chats').doc(threadId).collection('messages').add(msg);
-
-    await _db.collection('chats').doc(threadId).set({
-      'participants': [myUid, partnerUid],
-      'lastMessage': trimmed,
-      'lastTimestamp': FieldValue.serverTimestamp(),
+    await FirebaseFirestore.instance
+        .collection('conversations')
+        .doc(convId)
+        .set({
+      'uids': [myUid, partnerUid]..sort(),
+      'lastText': text,
+      'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  Future<String?> resolvePartnerUid(UserProfile me) async {
+    final snap = await FirebaseFirestore.instance.collection('users').doc(me.uid).get();
+    final data = snap.data() ?? {};
+    final key = me.role == 'caregiver' ? 'linkedElders' : 'linkedCaregivers';
+    final list = (data[key] as List?) ?? [];
+    if (list.isEmpty) return null;
+    final first = list.first;
+    if (first is String) return first;
+    if (first is Map && first['uid'] is String) return first['uid'] as String;
+    return null;
   }
 }

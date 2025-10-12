@@ -1,10 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'caregiver/boundary/caregiver_dashboard_page.dart';
 import 'elderly/boundary/elderly_dashboard_page.dart';
 import 'admin/boundary/admin_dashboard.dart';
 import 'models/user_profile.dart';
+import 'elderly/controller/community_controller.dart';
 
 class MainWrapper extends StatelessWidget {
   const MainWrapper({super.key});
@@ -16,7 +18,6 @@ class MainWrapper extends StatelessWidget {
       return const Scaffold(body: Center(child: Text('Please log in.')));
     }
 
-    // 1) Ensure the local session is still valid (user not deleted)
     final reloadFuture = user.reload();
 
     return FutureBuilder<void>(
@@ -26,12 +27,10 @@ class MainWrapper extends StatelessWidget {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
         if (reloadSnap.hasError) {
-          // Stale/invalid auth -> sign out and show message
           FirebaseAuth.instance.signOut();
           return const Scaffold(body: Center(child: Text('Session expired. Please log in again.')));
         }
 
-        // 2) Live stream of the profile doc so the UI updates immediately after creation
         final docRef = FirebaseFirestore.instance.collection('users').doc(user.uid);
         return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
           stream: docRef.snapshots(),
@@ -55,7 +54,6 @@ class MainWrapper extends StatelessWidget {
 
             final doc = snap.data;
             if (doc == null || !doc.exists) {
-              // 3) Profile missing -> let user create it in one tap
               return _CreateProfileScreen(uid: user.uid, email: user.email);
             }
 
@@ -63,26 +61,28 @@ class MainWrapper extends StatelessWidget {
             final rawRole = data['role'];
             final role = (rawRole is String) ? rawRole.trim().toLowerCase() : '';
 
-            // TEMP debug log
-            // ignore: avoid_print
             print('[MainWrapper] uid=${user.uid} roleRaw="$rawRole" roleNorm="$role"');
 
             // 4) Route by role
-                final userProfile = UserProfile.fromMap(data, user.uid);
+            final userProfile = UserProfile.fromMap(data, user.uid);
 
-                switch (role) {
-                  case 'caregiver':
-                    return CaregiverDashboardPage(userProfile: userProfile);
-                  case 'elderly':
-                    return ElderlyDashboardPage(userProfile: userProfile);
-                  case 'admin':
-                    return AdminDashboard(userProfile: userProfile);
-                  default:
-                    return _ProblemScreen(
-                      message: 'Profile exists but role is missing/invalid. Read: "$rawRole"',
-                      tip: 'Set role to one of: Elderly, Caregiver, Admin.',
-                    );
-                }
+            switch (role) {
+              case 'caregiver':
+                return CaregiverDashboardPage(userProfile: userProfile);
+              case 'elderly':
+                // <-- FIX: Inject CommunityController here, above the dashboard
+                return ChangeNotifierProvider(
+                  create: (_) => CommunityController(),
+                  child: ElderlyDashboardPage(userProfile: userProfile),
+                );
+              case 'admin':
+                return AdminDashboard(userProfile: userProfile);
+              default:
+                return _ProblemScreen(
+                  message: 'Profile exists but role is missing/invalid. Read: "$rawRole"',
+                  tip: 'Set role to one of: Elderly, Caregiver, Admin.',
+                );
+            }
           },
         );
       },
@@ -128,7 +128,7 @@ class _CreateProfileScreen extends StatefulWidget {
 }
 
 class _CreateProfileScreenState extends State<_CreateProfileScreen> {
-  String _role = 'Elderly'; // default; change if you want a picker
+  String _role = 'Elderly';
 
   bool _busy = false;
   String? _err;
@@ -146,7 +146,6 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
         'lastName': '',
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
-      // No nav needed — the StreamBuilder above will rebuild automatically.
     } on FirebaseException catch (e) {
       setState(() => _err = '${e.code}: ${e.message}');
     } finally {
