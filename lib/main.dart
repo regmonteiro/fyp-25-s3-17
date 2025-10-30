@@ -3,31 +3,70 @@ import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'elderly/boundary/elderly_dashboard_page.dart';
-import 'elderly/controller/community_controller.dart';
+import 'firebase_options.dart';
 import 'models/user_profile.dart';
+import 'features/controller/community_controller.dart';
+import 'main_wrapper.dart';
+import 'welcome.dart';
+import 'controller/app_settings.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'features/share_experiences_service.dart';
+import 'features/controller/share_experience_controller.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
+  print('[BOOT] Initializing Firebase...');
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+  print('[BOOT] Firebase initialized. Apps: ${Firebase.apps}');
+
+  // 🔌 Realtime Database: optional but recommended
+  try {
+    // enable local cache
+    FirebaseDatabase.instance.setPersistenceEnabled(true);
+    // optional: help debug RTDB traffic
+    // FirebaseDatabase.instance.setLoggingEnabled(true);
+
+    // (Optional) if your app uses a non-default DB instance:
+    // FirebaseDatabase.instanceFor(app: Firebase.app(), databaseURL: 'https://<your-db>.firebaseio.com')
+    //   .setPersistenceEnabled(true);
+  } catch (e) {
+    // don't crash if called twice (hot restart) or on web
+    debugPrint('RTDB persistence enable error (usually safe to ignore): $e');
+  }
+
   runApp(const MyApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // Stream of the signed-in Firebase user
+  /// Firebase Auth stream
   Stream<User?> get _authStream => FirebaseAuth.instance.authStateChanges();
 
-  // Stream of the signed-in user's profile document (or null when signed out)
+  /// Firestore profile stream
   Stream<UserProfile?> get _userProfileStream {
     return FirebaseAuth.instance.authStateChanges().asyncExpand((user) {
       if (user == null) return Stream<UserProfile?>.value(null);
-      return FirebaseFirestore.instance
-          .collection('users')
+
+      final docStream = FirebaseFirestore.instance
+          .collection('Account')
           .doc(user.uid)
-          .snapshots()
-          .map((snap) => snap.exists ? UserProfile.fromDocumentSnapshot(snap) : null);
+          .snapshots();
+
+      return docStream.map<UserProfile?>((snap) {
+        if (!snap.exists) return null;
+        try {
+          return UserProfile.fromDocumentSnapshot(snap);
+        } catch (e) {
+          debugPrint('UserProfile parse error: $e');
+          return null;
+        }
+      }).handleError((err, _) {
+        debugPrint('userProfileStream Firestore error: $err');
+      });
     });
   }
 
@@ -35,42 +74,62 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // Signed-in Firebase user (nullable)
+        // Firebase Auth stream
         StreamProvider<User?>.value(
           value: _authStream,
           initialData: null,
+          catchError: (_, __) => null,
         ),
 
-        // Signed-in user's profile (nullable)
+        // Firestore profile stream
         StreamProvider<UserProfile?>.value(
           value: _userProfileStream,
           initialData: null,
+          catchError: (_, __) => null,
         ),
 
-        // CommunityController available app-wide and kept in sync with auth/profile
-        ChangeNotifierProxyProvider2<User?, UserProfile?, CommunityController>(
+        // App-level controller
+        ChangeNotifierProvider(
           create: (_) => CommunityController(),
-          update: (_, user, profile, controller) {
-            controller ??= CommunityController();
-            controller.overrideUserId = user?.uid;
-            controller.currentUserProfile = profile;
-            return controller;
-          },
-),
-      ],
-      child: MaterialApp(
-        debugShowCheckedModeBanner: false,
-        title: 'Elderly AI Assistant',
-        theme: ThemeData(
-          colorSchemeSeed: const Color(0xFF6A1B9A),
-          useMaterial3: true,
         ),
-        home: const _RootGate(),
-      ),
+        ChangeNotifierProvider(create: (_) => AppSettings()),
+        ChangeNotifierProvider(
+            create: (_) => ShareExperienceController(),
+          ),
+
+        Provider<ShareExperienceService>.value(
+        value: ShareExperienceService.instance,
+    ),
+      ],
+      child: Consumer<AppSettings>(
+        builder: (context, appSettings, _) {
+          return MaterialApp(
+            debugShowCheckedModeBanner: false,
+            title: 'AllCare Assistant',
+            theme: ThemeData(
+              colorSchemeSeed: const Color(0xFF6A1B9A),
+              useMaterial3: true,
+            ),
+            // The builder belongs to MaterialApp (not MultiProvider)
+            builder: (context, child) {
+              final mq = MediaQuery.of(context);
+              return MediaQuery(
+                // Flutter 3.13+: TextScaler; if older, use textScaleFactor
+                data: mq.copyWith(
+                  textScaler: TextScaler.linear(appSettings.textScale),
+                ),
+                child: child!,
+              );
+            },
+            home: const _RootGate(),
+          );
+        },
+      )
     );
   }
 }
 
+/// Root gate decides where to go next
 class _RootGate extends StatelessWidget {
   const _RootGate({super.key});
 
@@ -80,19 +139,12 @@ class _RootGate extends StatelessWidget {
     final profile = context.watch<UserProfile?>();
 
     if (user == null) {
-      // Not signed in — show a simple placeholder or your real SignIn page
       return const _NotSignedInScreen();
+    } else if (profile == null) {
+      return const WelcomeScreen();
+    } else {
+      return MainWrapper(userProfile: profile);
     }
-
-    if (profile == null) {
-      // Signed in but profile not yet loaded
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    // Signed in + profile loaded → go to home
-    return ElderlyDashboardPage(userProfile: profile);
   }
 }
 
@@ -107,10 +159,18 @@ class _NotSignedInScreen extends StatelessWidget {
           const Text('You are not signed in.'),
           const SizedBox(height: 12),
           ElevatedButton(
-            onPressed: () {
-              // TODO: navigate to your real sign-in flow
+            onPressed: () async {
+              try {
+                await FirebaseAuth.instance.signInAnonymously();
+              } catch (e) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('Sign-in failed: $e')),
+                  );
+                }
+              }
             },
-            child: const Text('Go to Sign In'),
+            child: const Text('Continue (Anonymous)'),
           ),
         ]),
       ),

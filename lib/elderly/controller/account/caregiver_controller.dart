@@ -6,16 +6,16 @@ class CaregiverController {
   String get uid => FirebaseAuth.instance.currentUser!.uid;
 
   Stream<QuerySnapshot<Map<String, dynamic>>> caregiversStream() {
-    return _db.collection('users').doc(uid).collection('caregivers').snapshots();
+    return _db.collection('Account').doc(uid).collection('caregivers').snapshots();
   }
 
   Future<void> removeCaregiver(String id) async {
-    await _db.collection('users').doc(uid).collection('caregivers').doc(id).delete();
+    await _db.collection('Account').doc(uid).collection('caregivers').doc(id).delete();
   }
 
   Future<void> addCaregiverAndCharge(Map<String, dynamic> cg) async {
     // In production, you would call your payment provider here.
-    await _db.collection('users').doc(uid).collection('caregivers').add({
+    await _db.collection('Account').doc(uid).collection('caregivers').add({
       ...cg,
       'linkedAt': DateTime.now(),
       'access': {
@@ -28,6 +28,6 @@ class CaregiverController {
   }
 
   Future<void> updateCaregiverAccess(String id, Map<String, dynamic> access) async {
-    await _db.collection('users').doc(uid).collection('caregivers').doc(id).update({'access': access});
+    await _db.collection('Account').doc(uid).collection('caregivers').doc(id).update({'access': access});
   }
 }

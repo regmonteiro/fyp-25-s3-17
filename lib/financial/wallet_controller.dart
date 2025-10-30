@@ -3,13 +3,13 @@ import 'package:flutter/foundation.dart';
 
 class WalletTransaction {
   final String id;
-  final String type;             // e.g. "TopUp", "Purchase", "Refund"
+  final String type;             // "TopUp", "Purchase", "Refund"
   final double amount;
   final DateTime createdAt;
-  final String description;      // human readable (e.g. "Top-up via Card (•••• 1234)")
-  final String? method;          // e.g. "Card(1234)", "PayNow", "Apple Pay"
+  final String description;      // e.g. "Top-up via Card (•••• 1234)"
+  final String? method;          // "Card(1234)", "PayNow", etc.
   final String? payerUid;        // who paid (caregiver or self)
-  final String? payerName;       // optional display name
+  final String? payerName;       // display name (optional)
 
   WalletTransaction({
     required this.id,
@@ -51,13 +51,22 @@ class WalletController with ChangeNotifier {
   double _currentBalance = 0.0;
   double get currentBalance => _currentBalance;
 
-  // ---- Refs ----
+  // ---- Refs (moved under Account/{uid}) ----
   late final DocumentReference<Map<String, dynamic>> _balanceRef;
   late final CollectionReference<Map<String, dynamic>> _txRef;
 
   void _init() {
-    _balanceRef = _db.collection('elderly_wallets').doc(userId).collection('meta').doc('balance');
-    _txRef = _db.collection('elderly_wallets').doc(userId).collection('transactions');
+    _balanceRef = _db
+        .collection('Account')
+        .doc(userId)
+        .collection('wallet')
+        .doc('balance');
+
+    _txRef = _db
+        .collection('Account')
+        .doc(userId)
+        .collection('transactions');
+
     _listenToBalance();
   }
 
@@ -93,14 +102,9 @@ class WalletController with ChangeNotifier {
   }
 
   /// Top up the wallet.
-  ///
-  /// [paymentMethod] example values:
-  /// "PayNow", "Card(1234)", "Apple Pay", "Google Pay"
-  ///
-  /// [payerUid]/[payerName] allow caregiver to top-up on behalf of elderly.
   Future<void> topUpWallet({
     required double amount,
-    required String paymentMethod,
+    required String paymentMethod,  // "PayNow", "Card(1234)", etc.
     String? payerUid,
     String? payerName,
   }) async {
@@ -119,20 +123,19 @@ class WalletController with ChangeNotifier {
       txn.set(_txRef.doc(), {
         'type': 'TopUp',
         'amount': amount,
-        'method': paymentMethod,                   // <-- record method used
+        'method': paymentMethod,
         'description': 'Top-up via $paymentMethod',
         'createdAt': FieldValue.serverTimestamp(),
-        'targetUid': userId,                       // wallet owner (elderly)
+        'targetUid': userId, // wallet owner
         if (payerUid != null) 'payerUid': payerUid,
         if (payerName != null) 'payerName': payerName,
       });
     });
 
-    // listeners update currentBalance; still notify in case UI relies on it
     notifyListeners();
   }
 
-  /// Optional: charge wallet for purchases.
+  /// Charge wallet for purchases.
   Future<void> spend({
     required double amount,
     required String description,

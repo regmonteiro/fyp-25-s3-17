@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'elderly/boundary/elderly_dashboard_page.dart'; // Import the new home page
-import 'models/user_profile.dart'; // Import the UserProfile model
+import 'elderly/boundary/elderly_dashboard_page.dart';
+import 'models/user_profile.dart';
+
 
 // Enum to represent the different subscription plans
 enum SubscriptionPlan { monthly, annual, threeYear, none }
@@ -48,7 +49,7 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
   }
 
   try {
-    final userDoc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+    final userDoc = await FirebaseFirestore.instance.collection('Account').doc(user.uid).get();
     if (!userDoc.exists) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -84,12 +85,12 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
     };
 
     // Update the user's profile in Firestore with subscription details
-    await FirebaseFirestore.instance.collection('users').doc(user.uid).update(updatedData);
+    await FirebaseFirestore.instance.collection('Account').doc(user.uid).update(updatedData);
 
     // Save additional caregiver details if provided
     if (_addCaregiver) {
       await FirebaseFirestore.instance
-          .collection('users')
+          .collection('Account')
           .doc(user.uid)
           .collection('caregivers')
           .add({

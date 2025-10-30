@@ -58,11 +58,11 @@ class _ConsultationHistoryPageState extends State<ConsultationHistoryPage> {
     _elderlyUid = u.uid;
 
     // Listen user profile (for name/email & caregiver links)
-    _userSub = _fs.collection('users').doc(_elderlyUid).snapshots().listen((snap) async {
+    _userSub = _fs.collection('Account').doc(_elderlyUid).snapshots().listen((snap) async {
       final data = snap.data() ?? {};
       final email = (data['email'] as String?) ?? u.email;
-      final first = (data['firstName'] as String?) ?? '';
-      final last  = (data['lastName']  as String?) ?? '';
+      final first = (data['firstname'] as String?) ?? '';
+      final last  = (data['lastname']  as String?) ?? '';
       final displayName = [first, last].where((e) => (e ?? '').toString().trim().isNotEmpty).join(' ').trim();
 
       setState(() {
@@ -82,21 +82,21 @@ class _ConsultationHistoryPageState extends State<ConsultationHistoryPage> {
       final List<_Caregiver> list = [];
       for (final cgUid in caregiverUids) {
         try {
-          final cgDoc = await _fs.collection('users').doc(cgUid).get();
+          final cgDoc = await _fs.collection('Account').doc(cgUid).get();
           if (!cgDoc.exists) continue;
           final d = cgDoc.data() ?? {};
           final cgEmail = d['email'] as String?;
           final cgName  = (d['displayName'] as String?) ??
-              '${(d['firstName'] ?? '')} ${(d['lastName'] ?? '')}'.trim();
+              '${(d['firstname'] ?? '')} ${(d['lastname'] ?? '')}'.trim();
           list.add(_Caregiver(uid: cgUid, email: cgEmail ?? 'unknown', name: cgName.isEmpty ? (cgEmail ?? cgUid) : cgName));
         } catch (_) {}
       }
       if (mounted) setState(() => _caregivers = list);
     });
 
-    // Listen consultations under users/{elderlyUid}/consultations ordered by requestedAt desc
+    
     _consultationsSub = _fs
-        .collection('users')
+        .collection('Account')
         .doc(_elderlyUid)
         .collection('consultations')
         .orderBy('requestedAt', descending: true)
@@ -167,7 +167,7 @@ class _ConsultationHistoryPageState extends State<ConsultationHistoryPage> {
 
     try {
       final docRef = _fs
-          .collection('users')
+          .collection('Account')
           .doc(_elderlyUid)
           .collection('consultations')
           .doc(_currentConsultationId);

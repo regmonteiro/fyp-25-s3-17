@@ -5,21 +5,43 @@ class EventsController {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // READS (unchanged) – still used by EventsPage lists/search
+  // Helpers
   // ─────────────────────────────────────────────────────────────────────────────
-  Stream<QuerySnapshot> getAppointmentsStream(String elderlyUserId) {
+
+  /// Resolve canonical elder id for a given auth uid.
+  /// Prefers Account.elderlyId → first of Account.elderlyIds → fallback to uid.
+  Future<String> _resolveElderId(String uid) async {
+    final snap = await _firestore.collection('Account').doc(uid).get();
+    final data = snap.data() ?? {};
+
+    final String? elderlyId = (data['elderlyId'] as String?)?.trim();
+    if (elderlyId != null && elderlyId.isNotEmpty) return elderlyId;
+
+    final elderlyIds = data['elderlyIds'];
+    if (elderlyIds is List && elderlyIds.isNotEmpty && elderlyIds.first is String) {
+      final first = (elderlyIds.first as String).trim();
+      if (first.isNotEmpty) return first;
+    }
+    return uid;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // READS (unchanged for your UI)
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  Stream<QuerySnapshot> getAppointmentsStream(String uid) {
     return _firestore
-        .collection('users')
-        .doc(elderlyUserId)
+        .collection('Account')
+        .doc(uid)
         .collection('appointments')
         .orderBy('dateTime')
         .snapshots();
   }
 
-  Stream<QuerySnapshot> getUpcomingEventsStream(String elderlyUserId) {
+  Stream<QuerySnapshot> getUpcomingEventsStream(String uid) {
     return _firestore
-        .collection('users')
-        .doc(elderlyUserId)
+        .collection('Account')
+        .doc(uid)
         .collection('appointments')
         .where('dateTime', isGreaterThanOrEqualTo: Timestamp.now())
         .orderBy('dateTime')
@@ -27,23 +49,28 @@ class EventsController {
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
-  // CREATE – write appointment + mirror in /events (start/end)
+  // CREATE – write appointment + mirror in /events (elderlyId/caregiverId/start/end)
   // ─────────────────────────────────────────────────────────────────────────────
   Future<void> createAppointment({
-    required String elderlyUserId,
+    required String uid,                // account scope where the appointment list lives (your UI passes auth.uid)
     required String title,
     required String description,
     required DateTime dateTime,
     required String type,
     bool isAllDay = false,
-    int durationMinutes = 60, // NEW: used to build `end`
+    int durationMinutes = 60,
   }) async {
-    final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) throw StateError('Not signed in');
+    final currentUid = FirebaseAuth.instance.currentUser?.uid;
+    if (currentUid == null) {
+      throw StateError('Not signed in');
+    }
+
+    // Resolve which elder this item belongs to for the flat /events feed
+    final elderId = await _resolveElderId(uid);
 
     final apptRef = _firestore
-        .collection('users')
-        .doc(elderlyUserId)
+        .collection('Account')
+        .doc(uid)
         .collection('appointments')
         .doc();
 
@@ -59,7 +86,7 @@ class EventsController {
 
     final batch = _firestore.batch();
 
-    // appointment doc (keeps your EventsPage UI working)
+    // Appointment (drives EventsPage UI)
     batch.set(apptRef, {
       'title': title,
       'description': description,
@@ -67,14 +94,14 @@ class EventsController {
       'type': type,
       'isAllDay': isAllDay,
       'durationMinutes': durationMinutes,
-      'mirrorEventId': eventRef.id, // link to flat event
+      'mirrorEventId': eventRef.id,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
-    // flat /events doc (read by Home)
+    // Flat /events (drives Home/aggregations)
     batch.set(eventRef, {
-      'elderlyUserId': elderlyUserId,
-      'caregiverId': uid, // creator (elder or caregiver)
+      'elderlyId': elderId,                // ← canonical elder id
+      'caregiverId': currentUid,           // ← creator (could be the elder themselves)
       'title': title,
       'description': description,
       'type': type,
@@ -91,18 +118,18 @@ class EventsController {
   // UPDATE – update appointment and its mirrored /events doc
   // ─────────────────────────────────────────────────────────────────────────────
   Future<void> updateAppointment({
-    required String elderlyUserId,
+    required String uid,             // scope where the appointment is stored
     required String appointmentId,
     required String title,
     required String description,
     required DateTime dateTime,
     required String type,
     bool isAllDay = false,
-    int? durationMinutes, // optional on update
+    int? durationMinutes,
   }) async {
     final apptRef = _firestore
-        .collection('users')
-        .doc(elderlyUserId)
+        .collection('Account')
+        .doc(uid)
         .collection('appointments')
         .doc(appointmentId);
 
@@ -116,13 +143,14 @@ class EventsController {
     final DateTime start = isAllDay
         ? DateTime(dateTime.year, dateTime.month, dateTime.day, 0, 0, 0)
         : dateTime;
+
     final DateTime end = isAllDay
         ? DateTime(dateTime.year, dateTime.month, dateTime.day, 23, 59, 59)
         : dateTime.add(Duration(minutes: dur));
 
     final batch = _firestore.batch();
 
-    // update appointment
+    // Update appointment
     batch.update(apptRef, {
       'title': title,
       'description': description,
@@ -130,9 +158,10 @@ class EventsController {
       'type': type,
       'isAllDay': isAllDay,
       'durationMinutes': dur,
+      'updatedAt': FieldValue.serverTimestamp(),
     });
 
-    // update/create mirror event
+    // Update/create mirror event so Home stays in sync
     if (mirrorEventId != null && mirrorEventId.isNotEmpty) {
       final evRef = _firestore.collection('events').doc(mirrorEventId);
       batch.update(evRef, {
@@ -142,13 +171,18 @@ class EventsController {
         'isAllDay': isAllDay,
         'start': Timestamp.fromDate(start),
         'end': Timestamp.fromDate(end),
+        'updatedAt': FieldValue.serverTimestamp(),
       });
     } else {
-      // no mirror yet → create one and store back
+      // No mirror yet → create one and link back
+      final currentUid = FirebaseAuth.instance.currentUser?.uid;
+      if (currentUid == null) throw StateError('Not signed in');
+      final elderId = await _resolveElderId(uid);
+
       final evRef = _firestore.collection('events').doc();
       batch.set(evRef, {
-        'elderlyUserId': elderlyUserId,
-        'caregiverId': FirebaseAuth.instance.currentUser?.uid,
+        'elderlyId': elderId,
+        'caregiverId': currentUid,
         'title': title,
         'description': description,
         'type': type,
@@ -167,17 +201,18 @@ class EventsController {
   // DELETE – remove appointment and mirrored /events doc
   // ─────────────────────────────────────────────────────────────────────────────
   Future<void> deleteAppointment({
-    required String elderlyUserId,
+    required String uid,
     required String appointmentId,
   }) async {
     final apptRef = _firestore
-        .collection('users')
-        .doc(elderlyUserId)
+        .collection('Account')
+        .doc(uid)
         .collection('appointments')
         .doc(appointmentId);
 
     final apptSnap = await apptRef.get();
     if (!apptSnap.exists) return;
+
     final data = apptSnap.data() as Map<String, dynamic>;
     final String? mirrorEventId = data['mirrorEventId'] as String?;
 

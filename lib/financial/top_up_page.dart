@@ -64,10 +64,10 @@ class _TopUpPageState extends State<TopUpPage> {
                       MaterialPageRoute(
                         builder: (_) => PaymentMethodsPage(
                           currentUserUid: profile.uid,
-                          targetElderUid: profile.role == 'caregiver'
-                              ? (profile.uidOfElder ?? profile.uid)
+                          targetElderUid: profile.userType == 'caregiver'
+                              ? (profile.elderlyId ?? profile.uid)
                               : profile.uid,
-                          caregiverUid: profile.role == 'caregiver'
+                          caregiverUid: profile.userType == 'caregiver'
                               ? profile.uid
                               : null,
                         ),

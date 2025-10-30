@@ -28,8 +28,8 @@ class _ConsultationRequestPageState extends State<ConsultationRequestPage> {
   }
 
   String get _patientUid {
-    final isCaregiver = widget.userProfile.role == 'caregiver';
-    final elder = widget.userProfile.uidOfElder;
+    final isCaregiver = widget.userProfile.userType == 'caregiver';
+    final elder = widget.userProfile.elderlyId;
     if (isCaregiver && elder != null && elder.isNotEmpty) {
       return elder;
     }
@@ -45,7 +45,7 @@ class _ConsultationRequestPageState extends State<ConsultationRequestPage> {
         'patientUid': _patientUid,
         'createdByUid': widget.userProfile.uid,
         'createdByName': widget.userProfile.displayName,
-        'roleOfCreator': widget.userProfile.role,
+        'roleOfCreator': widget.userProfile.userType,
         'reason': _reasonCtrl.text.trim(),
         'status': 'pending', // pending | scheduled | completed | canceled
         'createdAt': FieldValue.serverTimestamp(),
@@ -54,7 +54,7 @@ class _ConsultationRequestPageState extends State<ConsultationRequestPage> {
 
       // Store under the patient document: users/{patientUid}/consultations/{autoId}
       final col = FirebaseFirestore.instance
-          .collection('users')
+          .collection('Account')
           .doc(_patientUid)
           .collection('consultations');
 
@@ -89,7 +89,7 @@ class _ConsultationRequestPageState extends State<ConsultationRequestPage> {
             children: [
               _InfoChip(
                 label: 'Requesting for',
-                value: isSelf ? 'Myself' : 'Elder (${widget.userProfile.uidOfElder})',
+                value: isSelf ? 'Myself' : 'Elder (${widget.userProfile.elderlyId})',
               ),
               const SizedBox(height: 12),
               TextFormField(

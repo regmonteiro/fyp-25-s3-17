@@ -1,269 +1,348 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'package:printing/printing.dart';
-import '../boundary/report_page.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
+import 'package:flutter/material.dart';
+import '../../report_models.dart';
 
-class ViewReportsCaregiverController {
-  final FirebaseFirestore _fs;
-  final FirebaseDatabase _rtdb;
+class CaregiverReportsController {
+  CaregiverReportsController({FirebaseFirestore? db, FirebaseAuth? auth})
+      : _db = db ?? FirebaseFirestore.instance,
+        _auth = auth ?? FirebaseAuth.instance;
 
-  ViewReportsCaregiverController({
-    FirebaseFirestore? firestore,
-    FirebaseDatabase? database,
-  })  : _fs = firestore ?? FirebaseFirestore.instance,
-        _rtdb = database ?? FirebaseDatabase.instance;
+  final FirebaseFirestore _db;
+  final FirebaseAuth _auth;
 
-  // --- JS util: emailToKey (replace '.' and '@' with '_')
-  String _emailToKey(String email) => email.replaceAll(RegExp(r'[.@]'), '_');
+  Stream<CaregiverReportsVM> streamVm() async* {
+    final caregiverUid = _auth.currentUser?.uid;
+    if (caregiverUid == null) throw Exception('Not authenticated');
 
-  // --- JS util: caregiverData may include elderlyId or elderlyIds[0]. In Flutter we don’t have localStorage,
-  // so we try (1) provided param; (2) Firestore users/{caregiverUidOrEmail} doc with fields elderlyId/elderlyIds.
-  Future<String?> _resolveElderlyId({
-    required String caregiverEmailOrUid,
-    String? elderlyIdFromParam,
-  }) async {
-    if (elderlyIdFromParam != null && elderlyIdFromParam.isNotEmpty) {
-      return elderlyIdFromParam;
-    }
+    // ALWAYS read from Account/{uid}
+    final caregiverDoc$ = _db.collection('Account').doc(caregiverUid).snapshots();
 
-    // Try users/{caregiverEmailOrUid} then users/byEmail/{email}
-    try {
-      // primary: users/{caregiverEmailOrUid}
-      final doc1 = await _fs.collection('users').doc(caregiverEmailOrUid).get();
-      Map<String, dynamic>? data = doc1.data();
-      if (data == null) {
-        // fallback: usersByEmail/{email}
-        final doc2 =
-            await _fs.collection('usersByEmail').doc(caregiverEmailOrUid.toLowerCase()).get();
-        data = doc2.data();
+    await for (final cgSnap in caregiverDoc$) {
+      final cg = cgSnap.data() ?? {};
+      final elderIds = _extractLinkedElders(cg);
+      if (elderIds.isEmpty) {
+        yield CaregiverReportsVM(
+          elders: const [],
+          activeElderUid: '',
+          bundle: ReportBundle(
+            elderly: ElderlySummary(uid: '', displayName: 'No Elder Linked', age: null),
+            reports: const [],
+            alerts: const [],
+          ),
+        );
+        continue;
       }
-      if (data != null) {
-        final v1 = data['elderlyId']?.toString();
-        if (v1 != null && v1.isNotEmpty) return v1;
 
-        final v2 = data['elderlyIds'];
-        if (v2 is List && v2.isNotEmpty) return v2.first.toString();
-      }
-    } catch (_) {
-      // swallow and return null; caller will use demo data fallback
+      // FIX: use the right variable name
+      final activeElderUid = elderIds.first;
+
+      final elders = await _fetchEldersSummaries(elderIds);
+      final bundle = await _buildBundleForElder(activeElderUid);
+
+      yield CaregiverReportsVM(elders: elders, activeElderUid: activeElderUid, bundle: bundle);
     }
-    return null;
   }
 
-  /// JS: fetchElderlyData(elderlyId) using RTDB Account/{key}
-  Future<({String id, String name, int age, String email})> _fetchElderlyDataRtdb(
-      String elderlyEmail) async {
-    final key = _emailToKey(elderlyEmail);
-    final snap = await _rtdb.ref('Account/$key').get();
-
-    if (!snap.exists || snap.value is! Map) {
-      throw Exception('Elderly data not found in database');
-    }
-    final m = Map<String, dynamic>.from(snap.value as Map);
-    final first = (m['firstname'] ?? '').toString();
-    final last = (m['lastname'] ?? '').toString();
-    final dobStr = (m['dob'] ?? '').toString();
-
-    if (first.isEmpty || last.isEmpty || dobStr.isEmpty) {
-      throw Exception('Elderly data is incomplete');
-    }
-
-    final dob = DateTime.tryParse(dobStr);
-    if (dob == null) {
-      throw Exception('Invalid DOB format');
-    }
-    final now = DateTime.now();
-    int age = now.year - dob.year;
-    final mdiff = now.month - dob.month;
-    if (mdiff < 0 || (mdiff == 0 && now.day < dob.day)) age--;
-
-    return (id: key, name: '$first $last', age: age, email: elderlyEmail);
+  Future<CaregiverReportsVM> switchElder(String elderUid, List<ElderlySummary> elders) async {
+    final bundle = await _buildBundleForElder(elderUid);
+    return CaregiverReportsVM(elders: elders, activeElderUid: elderUid, bundle: bundle);
   }
 
-  // --- JS: generateReportsData()
-  List<ReportCardData> _generateReportsData() {
-    return [
+  // ─────────── data building ───────────
+
+  Future<ReportBundle> _buildBundleForElder(String elderlyUid) async {
+    final elderly = await _fetchElderSummary(elderlyUid);
+    final last7 = _lastNDaysLabels(7);
+    final dayKeys = _lastNDaysKeys(7);
+
+    // metricsDaily : ownerUid == elderlyUid AND dayKey IN [..<=10]
+    final metrics = await _db
+        .collection('metricsDaily')
+        .where('ownerUid', isEqualTo: elderlyUid)
+        .where('dayKey', whereIn: dayKeys)
+        .get();
+
+    final byDay = {for (final d in metrics.docs) (d.data()['dayKey'] as String? ?? ''): d.data()};
+
+    final systolic = <num>[];
+    final diastolic = <num>[];
+    final steps = <num>[];
+    final sleepHrs = <double>[];
+    for (final k in dayKeys) {
+      final m = byDay[k] ?? {};
+      systolic.add((m['systolic'] ?? m['bpSystolic'] ?? 0) as num);
+      diastolic.add((m['diastolic'] ?? m['bpDiastolic'] ?? 0) as num);
+      steps.add((m['steps'] ?? 0) as num);
+      final sm = (m['sleepMinutes'] ?? 0) as num;
+      sleepHrs.add(sm.toDouble() / 60.0);
+    }
+
+    // medicationReminders : use elderlyId (your app uses this elsewhere)
+    final medsSnap = await _db
+        .collection('medicationReminders')
+        .where('elderlyId', isEqualTo: elderlyUid)
+        .get();
+
+    int taken = 0, missed = 0, scheduled = 0;
+    final today = DateTime.now();
+    final cutoff = DateTime(today.year, today.month, today.day).subtract(const Duration(days: 7));
+
+    for (final d in medsSnap.docs) {
+      final m = d.data();
+      final dateStr = (m['date'] ?? '').toString();
+      DateTime? dt = DateTime.tryParse(dateStr);
+      if (dt == null) {
+        final rt = m['reminderAt'] ?? m['reminderTime'];
+        if (rt is Timestamp) dt = rt.toDate();
+      }
+      if (dt == null || dt.isBefore(cutoff)) continue;
+
+      final status = (m['status'] ?? 'pending').toString();
+      if (status == 'completed') taken++;
+      else if (status == 'missed') missed++;
+      else scheduled++;
+    }
+
+    // notifications : pick one scheme and be consistent
+    // A) by elderlyId (build index on elderlyId + timestamp)
+    final notifs = await _db
+        .collection('notifications')
+        .where('elderlyId', isEqualTo: elderlyUid)
+        .orderBy('timestamp', descending: true)
+        .limit(15)
+        .get();
+
+    // (If your rules use recipient model, switch to .where('toUid', isEqualTo: caregiverUid).)
+
+    final alerts = notifs.docs.map((d) {
+      final m = d.data();
+      final ts = (m['timestamp'] as Timestamp?)?.toDate();
+      final rel = _relativeTime(ts);
+      final typeRaw = (m['type'] ?? 'info').toString();
+      final type = typeRaw.contains('critical')
+          ? 'critical'
+          : (typeRaw.contains('warn') ? 'warning' : 'info');
+      return AlertItem(
+        id: d.id,
+        type: type,
+        title: (m['title'] ?? 'Notification').toString(),
+        timeLabel: rel,
+        message: (m['message'] ?? '').toString(),
+      );
+    }).toList();
+
+    final reports = <ReportCardData>[
       ReportCardData(
-        id: '1',
+        id: 1,
         category: 'health',
         title: 'Health Vitals',
-        chartType: 'line',
-        labels: const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        values: const [125, 120, 118, 122, 119, 121, 120].map((e) => e.toDouble()).toList(),
+        icon: '💗',
+        labels: last7,
+        series: [
+          ChartSeries(label: 'Systolic', data: systolic, color: const Color(0xFFFF6B6B)),
+          ChartSeries(label: 'Diastolic', data: diastolic, color: const Color(0xFF4ECDC4), filled: true),
+        ],
         stats: [
-          ReportStat(number: '120/80', label: 'Blood Pressure'),
-          ReportStat(number: '72', label: 'Heart Rate'),
+          ReportStat(_bpString(systolic, diastolic), 'Blood Pressure (last)'),
+          ReportStat(_lastNonZero(sleepHrs).toStringAsFixed(1), 'Sleep (h)'),
         ],
       ),
       ReportCardData(
-        id: '2',
+        id: 2,
         category: 'medication',
-        title: 'Medication Adherence',
-        chartType: 'doughnut',
+        title: 'Medication Adherence (7d)',
+        icon: '💊',
         labels: const ['Taken', 'Missed', 'Scheduled'],
-        values: const [28, 2, 5].map((e) => e.toDouble()).toList(),
+        series: [
+          ChartSeries(label: 'Adherence', data: [taken, missed, scheduled], color: const Color(0xFF4ECDC4)),
+        ],
         stats: [
-          ReportStat(number: '95%', label: 'This Week'),
-          ReportStat(number: '2', label: 'Missed Doses'),
+          ReportStat(_percent(taken, taken + missed + scheduled), 'Success'),
+          ReportStat(missed.toString(), 'Missed'),
         ],
       ),
       ReportCardData(
-        id: '3',
+        id: 3,
         category: 'activity',
-        title: 'Daily Activities',
-        chartType: 'bar',
-        labels: const ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-        values: const [2800, 3200, 2950, 4200, 3800, 2100, 3240]
-            .map((e) => e.toDouble())
-            .toList(),
+        title: 'Daily Steps',
+        icon: '🚶',
+        labels: last7,
+        series: [ChartSeries(label: 'Steps', data: steps, color: const Color(0xFF45B7D1))],
         stats: [
-          ReportStat(number: '3240', label: 'Steps Today'),
-          ReportStat(number: '7.5', label: 'Sleep Hours'),
+          ReportStat(_avg(steps).round().toString(), 'Avg Steps'),
+          ReportStat(_lastNonZero(steps.map((e) => e.toDouble()).toList()).round().toString(), 'Today'),
         ],
       ),
       ReportCardData(
-        id: '4',
+        id: 4,
         category: 'emergency',
-        title: 'Emergency Alerts',
-        chartType: 'line',
-        labels: const ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-        values: const [0, 1, 0, 0].map((e) => e.toDouble()).toList(),
+        title: 'Alerts (Last 4w)',
+        icon: '🚨',
+        labels: _lastNWeeksLabels(4),
+        series: [
+          ChartSeries(
+            label: 'Alerts',
+            data: _alertsByWeek(notifs.docs),
+            color: const Color(0xFFF093FB),
+            filled: true,
+          ),
+        ],
         stats: [
-          ReportStat(number: '0', label: 'This Week'),
-          ReportStat(number: '1', label: 'This Month'),
+          ReportStat(_alertsThisWeek(notifs.docs).toString(), 'This Week'),
+          ReportStat(notifs.docs.length.toString(), 'Recent'),
         ],
       ),
     ];
+
+    return ReportBundle(elderly: elderly, reports: reports, alerts: alerts);
   }
 
-  // --- JS: generateAlertsData(elderlyName)
-  List<AlertItem> _generateAlertsData(String elderlyName) {
-    return [
-      AlertItem(
-        id: '1',
-        type: 'warning',
-        title: 'Medication Reminder',
-        time: '2 hours ago',
-        message: '$elderlyName missed afternoon medication.',
-      ),
-      AlertItem(
-        id: '2',
-        type: 'info',
-        title: 'Activity Update',
-        time: '5 hours ago',
-        message: '$elderlyName walked 4,200 steps today.',
-      ),
-      AlertItem(
-        id: '3',
-        type: 'info',
-        title: 'Health Check',
-        time: '1 day ago',
-        message: 'Blood pressure reading recorded for $elderlyName: 118/76 mmHg.',
-      ),
-    ];
+  // ─────────── helpers ───────────
+
+  // Align with your caregiver Account schema (new + legacy fields)
+  List<String> _extractLinkedElders(Map<String, dynamic> cg) {
+    final set = <String>{};
+
+    // current fields
+    final many = (cg['elderlyIds'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final single = (cg['elderlyId'] as String?)?.trim();
+
+    // legacy variants your codebase still references in places
+    final legacyA = (cg['linkedElderlyIds'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final legacyB = (cg['linkedElders'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final legacyC = (cg['linkedEldersUids'] as List?)?.map((e) => e.toString()).toList() ?? const [];
+    final legacySingle = (cg['uidOfElder'] as String?)?.trim();
+
+    set.addAll(many);
+    set.addAll(legacyA);
+    set.addAll(legacyB);
+    set.addAll(legacyC);
+    if (single != null && single.isNotEmpty) set.add(single);
+    if (legacySingle != null && legacySingle.isNotEmpty) set.add(legacySingle);
+
+    set.removeWhere((e) => e.isEmpty);
+    return set.toList();
   }
 
-  /// === Public API (called by your Flutter page) ===
-  ///
-  /// Mirrors: JS getElderlyReportData(currentUser)
-  /// - email: caregiver email (lowercased)
-  /// - userType: must be 'caregiver'
-  /// - elderlyId (optional): if you already know the elderly email/id
-  Future<ElderlyReportData> getElderlyReportData({
-    required String email,
-    required String userType,
-    String? elderlyId,
-  }) async {
-    if (email.isEmpty) {
-      throw Exception('No logged-in user found. Please log in again.');
+  Future<List<ElderlySummary>> _fetchEldersSummaries(List<String> elderIds) async {
+    final out = <ElderlySummary>[];
+    for (final id in elderIds) {
+      out.add(await _fetchElderSummary(id));
     }
-    if (userType != 'caregiver') {
-      throw Exception('Only caregivers can view reports');
-    }
+    return out;
+  }
 
-    try {
-      // Resolve elderlyId (email) similarly to the JS controller's logic chain
-      final resolved = await _resolveElderlyId(
-        caregiverEmailOrUid: email,
-        elderlyIdFromParam: elderlyId,
-      );
+  // READ FROM Account/{uid} and use your known name fields
+  Future<ElderlySummary> _fetchElderSummary(String elderlyUid) async {
+    final doc = await _db.collection('Account').doc(elderlyUid).get();
+    final m = doc.data() ?? {};
+    final dn = (m['displayName'] ?? '').toString().trim();
+    final first = (m['firstname'] ?? '').toString().trim();
+    final last = (m['lastname'] ?? '').toString().trim();
+    final name = dn.isNotEmpty ? dn : [first, last].where((s) => s.isNotEmpty).join(' ').trim();
 
-      if (resolved == null) {
-        // Demo fallback (no elderly linked)
-        final demoName = 'Demo Elderly';
-        return ElderlyReportData(
-          name: demoName,
-          age: 75,
-          reports: _generateReportsData(),
-          alerts: _generateAlertsData(demoName),
-        );
+    int? age;
+    final dobStr = (m['dob'] ?? '').toString(); // you store dob as 'yyyy-MM-dd'
+    if (dobStr.isNotEmpty) {
+      final dob = DateTime.tryParse(dobStr);
+      if (dob != null) {
+        final now = DateTime.now();
+        age = now.year - dob.year - ((now.month < dob.month || (now.month == dob.month && now.day < dob.day)) ? 1 : 0);
       }
-
-      final e = await _fetchElderlyDataRtdb(resolved);
-      return ElderlyReportData(
-        name: e.name,
-        age: e.age,
-        reports: _generateReportsData(),
-        alerts: _generateAlertsData(e.name),
-      );
-    } catch (err) {
-      // Same fallback behavior as JS if elderly data issues
-      final msg = err.toString();
-      if (msg.contains('Elderly data not found') || msg.contains('incomplete')) {
-        final demoName = 'Demo Elderly';
-        return ElderlyReportData(
-          name: demoName,
-          age: 75,
-          reports: _generateReportsData(),
-          alerts: _generateAlertsData(demoName),
-        );
-      }
-      rethrow;
     }
+    return ElderlySummary(uid: elderlyUid, displayName: name.isEmpty ? 'elderly' : name, age: age);
   }
 
-  /// Mirrors: JS exportReportsAsPDF()
-  /// Flutter Note: We can’t “screenshot DOM nodes”; instead we render a simple printable doc.
-  /// Replace with a custom pdf widgets layout if you want charts embedded as images.
-  Future<void> exportReportsAsPDF({required ElderlyReportData? data}) async {
-    await Printing.layoutPdf(onLayout: (format) async {
-      final html = '''
-        <style>
-          h1,h2,h3 { font-family: Arial, sans-serif; }
-          .card { border:1px solid #eee; padding:10px; border-radius:8px; margin-bottom:10px; }
-          .muted { color:#666; }
-        </style>
-        <h1 style="text-align:center">Elderly Care Reports</h1>
-        <p style="text-align:center" class="muted">
-          ${DateTime.now().toIso8601String()}
-        </p>
-        <h2>${data?.name ?? ''} (Age: ${data?.age ?? ''})</h2>
-
-        <h3>Reports</h3>
-        ${data?.reports.map((r) => '''
-          <div class="card">
-            <b>${r.title}</b> &mdash; <span class="muted">${r.category}</span>
-            <div class="muted">Labels: ${r.labels.join(', ')}</div>
-            <div class="muted">Values: ${r.values.map((v) => v.toStringAsFixed(0)).join(', ')}</div>
-            <ul>
-              ${r.stats.map((s) => '<li><b>${s.number}</b> ${s.label}</li>').join()}
-            </ul>
-          </div>
-        ''').join() ?? ''}
-
-        <h3>Recent Alerts &amp; Notifications</h3>
-        ${data?.alerts.map((a) => '''
-          <div class="card">
-            <b>[${a.type}] ${a.title}</b> &nbsp; <span class="muted">${a.time}</span>
-            <div>${a.message}</div>
-          </div>
-        ''').join() ?? ''}
-      ''';
-
-      // Convert the HTML to a PDF page
-      final bytes = await Printing.convertHtml(format: format, html: html);
-      return bytes;
-    });
-  }
+  // … (rest unchanged)
 }
+
+
+  List<String> _lastNDaysLabels(int n) {
+    final now = DateTime.now();
+    final fmt = DateFormat('EEE');
+    return List.generate(n, (i) => fmt.format(now.subtract(Duration(days: (n - 1 - i)))));
+  }
+
+  List<String> _lastNDaysKeys(int n) {
+    final now = DateTime.now();
+    final fmt = DateFormat('yyyy-MM-dd');
+    return List.generate(n, (i) => fmt.format(now.subtract(Duration(days: (n - 1 - i)))));
+  }
+
+  List<String> _lastNWeeksLabels(int n) {
+    final now = DateTime.now();
+    final fmt = DateFormat("'W'w");
+    return List.generate(n, (i) => fmt.format(now.subtract(Duration(days: 7 * (n - 1 - i)))));
+  }
+
+  List<num> _alertsByWeek(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    final now = DateTime.now();
+    final starts = List.generate(4, (i) {
+      final start = DateTime(now.year, now.month, now.day).subtract(Duration(days: 7 * (3 - i)));
+      return DateTime(start.year, start.month, start.day);
+    });
+    final counts = List.filled(4, 0);
+    for (final d in docs) {
+      final ts = (d.data()['timestamp'] as Timestamp?)?.toDate();
+      if (ts == null) continue;
+      for (var i = 0; i < 4; i++) {
+        final start = starts[i];
+        final end = start.add(const Duration(days: 7));
+        if (!ts.isBefore(start) && ts.isBefore(end)) {
+          counts[i] += 1;
+          break;
+        }
+      }
+    }
+    return counts;
+  }
+
+  int _alertsThisWeek(List<QueryDocumentSnapshot<Map<String, dynamic>>> docs) {
+    final now = DateTime.now();
+    final start = DateTime(now.year, now.month, now.day).subtract(Duration(days: now.weekday - 1));
+    final end = start.add(const Duration(days: 7));
+    var c = 0;
+    for (final d in docs) {
+      final ts = (d.data()['timestamp'] as Timestamp?)?.toDate();
+      if (ts == null) continue;
+      if (!ts.isBefore(start) && ts.isBefore(end)) c++;
+    }
+    return c;
+  }
+
+  String _relativeTime(DateTime? ts) {
+    if (ts == null) return '—';
+    final diff = DateTime.now().difference(ts);
+    if (diff.inMinutes < 1) return 'just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} h ago';
+    return '${diff.inDays} d ago';
+  }
+
+  String _bpString(List<num> sys, List<num> dia) {
+    final s = sys.isNotEmpty ? sys.last : 0;
+    final d = dia.isNotEmpty ? dia.last : 0;
+    if ((s == 0) && (d == 0)) return '—';
+    return '${s.toInt()}/${d.toInt()}';
+  }
+
+  String _percent(int a, int total) {
+    if (total <= 0) return '—';
+    return '${((a / total) * 100).round()}%';
+  }
+
+  double _lastNonZero(List<double> xs) {
+    for (var i = xs.length - 1; i >= 0; i--) {
+      if (xs[i] > 0) return xs[i];
+    }
+    return 0;
+  }
+
+  double _avg(List<num> xs) {
+    if (xs.isEmpty) return 0;
+    final s = xs.fold<num>(0, (a, b) => a + b);
+    return s / xs.length;
+  }

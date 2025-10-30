@@ -31,12 +31,12 @@ class _HealthUploadPageState extends State<HealthUploadPage> {
   }
 
   Future<void> _pickFiles() async {
-    final result = await FilePicker.platform.pickFiles(
-      allowMultiple: true,
-      withData: false,
-      type: FileType.custom,
-      allowedExtensions: ['pdf', 'jpg', 'jpeg', 'png'],
-    );
+   final result = await FilePicker.platform.pickFiles(
+  allowMultiple: true,
+  type: FileType.custom,
+  allowedExtensions: ['pdf','jpg','jpeg','png'],
+  withReadStream: true, // more memory-friendly for large files (desktop)
+);
     if (result == null) return;
 
     final pickedPaths = result.paths.whereType<String>().toList();

@@ -1,4 +1,3 @@
-// lib/medical/health_records_page.dart
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -12,15 +11,15 @@ class HealthRecordsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isCaregiver = userProfile.role == 'caregiver';
-    final elderlyUid = isCaregiver && (userProfile.uidOfElder ?? '').isNotEmpty
-        ? userProfile.uidOfElder!
+    final isCaregiver = userProfile.userType == 'caregiver';
+    final elderlyUid = isCaregiver && (userProfile.elderlyId ?? '').isNotEmpty
+        ? userProfile.elderlyId!
         : userProfile.uid;
 
     final controller = HealthRecordsController(
       elderlyUid: elderlyUid,
       currentUserUid: userProfile.uid,
-      currentUserName: userProfile.displayName,
+      currentUserName: userProfile.safeDisplayName,
     );
 
     return ChangeNotifierProvider.value(

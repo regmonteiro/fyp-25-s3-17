@@ -283,8 +283,11 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
         });
       } else {
         // initialize
+        final uid = _auth.currentUser!.uid;
         _points = PointsData(totalResources: _allResources.length);
         await _accountRef!.set({
+          'ownerUid': uid,                        // ← NEW (enables secure rules)
+          'email': _auth.currentUser?.email ?? '',
           'pointsData': _points.toMap(),
           'lastUpdated': DateTime.now().toIso8601String(),
         });
@@ -509,9 +512,13 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
   // -------- Actions --------
 
   Future<void> _openResource(LearningResource r) async {
-    if (r.url == null || r.url!.isEmpty) return;
-    await _startTracking(r);
-    await launchUrl(Uri.parse(r.url!), mode: LaunchMode.externalApplication);
+    final raw = r.url!;
+      final uri = Uri.tryParse(raw);
+      if (uri == null) return;
+      final fixed = uri.hasScheme ? uri : Uri.parse('https://$raw');
+      await _startTracking(r);
+      final ok = await launchUrl(fixed, mode: LaunchMode.externalApplication);
+if (!ok) _snack('Could not open: ${fixed.toString()}');
 
     _ctrl.selectResource(r.id);  // highlight in grid
     setState(() {});             // repaint
@@ -624,8 +631,9 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
 
     final current = _points.currentPoints;
     final redeemable = current >= 50;
-    final pointsToNext = 50 - (current % 50);
-    final progress = (((current % 50) / 50.0).clamp(0.0, 1.0)).toDouble();
+    final remainder = current % 50;
+    final pointsToNext = redeemable && remainder == 0 ? 0 : (50 - remainder);
+    final progress = (remainder / 50.0).clamp(0.0, 1.0);
     final voucherValue = (current ~/ 50) * 5;
 
     return Container(

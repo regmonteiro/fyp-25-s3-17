@@ -1,52 +1,79 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+// lib/caregiver/controller/caregiver_dashboard_controller.dart
+import 'package:flutter/foundation.dart';
 
-class CaregiverDashboardController {
-  final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+/// Controls high-level UI state for the caregiver dashboard:
+/// - current bottom-tab index
+/// - the selected elder UID (so Create Events can target it)
+///
+/// Keep data/Firestore logic in CaregiverHomeController (Home tab),
+/// not here.
+class CaregiverDashboardController with ChangeNotifier {
+  // ---- State ----
+  int _index = 0;
+  String? _selectedElderId;
 
-  // Stream to get all alerts for a specific elderly user
-  Stream<QuerySnapshot> getAlertsStream(String elderlyId) {
-    return _firestore
-        .collection('alerts')
-        .where('elderlyId', isEqualTo: elderlyId)
-        .orderBy('ts', descending: true)
-        .snapshots();
+  // ---- Getters ----
+  int get index => _index;
+  String? get selectedElderId => _selectedElderId;
+
+  /// Optional: Titles to mirror your tabs (keep in sync with the page).
+  /// This lets you read a title here if you prefer (not required by your page).
+  static const List<String> tabTitles = <String>[
+    'Home',
+    'Create Events',
+    'AI Assistant',
+    'Reports',
+    'Account',
+  ];
+
+  String get currentTitle =>
+      (index >= 0 && index < tabTitles.length) ? tabTitles[index] : 'Dashboard';
+
+  /// Whether the FAB on the Create Events tab should show.
+  bool get isFabVisible => _index == 1 && _selectedElderId != null;
+
+  // ---- Mutators ----
+  void setIndex(int i) {
+    if (i == _index) return;
+    _index = i;
+    notifyListeners();
   }
 
-  // Stream to get tasks for a specific elderly user, filtered by a date range
-  Stream<QuerySnapshot> getTasksStream(String elderlyId, DateTime startDate, DateTime endDate) {
-    return _firestore
-        .collection('tasks')
-        .where('elderlyId', isEqualTo: elderlyId)
-        .where('dueAt', isGreaterThanOrEqualTo: startDate)
-        .where('dueAt', isLessThanOrEqualTo: endDate)
-        .snapshots();
+  /// Called by Home tab when user taps a linked elder.
+  /// Also jumps to the Create Events tab (to match your page behavior).
+  void selectElder(String elderUid) {
+    _selectedElderId = elderUid;
+    _index = 1; // jump to "Create Events"
+    notifyListeners();
   }
 
-  // Stream to get medication logs for a specific elderly user
-  Stream<QuerySnapshot> getMedLogsStream(String elderlyId) {
-    return _firestore
-        .collection('med_logs')
-        .where('elderlyId', isEqualTo: elderlyId)
-        .orderBy('ts', descending: true)
-        .snapshots();
+  /// Clear the selected elder (e.g., user navigates away or chooses none).
+  void clearSelectedElder() {
+    if (_selectedElderId == null) return;
+    _selectedElderId = null;
+    notifyListeners();
   }
 
-  // Stream to get the next upcoming appointment
-  Stream<QuerySnapshot> getNextAppointmentStream(String elderlyId) {
-    return _firestore
-        .collection('appointments')
-        .where('elderlyId', isEqualTo: elderlyId)
-        .where('start', isGreaterThanOrEqualTo: DateTime.now())
-        .orderBy('start')
-        .limit(1)
-        .snapshots();
+  /// Convenience: programmatically open Create Events (keep elder if set).
+  void goToCreateEvents({String? elderUid}) {
+    if (elderUid != null) {
+      _selectedElderId = elderUid;
+    }
+    _index = 1;
+    notifyListeners();
   }
 
-  // Method to acknowledge an alert
-  Future<void> acknowledgeAlert(String alertId, String caregiverId) async {
-    await _firestore.collection('alerts').doc(alertId).update({
-      'ack.by': caregiverId,
-      'ack.ts': FieldValue.serverTimestamp(),
-    });
+  /// Convenience: programmatically go home.
+  void goHome() {
+    if (_index == 0) return;
+    _index = 0;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    // No streams here. Just call super.
+    super.dispose();
   }
 }
+

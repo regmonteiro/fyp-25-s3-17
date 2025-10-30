@@ -1,39 +1,43 @@
-// lib/models/chat_message.dart
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ChatMessage {
-  final String id;
-  final String text;
-  final String senderUid;
-  final String receiverUid;
-  final DateTime sentAt;
+  final String id;         // Firestore doc id of the message item
+  final String senderUid;  // who sent it
+  final String text;       // message body
+  final DateTime? ts;      // server timestamp (nullable while pending)
 
   ChatMessage({
     required this.id,
-    required this.text,
     required this.senderUid,
-    required this.receiverUid,
-    required this.sentAt,
+    required this.text,
+    required this.ts,
   });
 
+  /// Build from Firestore doc
   factory ChatMessage.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data() ?? {};
-    final ts = d['sentAt'];
+    final data = doc.data() ?? const {};
     return ChatMessage(
       id: doc.id,
-      text: (d['text'] as String?) ?? '',
-      senderUid: (d['senderUid'] as String?) ?? '',
-      receiverUid: (d['receiverUid'] as String?) ?? '',
-      sentAt: ts is Timestamp ? ts.toDate() : DateTime.fromMillisecondsSinceEpoch(0),
+      senderUid: (data['senderUid'] as String?) ?? '',
+      text: (data['text'] as String?) ?? '',
+      ts: (data['ts'] as Timestamp?)?.toDate(),
     );
   }
 
-  Map<String, dynamic> toMap() {
-    return {
-      'text': text,
-      'senderUid': senderUid,
-      'receiverUid': receiverUid,
-      'sentAt': FieldValue.serverTimestamp(),
-    };
+  /// Build from raw map (if you ever need it)
+  factory ChatMessage.fromMap(String id, Map<String, dynamic> data) {
+    return ChatMessage(
+      id: id,
+      senderUid: (data['senderUid'] as String?) ?? '',
+      text: (data['text'] as String?) ?? '',
+      ts: (data['ts'] is Timestamp) ? (data['ts'] as Timestamp).toDate() : null,
+    );
   }
+
+  Map<String, dynamic> toMap() => {
+        'senderUid': senderUid,
+        'text': text,
+        'ts': ts,
+      };
 }
+

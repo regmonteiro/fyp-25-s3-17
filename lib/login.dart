@@ -44,7 +44,7 @@ class _LoginPageState extends State<LoginPage> {
 
 
       Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const MainWrapper()),
+        MaterialPageRoute(builder: (_) => const MainWrapper(userProfile: null)),
         (route) => false,
       );
     } on FirebaseAuthException catch (e) {

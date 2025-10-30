@@ -69,7 +69,7 @@ class PaymentMethodsController extends ChangeNotifier {
   /// Read saved cards from /users/{uid}/cards
   Stream<List<SavedCard>> cardsFor(String uid) {
     return _db
-        .collection('users')
+        .collection('Account')               // ← was 'users'
         .doc(uid)
         .collection('cards')
         .orderBy('addedAt', descending: true)
@@ -92,18 +92,22 @@ class PaymentMethodsController extends ChangeNotifier {
   Future<void> saveCard({
     required String forUid,
     required String brand,
-    required String number16, // plain for demo; in real world, tokenize!
+    required String number16,
     required String holder,
     required String expiryMMYY,
   }) async {
     final masked = "**** **** **** ${number16.substring(number16.length - 4)}";
-    await _db.collection('users').doc(forUid).collection('cards').add({
-      'brand': brand,
-      'masked': masked,
-      'expiry': expiryMMYY,
-      'holder': holder,
-      'last4': number16.substring(number16.length - 4),
-      'addedAt': FieldValue.serverTimestamp(),
-    });
+    await _db
+        .collection('Account')               // ← was 'users'
+        .doc(forUid)
+        .collection('cards')
+        .add({
+          'brand': brand,
+          'masked': masked,
+          'expiry': expiryMMYY,
+          'holder': holder,
+          'last4': number16.substring(number16.length - 4),
+          'addedAt': FieldValue.serverTimestamp(),
+        });
   }
 }

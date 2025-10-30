@@ -1,4 +1,3 @@
-
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../models/user_profile.dart';
@@ -84,7 +83,6 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
       return;
     }
 
-    // Optional: confirm
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -101,9 +99,10 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
     );
     if (ok != true) return;
 
+    // ✅ Align with controller’s signature (elderlyId)
     final res = await _ctrl.bookFutureGpCall(
-      uidOfElder: widget.userProfile.uid,
-      elderlyName: widget.userProfile.displayName,
+      elderlyId: widget.userProfile.uid,
+      elderlyName: widget.userProfile.safeDisplayName,
       start: start,
       duration: _duration,
       reason: _reasonCtrl.text.trim(),
@@ -112,18 +111,15 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
 
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(res.message),
-        backgroundColor: res.ok ? Colors.green : Colors.red,
-      ),
+      SnackBar(content: Text(res.message), backgroundColor: res.ok ? Colors.green : Colors.red),
     );
 
-    if (res.ok) Navigator.pop(context); // back to previous (e.g., GP page or Home)
+    if (res.ok) Navigator.pop(context);
   }
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.userProfile.displayName;
+    final name = widget.userProfile.safeDisplayName;
 
     return Scaffold(
       appBar: AppBar(
@@ -135,7 +131,6 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
         child: Form(
           key: _formKey,
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            // Header
             Card(
               elevation: 3,
               color: Colors.teal.shade50,
@@ -154,7 +149,6 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
             ),
             const SizedBox(height: 20),
 
-            // Date & time
             Row(children: [
               Expanded(
                 child: _pickTile(
@@ -176,7 +170,6 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
             ]),
             const SizedBox(height: 10),
 
-            // Duration
             Row(
               children: [
                 const Text('Duration:'),
@@ -194,37 +187,35 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
             ),
             const SizedBox(height: 16),
 
-            // Reason + quick chips
             const Text('Reasons for appointment', style: TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                StreamBuilder<List<String>>(
-                  stream: _ctrl.quickReasonsStream(),
-                  builder: (_, snap) {
-                    final list = (snap.data == null || snap.data!.isEmpty) ? _fallbackReasons : snap.data!;
-                    return Wrap(
-                      spacing: 8,
-                      runSpacing: -6,
-                      children: list.map((reason) {
-                        final isSelected = _selectedReasons.contains(reason);
-                        return FilterChip(
-                          label: Text(reason),
-                          selected: isSelected,
-                          onSelected: (selected) {
-                            setState(() {
-                              if (selected) {
-                                _selectedReasons.add(reason);
-                              } else {
-                                _selectedReasons.remove(reason);
-                              }
-                              // Update text field with comma-separated reasons
-                              _reasonCtrl.text = _selectedReasons.join(', ');
-                            });
-                          },
-                        );
-                      }).toList(),
+            const SizedBox(height: 6),
+            StreamBuilder<List<String>>(
+              stream: _ctrl.quickReasonsStream(),
+              builder: (_, snap) {
+                final list = (snap.data == null || snap.data!.isEmpty) ? _fallbackReasons : snap.data!;
+                return Wrap(
+                  spacing: 8,
+                  runSpacing: -6,
+                  children: list.map((reason) {
+                    final isSelected = _selectedReasons.contains(reason);
+                    return FilterChip(
+                      label: Text(reason),
+                      selected: isSelected,
+                      onSelected: (selected) {
+                        setState(() {
+                          if (selected) {
+                            _selectedReasons.add(reason);
+                          } else {
+                            _selectedReasons.remove(reason);
+                          }
+                          _reasonCtrl.text = _selectedReasons.join(', ');
+                        });
+                      },
                     );
-                  },
-                ),
+                  }).toList(),
+                );
+              },
+            ),
 
             const SizedBox(height: 8),
             TextFormField(
@@ -238,7 +229,7 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
             ),
             const SizedBox(height: 16),
 
-            // Invite caregiver toggle (if there is a linked caregiver)
+            // ✅ Works with Account/{elderlyId}
             FutureBuilder<Map<String, String>?>(
               future: _ctrl.fetchPrimaryCaregiver(widget.userProfile.uid),
               builder: (_, careSnap) {

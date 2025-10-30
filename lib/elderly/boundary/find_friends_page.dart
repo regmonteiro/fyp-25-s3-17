@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../controller/community_controller.dart';
+import '../../features/controller/community_controller.dart';
 import '../../models/user_profile.dart';
 
 class FindFriendsPage extends StatefulWidget {
-  const FindFriendsPage({super.key});
+  final UserProfile userProfile;
+  const FindFriendsPage({
+    Key? key,
+    required this.userProfile,
+  }) : super(key: key);
 
   @override
   _FindFriendsPageState createState() => _FindFriendsPageState();
@@ -76,7 +80,7 @@ class _FindFriendsPageState extends State<FindFriendsPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Find Connections'),
+        title: Text('Find friends for ${widget.userProfile.safeDisplayName}'),
         backgroundColor: Colors.blueAccent,
       ),
       body: Column(
@@ -106,21 +110,39 @@ class _FindFriendsPageState extends State<FindFriendsPage> {
                 itemCount: _searchResults.length,
                 itemBuilder: (context, index) {
                   final userProfile = _searchResults[index];
-                  final displayName = userProfile.displayName;
 
                   return ListTile(
                     leading: CircleAvatar(
                       backgroundColor: Colors.blue.shade100,
                       child: Text(
-                        displayName.isNotEmpty ? displayName[0].toUpperCase() : '?',
-                        style: const TextStyle(color: Colors.blueAccent, fontWeight: FontWeight.bold),
+                        // derive a safe non-null name once
+                        (() {
+                          final name = (userProfile.displayName?.trim().isNotEmpty ?? false)
+                              ? userProfile.displayName!.trim()
+                              : userProfile.safeDisplayName; // or fallback 'User'
+                          final initial = name.isNotEmpty ? name[0].toUpperCase() : '?';
+                          return initial;
+                        })(),
+                        style: const TextStyle(
+                          color: Colors.blueAccent,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                    title: Text(displayName),
-                    subtitle: Text(userProfile.role ?? 'User'),
+                    title: Text(
+                      (userProfile.displayName?.trim().isNotEmpty ?? false)
+                          ? userProfile.displayName!.trim()
+                          : userProfile.safeDisplayName, // <- non-null String
+                    ),
+                    subtitle: Text(userProfile.userType ?? 'user'),
                     trailing: IconButton(
                       icon: const Icon(Icons.link, color: Colors.green),
-                      onPressed: () => _linkFriend(context, userProfile.uid, displayName),
+                      onPressed: () {
+                        final name = (userProfile.displayName?.trim().isNotEmpty ?? false)
+                            ? userProfile.displayName!.trim()
+                            : userProfile.safeDisplayName;
+                        _linkFriend(context, userProfile.uid, name); // <- pass non-null String
+                      },
                     ),
                   );
                 },

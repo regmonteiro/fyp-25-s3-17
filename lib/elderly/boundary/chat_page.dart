@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
-import '../controller/community_controller.dart';
+import '../../features/controller/community_controller.dart';
 
 class ChatPage extends StatefulWidget {
   final String friendUid;

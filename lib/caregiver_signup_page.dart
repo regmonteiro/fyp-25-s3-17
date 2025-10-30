@@ -1,4 +1,3 @@
-// You will need a similar file for caregiver_signup_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -23,7 +22,7 @@ class _CaregiverSignUpPageState extends State<CaregiverSignUpPage> {
         _isLoading = true;
       });
 
-      final elderlyUserId = FirebaseAuth.instance.currentUser!.uid;
+      final elderlyId = FirebaseAuth.instance.currentUser!.uid;
 
       try {
         // 1. Create the new caregiver user with Firebase Auth
@@ -38,17 +37,17 @@ class _CaregiverSignUpPageState extends State<CaregiverSignUpPage> {
         }
 
         // 2. Create a user profile in Firestore
-        await FirebaseFirestore.instance.collection('users').doc(newCaregiverUser.uid).set({
+        await FirebaseFirestore.instance.collection('Account').doc(newCaregiverUser.uid).set({
           'uid': newCaregiverUser.uid,
           'displayName': _nameController.text.trim(),
           'email': newCaregiverUser.email,
           'userType': 'caregiver',
-          'linkedElders': [elderlyUserId], // Automatically link the elderly user
+          'linkedElders': [elderlyId], // Automatically link the elderly user
           'createdAt': FieldValue.serverTimestamp(),
         });
 
         // 3. Link the new caregiver to the elderly user
-        await FirebaseFirestore.instance.collection('users').doc(elderlyUserId).update({
+        await FirebaseFirestore.instance.collection('Account').doc(elderlyId).update({
           'linkedCaregivers': FieldValue.arrayUnion([newCaregiverUser.uid]),
         });
 

@@ -7,14 +7,14 @@ class PaymentConfirmationPage extends StatefulWidget {
   final double totalAmount;
   final List<Map<String, dynamic>> cartItems;
   final UserProfile userProfile;
-  final String? elderlyUidOverride;
+  final String? elderlyIdOverride;
 
   const PaymentConfirmationPage({
     Key? key,
     required this.totalAmount,
     required this.cartItems,
     required this.userProfile,
-    this.elderlyUidOverride,
+    this.elderlyIdOverride,
   }) : super(key: key);
 
   @override
@@ -25,13 +25,13 @@ class _PaymentConfirmationPageState extends State<PaymentConfirmationPage> {
   String _selectedPaymentMethod = 'Credit/Debit Card';
   bool _isProcessing = false;
 
-  String get _elderlyUid {
-    if (widget.elderlyUidOverride != null && widget.elderlyUidOverride!.isNotEmpty) {
-      return widget.elderlyUidOverride!;
+  String get _elderlyId {
+    if (widget.elderlyIdOverride != null && widget.elderlyIdOverride!.isNotEmpty) {
+      return widget.elderlyIdOverride!;
     }
-    final isCaregiver = widget.userProfile.role == 'caregiver';
-    if (isCaregiver && (widget.userProfile.uidOfElder?.isNotEmpty ?? false)) {
-      return widget.userProfile.uidOfElder!;
+    final isCaregiver = widget.userProfile.userType == 'caregiver';
+    if (isCaregiver && (widget.userProfile.elderlyId?.isNotEmpty ?? false)) {
+      return widget.userProfile.elderlyId!;
     }
     return widget.userProfile.uid;
   }
@@ -66,7 +66,7 @@ class _PaymentConfirmationPageState extends State<PaymentConfirmationPage> {
       final orderData = {
         'purchaserUid': widget.userProfile.uid,
         'purchaserName': widget.userProfile.displayName,
-        'elderlyUid': _elderlyUid,
+        'elderlyId': _elderlyId,
         'orderType': 'OTC',
         'items': items,
         'totalAmount': orderTotal,

@@ -218,7 +218,7 @@ class _EventsPageState extends State<EventsPage> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.delete, color: Colors.red),
-                      onPressed: () => _controller.deleteAppointment(elderlyUserId: userId, appointmentId: appointment.id),
+                      onPressed: () => _controller.deleteAppointment(uid: userId, appointmentId: appointment.id),
                     ),
                   ],
                 ),
@@ -289,7 +289,7 @@ class _EventsPageState extends State<EventsPage> {
                     ),
                     IconButton(
                       icon: const Icon(Icons.delete, color: Colors.red),
-                      onPressed: () => _controller.deleteAppointment(elderlyUserId: userId, appointmentId: appointment.id),
+                      onPressed: () => _controller.deleteAppointment(uid: userId, appointmentId: appointment.id),
                     ),
                   ],
                 ),
@@ -448,7 +448,7 @@ class _EventsPageState extends State<EventsPage> {
                         selectedTime!.minute,
                       );
                       await _controller.createAppointment(
-                        elderlyUserId: userId,
+                        uid: userId,
                         title: titleController.text,
                         description: descriptionController.text,
                         dateTime: finalDateTime,
@@ -576,7 +576,7 @@ class _EventsPageState extends State<EventsPage> {
                         selectedTime!.minute,
                       );
                       await _controller.updateAppointment(
-                        elderlyUserId: userId,
+                        uid: userId,
                         appointmentId: appointmentId,
                         title: titleController.text,
                         description: descriptionController.text,

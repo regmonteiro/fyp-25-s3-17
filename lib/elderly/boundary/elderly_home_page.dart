@@ -3,38 +3,85 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import '../controller/elderly_home_controller.dart' as ehc;
 import '../../models/user_profile.dart';
-import 'community_page.dart';
-import 'communicate_page.dart';
+import '../../features/communicate_page.dart';
 import '../../medical/gp_consultation_page.dart';
 import '../../medical/appointment_booking_page.dart';
 import '../../medical/consultation_history_page.dart' as ch;
 import '../../medical/health_records_page.dart' as hr;
 import '../../medical/medication_shop_page.dart' as shop;
 import '../../financial/wallet_page.dart';
-import 'link_caregiver_page.dart';
 import 'account/caregiver_access_page.dart';
 import '../../medical/controller/cart_controller.dart';
 import 'package:provider/provider.dart';
-import '../controller/community_controller.dart';
-import 'create_post_page.dart';
-import 'post.dart';
+import 'events_page.dart';
+import '../../features/share_experience_page.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-List<Map<String, dynamic>> normalizeCaregivers(Object? raw) {
-  final list = (raw as List?) ?? const [];
-  return list.map<Map<String, dynamic>>((e) {
-    if (e is String) {
-      return {'uid': e, 'displayName': null, 'role': 'caregiver'};
-    } else if (e is Map) {
-      final m = Map<String, dynamic>.from(e);
-      return {
-        'uid': (m['uid'] as String?) ?? '',
-        'displayName': m['displayName'],
-        'role': (m['role'] as String?) ?? 'caregiver',
-      };
-    } else {
-      return {'uid': '', 'displayName': null, 'role': 'caregiver'};
-    }
-  }).where((m) => (m['uid'] as String).isNotEmpty).toList();
+/// -------- Caregiver lookup for an elder (UID == elderlyId)
+Stream<List<Map<String, dynamic>>> caregiversForElder$(String elderlyId) {
+  final q = FirebaseFirestore.instance
+      .collection('Account')
+      .where('elderlyIds', arrayContains: elderlyId);
+
+  return q.snapshots().map((qs) => qs.docs.map((d) {
+        final m = d.data();
+        final first = (m['firstName'] ?? m['firstname'] ?? '').toString().trim();
+        final last  = (m['lastName']  ?? m['lastname']  ?? '').toString().trim();
+        final safe  = (m['safeDisplayName'] ?? m['displayName'] ?? '').toString().trim();
+        final name  = safe.isNotEmpty ? safe : [first, last].where((x) => x.isNotEmpty).join(' ').trim();
+
+        return {
+          'uid': d.id,
+          'name': name.isEmpty ? 'caregiver' : name,
+          'email': (m['email'] ?? '').toString(),
+          'phone': (m['phoneNum'] ?? m['caregiverPhone'] ?? '').toString(),
+          'photoUrl': (m['photoURL'] ?? m['photoUrl'] ?? '').toString(),
+          'userType': (m['userType'] ?? '').toString(),
+        };
+      }).toList());
+}
+
+/// Allowed kinds of "OK" pings.
+const _okPingKinds = {'are_you_ok', 'im_ok', 'need_help'};
+
+/// Create a status ping in /notifications and return the new doc ID.
+Future<String> _sendStatusPing({
+  required String fromUid,
+  required String toUid,
+  required String kind, // 'are_you_ok' | 'im_ok' | 'need_help'
+  String? message,
+  String? elderlyId,
+  String? caregiverId,
+  String? fromName,
+  String? toName,
+}) async {
+  if (!_okPingKinds.contains(kind)) {
+    throw ArgumentError.value(kind, 'kind', 'Unsupported status kind');
+  }
+
+  final now = FieldValue.serverTimestamp();
+
+  final docRef = await FirebaseFirestore.instance.collection('notifications').add({
+    'toUid': toUid,
+    'fromUid': fromUid,
+    'participants': [fromUid, toUid],
+    'type': 'ok_ping',
+    'kind': kind,
+    'schema': 1,
+    'title': kind == 'are_you_ok' ? 'Are you OK?' : (kind == 'im_ok' ? 'I am OK' : 'I need help'),
+    'message': (message ?? '').trim(),
+    'priority': kind == 'need_help' ? 'high' : 'low',
+    if (elderlyId != null) 'elderlyId': elderlyId,
+    if (caregiverId != null) 'caregiverId': caregiverId,
+    if (fromName != null && fromName.isNotEmpty) 'fromName': fromName,
+    if (toName != null && toName.isNotEmpty) 'toName': toName,
+    'createdAt': now,
+    'timestamp': now,
+    'read': false,
+    'readAt': null,
+  });
+
+  return docRef.id;
 }
 
 class ElderlyHomePage extends StatefulWidget {
@@ -53,13 +100,33 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
   final GlobalKey _announcementsKey = GlobalKey();
   final GlobalKey _eventsKey = GlobalKey();
   final GlobalKey _recommendationsKey = GlobalKey();
-  final GlobalKey _communityKey = GlobalKey(); // Key now points to the feed section
+  final GlobalKey _shareExperienceKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
-    _homeController = ehc.ElderlyHomeController(elderlyUid: widget.userProfile.uid);
-  }
+    _homeController = ehc.ElderlyHomeController(uid: widget.userProfile.uid);
+
+    final elderlyId = widget.userProfile.uid;
+  FirebaseFirestore.instance
+      .collection('Account')
+      .where('elderlyIds', arrayContains: elderlyId)
+      .get()
+      .then((qs) {
+        debugPrint('DEBUG: caregivers found for $elderlyId = ${qs.docs.length}');
+        for (final d in qs.docs) {
+          debugPrint('CG: ${d.id} → ${d.data()}');
+        }
+      })
+      .catchError((e) {
+        debugPrint('DEBUG: error fetching caregivers: $e');
+      });
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+    _homeController.debugLogCaregiversForCurrentUser();
+  });
+}
+
 
   @override
   void dispose() {
@@ -78,12 +145,6 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     }
   }
 
-  void _updateStatus() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Status updated. Notifying Caregiver...')),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -99,9 +160,12 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                 children: [
                   _buildHeader(context),
                   const SizedBox(height: 16),
-                  _buildCaregiverContact(context),
+                  _buildCaregiverContactRow(context),
                   const SizedBox(height: 24),
                   _buildCaregiverInfoCard(context),
+                  const SizedBox(height: 16),
+                  _buildSectionTitle(context, "My Caregivers", GlobalKey(), showSeeAll: false),
+                  _buildCaregiverContactList(context),
                   const SizedBox(height: 24),
 
                   _buildQuickActions(context),
@@ -119,11 +183,10 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                   _buildLearningRecommendationsSection(),
                   const SizedBox(height: 24),
 
-                  // Community Button to go to the full community page
                   _buildCommunityButton(context),
                   const SizedBox(height: 32),
 
-                  _buildSectionTitle(context, "Community Feed", _communityKey, showSeeAll: true),
+                  _buildSectionTitle(context, "Community Feed", _shareExperienceKey, showSeeAll: true),
                   _buildCommunityFeedSection(context),
                   const SizedBox(height: 32),
 
@@ -143,108 +206,160 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 
-Widget _buildCaregiverInfoCard(BuildContext context) {
-  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-    stream: FirebaseFirestore.instance
-        .collection('users')
-        .doc(widget.userProfile.uid)
-        .snapshots(),
-    builder: (context, snapshot) {
-      String caregiverNames = 'No Caregiver Linked';
-      bool isLinked = false;
+  /// ---------------- Top identity card (Elder + caregivers summary)
+  Widget _buildCaregiverInfoCard(BuildContext context) {
+    final elderlyId = widget.userProfile.uid;
 
-      if (snapshot.hasData && snapshot.data!.exists) {
-        final data = snapshot.data!.data() ?? {};
-        final caregivers = normalizeCaregivers(data['linkedCaregivers']);
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: caregiversForElder$(elderlyId),
+      builder: (context, snap) {
+        final caregivers = snap.data ?? const [];
+        final isLinked = caregivers.isNotEmpty;
 
-        if (caregivers.isNotEmpty) {
-          final caregiverNamesList = caregivers.map((cg) {
-            final role = (cg['role'] as String?) ?? 'caregiver';
-            final nameOrUid = (cg['displayName'] as String?)?.trim();
-            final label = (nameOrUid != null && nameOrUid.isNotEmpty)
-                ? nameOrUid
-                : (cg['uid'] as String).substring(0, 8) + '…';
-            // Show “Primary/Secondary” nicely if you use that, else just role
-            return (role.toLowerCase() == 'primary')
-                ? 'Primary: $label'
-                : (role.toLowerCase() == 'secondary')
-                    ? 'Secondary: $label'
-                    : 'Caregiver: $label';
-          }).toList();
+        final label = isLinked
+            ? caregivers.map((c) => c['name'] as String).join(', ')
+            : 'No Caregiver Linked';
 
-          caregiverNames = caregiverNamesList.join(', ');
-          isLinked = true;
-        }
-      }
+        return _elderSummaryCard(
+          context,
+          name: widget.userProfile.safeDisplayName,
+          id: elderlyId,
+          caregiverSummary: label,
+          isLinked: isLinked,
+          onTap: () {
+            Navigator.push(context, MaterialPageRoute(builder: (_) => const CaregiverAccessPage()));
+          },
+        );
+      },
+    );
+  }
 
-      return _buildElderlyInfoCard(
-        context,
-        name: widget.userProfile.displayName,
-        id: widget.userProfile.uid,
-        caregiver: caregiverNames,
-        isLinked: isLinked,
-      );
-    },
-  );
-}
-
-
-Widget _buildElderlyInfoCard(
-  BuildContext context, {
-  required String name,
-  required String id,
-  required String caregiver,
-  required bool isLinked,
-  VoidCallback? onPressed,
-  String? buttonText,
-}) {
-  return GestureDetector(
-    onTap: () {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => CaregiverAccessPage()));
-    },
-    child: Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF6A1B9A), Color(0xFF42A5F5)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('ID: ${id.substring(0, 8)}...', style: const TextStyle(color: Colors.white70)),
-              const SizedBox(height: 8),
-              Text(name, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
-              const SizedBox(height: 4),
-              Text('Caregiver: $caregiver', style: const TextStyle(color: Colors.white, fontSize: 16)),
-            ]),
+  Widget _elderSummaryCard(
+    BuildContext context, {
+    required String name,
+    required String id,
+    required String caregiverSummary,
+    required bool isLinked,
+    VoidCallback? onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF6A1B9A), Color(0xFF42A5F5)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
-          isLinked
-              ? const Icon(Icons.favorite, color: Colors.white, size: 40)
-              : ElevatedButton.icon(
-                  onPressed: onPressed,
-                  icon: const Icon(Icons.person_add, size: 18),
-                  label: Text(buttonText ?? 'Link Caregiver'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white,
-                    foregroundColor: Theme.of(context).primaryColor,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                  ),
-                ),
-          const SizedBox(width: 10),
-          const Icon(Icons.arrow_forward_ios, color: Colors.white),
-        ],
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 10, offset: Offset(0, 5))],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text('ID: ${id.substring(0, 8)}…', style: const TextStyle(color: Colors.white70)),
+                const SizedBox(height: 8),
+                Text(name,
+                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                const SizedBox(height: 4),
+                Text('Caregiver: $caregiverSummary', style: const TextStyle(color: Colors.white, fontSize: 16)),
+              ]),
+            ),
+            isLinked
+                ? const Icon(Icons.favorite, color: Colors.white, size: 40)
+                : const Icon(Icons.people_outline, color: Colors.white, size: 40),
+            const SizedBox(width: 10),
+            const Icon(Icons.arrow_forward_ios, color: Colors.white),
+          ],
+        ),
       ),
-    ),
-  );
-}
+    );
+  }
 
+  /// ---------------- “My Caregivers” list
+  Widget _buildCaregiverContactList(BuildContext context) {
+    final elderlyId = widget.userProfile.uid;
+
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: caregiversForElder$(elderlyId),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Center(child: LinearProgressIndicator());
+        }
+        final caregivers = snap.data ?? const [];
+        if (caregivers.isEmpty) {
+          return const Card(
+            child: ListTile(
+              leading: Icon(Icons.people_outline),
+              title: Text('No caregivers linked yet.'),
+              subtitle: Text('Ask your caregiver to link you from their app.'),
+            ),
+          );
+        }
+
+        return Column(
+          children: caregivers.map((cg) {
+            final uid = cg['uid'] as String;
+            final name = cg['name'] as String;
+            final email = (cg['email'] as String?) ?? '';
+            final phone = (cg['phone'] as String?) ?? '';
+
+            return Card(
+              child: ListTile(
+                leading: const CircleAvatar(child: Icon(Icons.person)),
+                title: Text(name),
+                subtitle: Text([email, phone].where((s) => s.isNotEmpty).join(' · ')),
+                trailing: Wrap(
+                  spacing: 8,
+                  children: [
+                    IconButton(
+                      tooltip: 'Chat / Call',
+                      icon: const Icon(Icons.chat_bubble_outline),
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => CommunicatePage(userProfile: widget.userProfile, partnerUid: uid),
+                          ),
+                        );
+                      },
+                    ),
+                    IconButton(
+                      tooltip: 'Call',
+                      icon: const Icon(Icons.call),
+                      onPressed: () async {
+                        final tel = phone.trim();
+                        if (tel.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('No phone on file.')),
+                          );
+                          return;
+                        }
+                        final uri = Uri(scheme: 'tel', path: tel);
+                        if (!await canLaunchUrl(uri)) {
+                          // ignore: use_build_context_synchronously
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('This device cannot place calls.')),
+                          );
+                          return;
+                        }
+                        await launchUrl(uri);
+                      },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  /// ---------------- Left rail
   Widget _buildQuickNavigation() {
     return Container(
       width: 60,
@@ -255,7 +370,7 @@ Widget _buildElderlyInfoCard(
           _buildNavLink(Icons.campaign, 'Announce', () => _scrollToSection(_announcementsKey)),
           _buildNavLink(Icons.calendar_today, 'Events', () => _scrollToSection(_eventsKey)),
           _buildNavLink(Icons.lightbulb_outline, 'Learn', () => _scrollToSection(_recommendationsKey)),
-          _buildNavLink(Icons.people_outline, 'Community', () => _scrollToSection(_communityKey)),
+          _buildNavLink(Icons.people_outline, 'Share Experience', () => _scrollToSection(_shareExperienceKey)),
         ],
       ),
     );
@@ -277,13 +392,84 @@ Widget _buildElderlyInfoCard(
     );
   }
 
-  Widget _buildCaregiverContact(BuildContext context) {
+  /// ---------------- Header + quick actions
+  Widget _buildCaregiverContactRow(BuildContext context) {
+    Future<void> _showElderlyStatusSheet() async {
+      final choice = await showModalBottomSheet<String>(
+        context: context,
+        showDragHandle: true,
+        builder: (_) => SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 8),
+              const Text('Quick Status', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.check_circle_outline),
+                title: const Text("Send: I'm OK"),
+                onTap: () => Navigator.pop(context, 'im_ok'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.warning_amber_rounded, color: Colors.red),
+                title: const Text('Send: I need help'),
+                onTap: () => Navigator.pop(context, 'need_help'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.help_outline),
+                title: const Text('Ask caregiver: Are you OK?'),
+                onTap: () => Navigator.pop(context, 'are_you_ok'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        ),
+      );
+      if (choice == null) return;
+
+      try {
+        // fetch current caregivers by reverse lookup
+        final qs = await FirebaseFirestore.instance
+            .collection('Account')
+            .where('elderlyIds', arrayContains: widget.userProfile.uid)
+            .get();
+
+        final caregiverUids = qs.docs.map((d) => d.id).toList();
+        if (caregiverUids.isEmpty) {
+          // ignore: use_build_context_synchronously
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('No linked caregivers.')));
+          return;
+        }
+
+        await Future.wait(caregiverUids.map((cg) => _sendStatusPing(
+              fromUid: widget.userProfile.uid,
+              toUid: cg,
+              kind: choice,
+              elderlyId: widget.userProfile.uid,
+              caregiverId: cg,
+            )));
+
+        // ignore: use_build_context_synchronously
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Status sent to ${caregiverUids.length} caregiver(s).')),
+        );
+      } catch (e) {
+        // ignore: use_build_context_synchronously
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Failed to send status: $e')));
+      }
+    }
+
     return Row(
       children: [
         Expanded(
           child: ElevatedButton.icon(
             onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => CommunicatePage(userProfile: widget.userProfile)));
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => CommunicatePage(userProfile: widget.userProfile)),
+              );
             },
             icon: const Icon(Icons.call, size: 24),
             label: const Text("Call Caregiver", style: TextStyle(fontSize: 16)),
@@ -298,7 +484,7 @@ Widget _buildElderlyInfoCard(
         const SizedBox(width: 12),
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: _updateStatus,
+            onPressed: _showElderlyStatusSheet,
             icon: const Icon(Icons.favorite_outline, size: 24),
             label: const Text("I am OK / Help", style: TextStyle(fontSize: 16)),
             style: ElevatedButton.styleFrom(
@@ -313,6 +499,11 @@ Widget _buildElderlyInfoCard(
     );
   }
 
+  Future<void> markNotificationRead(String id) async {
+    final ref = FirebaseFirestore.instance.collection('notifications').doc(id);
+    await ref.update({'read': true, 'readAt': FieldValue.serverTimestamp()});
+  }
+
   Widget _buildQuickActions(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -320,27 +511,59 @@ Widget _buildElderlyInfoCard(
         _buildSectionTitle(context, "Immediate Medical Access", GlobalKey(), showSeeAll: false),
         const SizedBox(height: 10),
         _buildActionGrid([
-          _buildActionButton(context, 'See GP now', Icons.local_hospital, Colors.red.shade100, Colors.red.shade800, GPConsultationPage(userProfile: widget.userProfile)),
-          _buildActionButton(context, 'Book an appointment', Icons.calendar_month, Colors.blue.shade100, Colors.blue.shade800, AppointmentBookingPage(userProfile: widget.userProfile)),
-          _buildActionButton(context, 'Consultation History', Icons.history, Colors.purple.shade100, Colors.purple.shade800, ch.ConsultationHistoryPage()),
+          _buildActionButton(
+            context,
+            'See GP now',
+            Icons.local_hospital,
+            Colors.red.shade100,
+            Colors.red.shade800,
+            GPConsultationPage(userProfile: widget.userProfile),
+          ),
+          _buildActionButton(
+            context,
+            'Book an appointment',
+            Icons.calendar_month,
+            Colors.blue.shade100,
+            Colors.blue.shade800,
+            AppointmentBookingPage(userProfile: widget.userProfile),
+          ),
+          _buildActionButton(
+            context,
+            'Consultation History',
+            Icons.history,
+            Colors.purple.shade100,
+            Colors.purple.shade800,
+            ch.ConsultationHistoryPage(),
+          ),
         ]),
         const SizedBox(height: 24),
         _buildSectionTitle(context, "Health Records & Shop Medicine", GlobalKey(), showSeeAll: false),
         const SizedBox(height: 10),
         _buildActionGrid([
-          _buildActionButton(context, 'My Health records', Icons.folder_open, Colors.green.shade100, Colors.green.shade800, hr.HealthRecordsPage(userProfile: widget.userProfile)),
+          _buildActionButton(
+            context,
+            'My Health records',
+            Icons.folder_open,
+            Colors.green.shade100,
+            Colors.green.shade800,
+            hr.HealthRecordsPage(userProfile: widget.userProfile),
+          ),
           _buildActionButton(
             context,
             'Shop Meds & wellness',
             Icons.shopping_bag,
             Colors.orange.shade100,
             Colors.orange.shade800,
-            ChangeNotifierProvider(
-              create: (_) => CartController(),
-              child: const shop.MedicationShopPage(),
-            ),
+            ChangeNotifierProvider(create: (_) => CartController(), child: const shop.MedicationShopPage()),
           ),
-          _buildActionButton(context, 'Wellness Tips', Icons.self_improvement, Colors.cyan.shade100, Colors.cyan.shade800, CommunityPage()),
+          _buildActionButton(
+            context,
+            'Wellness Tips',
+            Icons.self_improvement,
+            Colors.cyan.shade100,
+            Colors.cyan.shade800,
+            ShareExperiencePage(),
+          ),
         ]),
       ],
     );
@@ -429,10 +652,14 @@ Widget _buildElderlyInfoCard(
       children: [
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text("Welcome Back,", style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black54)),
-          Text(widget.userProfile.displayName, style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+          Text(widget.userProfile.safeDisplayName,
+              style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
         ]),
         TextButton.icon(
-          onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => WalletPage(userProfile: widget.userProfile))),
+          onPressed: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => WalletPage(userProfile: widget.userProfile)),
+          ),
           icon: const Icon(Icons.account_balance_wallet, color: Color(0xFF6A1B9A)),
           label: const Text('My Wallet', style: TextStyle(color: Color(0xFF6A1B9A), fontWeight: FontWeight.bold)),
         ),
@@ -444,25 +671,39 @@ Widget _buildElderlyInfoCard(
     return Padding(
       key: key,
       padding: const EdgeInsets.only(top: 8.0, bottom: 8.0),
-      child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
-        if (showSeeAll)
-          TextButton(
-            onPressed: () {
-              if (title == "Upcoming Events" || title == "Community Feed") {
-                Navigator.push(context, MaterialPageRoute(builder: (_) => CommunityPage()));
-              } else {
-                debugPrint("See all $title");
-              }
-            },
-            child: const Text("See all", style: TextStyle(color: Colors.blue)),
-          ),
-      ]),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+          if (showSeeAll)
+            TextButton(
+              onPressed: () {
+                if (title == "Upcoming Events") {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const EventsPage()));
+                } else if (title == "Community Feed") {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage()));
+                } else {
+                  debugPrint("See all $title");
+                }
+              },
+              child: const Text("See all", style: TextStyle(color: Colors.blue)),
+            ),
+        ],
+      ),
     );
   }
 
-
+  /// -------- Events
   Widget _buildEventsSection() {
+    String _fmtDate(DateTime dt) => DateFormat('EEE, MMM d').format(dt);
+    String _fmtTime(DateTime dt) => DateFormat('h:mm a').format(dt);
+    bool _isAllDay(DateTime start, DateTime end) {
+      final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
+      final isStartMidnight = start.hour == 0 && start.minute == 0 && start.second == 0;
+      final isEndEOD = end.hour == 23 && end.minute == 59 && end.second == 59;
+      return sameDay && isStartMidnight && isEndEOD;
+    }
+
     return StreamBuilder<List<ehc.UpcomingEvent>>(
       stream: _homeController.getUpcomingEventsStream(),
       builder: (context, snapshot) {
@@ -471,7 +712,7 @@ Widget _buildElderlyInfoCard(
         }
         if (snapshot.hasError) {
           debugPrint("Events Home Page Error: ${snapshot.error}");
-          return Center(child: Text("Error loading events"));
+          return const Center(child: Text("Error loading events"));
         }
 
         final events = snapshot.data ?? const <ehc.UpcomingEvent>[];
@@ -484,31 +725,41 @@ Widget _buildElderlyInfoCard(
           );
         }
 
-        return Column(
-          children: events.map((e) {
-            final start = DateFormat('EEE, MMM d, h:mm a').format(e.start);
-            final end   = DateFormat('h:mm a').format(e.end);
+        return ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: events.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, i) {
+            final e = events[i];
+            final allDay = _isAllDay(e.start, e.end);
+
+            final when = allDay
+                ? "${_fmtDate(e.start)} · All day"
+                : (e.start.day == e.end.day && e.start.month == e.end.month && e.start.year == e.end.year)
+                    ? "${_fmtDate(e.start)} · ${_fmtTime(e.start)} – ${_fmtTime(e.end)}"
+                    : "${_fmtDate(e.start)} ${_fmtTime(e.start)} → ${_fmtDate(e.end)} ${_fmtTime(e.end)}";
+
             return Card(
-              margin: const EdgeInsets.only(bottom: 8),
               elevation: 2,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
               child: ListTile(
-                leading: Icon(Icons.event, color: Colors.orange.shade700),
+                leading: const Icon(Icons.event, color: Colors.orange),
                 title: Text(e.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text('$start – $end\nTap to see details'),
-                isThreeLine: true,
+                subtitle: Text(when),
                 trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                 onTap: () {
-                  // TODO: navigate to details if you have a page
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const EventsPage()));
                 },
               ),
             );
-          }).toList(),
+          },
         );
       },
     );
   }
 
+  /// -------- Announcements
   Widget _buildAnnouncementsSection() {
     return StreamBuilder<QuerySnapshot>(
       stream: _homeController.getAnnouncementsStream(),
@@ -543,6 +794,7 @@ Widget _buildElderlyInfoCard(
     );
   }
 
+  /// -------- Learning
   Widget _buildLearningRecommendationsSection() {
     return StreamBuilder<QuerySnapshot>(
       stream: _homeController.getLearningRecommendationsStream(),
@@ -557,9 +809,8 @@ Widget _buildElderlyInfoCard(
           return const Center(child: Text("No recommendations for you."));
         }
 
-        final topics = snapshot.data!.docs
-            .map((d) => (d.data() as Map<String, dynamic>?)?['title'] as String? ?? 'Topic')
-            .toList();
+        final topics =
+            snapshot.data!.docs.map((d) => (d.data() as Map<String, dynamic>?)?['title'] as String? ?? 'Topic').toList();
 
         return Column(
           children: topics
@@ -578,12 +829,12 @@ Widget _buildElderlyInfoCard(
     );
   }
 
-  // Updated to remove the key, as the key is now on the feed section title
+  /// -------- Community CTA
   Widget _buildCommunityButton(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(top: 8.0),
       child: ElevatedButton.icon(
-        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => CommunityPage())),
+        onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage())),
         icon: const Icon(Icons.people, size: 24),
         label: const Text("Connect with the Community", style: TextStyle(fontSize: 16)),
         style: ElevatedButton.styleFrom(
@@ -596,60 +847,79 @@ Widget _buildElderlyInfoCard(
     );
   }
 
+  /// -------- Community Feed (Preview of last 3 stories)
   Widget _buildCommunityFeedSection(BuildContext context) {
-    final communityController = context.read<CommunityController>();
+    final q = FirebaseFirestore.instance
+        .collection('SharedExperiences')
+        .orderBy('sharedAt', descending: true)
+        .limit(3);
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(bottom: 16.0),
-          child: ElevatedButton.icon(
-            onPressed: () => Navigator.push(
-              context, MaterialPageRoute(builder: (_) => const CreatePostPage())),
-            icon: const Icon(Icons.add_comment),
-            label: const Text("Share a New Post"),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.teal.shade400,
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 45),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-          ),
-        ),
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: q.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: LinearProgressIndicator());
+        }
+        if (snapshot.hasError) {
+          debugPrint("Community Feed Error: ${snapshot.error}");
+          return const Center(child: Text("Error loading feed."));
+        }
 
-        // Take only the first 3 posts for preview
-        StreamBuilder<List<Post>>(
-          stream: communityController.postsStream.map((ps) => ps.take(3).toList()),
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: LinearProgressIndicator());
+        final docs = snapshot.data?.docs ?? [];
+        if (docs.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.all(32.0),
+            child: Center(child: Text("Be the first to share in the community!")),
+          );
+        }
+
+        return ListView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: docs.length,
+          itemBuilder: (context, index) {
+            final data = docs[index].data();
+            final title = (data['title'] as String? ?? '').trim();
+            final description = (data['description'] as String? ?? '').trim();
+            final uidOrKey = (data['user'] as String? ?? '').trim();
+            final tsIso = (data['sharedAt'] as String?)?.trim();
+
+            final content = description.isEmpty
+                ? (title.isEmpty ? 'No Content' : title)
+                : (description.length > 100 ? '${description.substring(0, 100)}…' : description);
+
+            String formattedTime = '';
+            if (tsIso != null && tsIso.isNotEmpty) {
+              try {
+                final dt = DateTime.parse(tsIso);
+                formattedTime = DateFormat('MMM d, h:mm a').format(dt);
+              } catch (_) {}
             }
-            if (snapshot.hasError) {
-              debugPrint("Community Feed Error: ${snapshot.error}");
-              return const Center(child: Text("Error loading feed."));
-            }
 
-            final posts = snapshot.data ?? const <Post>[];
-            if (posts.isEmpty) {
-              return const Padding(
-                padding: EdgeInsets.all(32.0),
-                child: Center(child: Text("Be the first to share in the community!")),
-              );
-            }
+            return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>?>(
+              future: (() async {
+                if (uidOrKey.contains('@')) {
+                  return FirebaseFirestore.instance.collection('Account').doc(uidOrKey).get();
+                } else {
+                  final qs = await FirebaseFirestore.instance
+                      .collection('Account')
+                      .where('uid', isEqualTo: uidOrKey)
+                      .limit(1)
+                      .get();
+                  return qs.docs.isNotEmpty ? qs.docs.first : null;
+                }
+              })(),
+              builder: (context, accSnap) {
+                String author = 'Anonymous';
+                final snap = accSnap.data; // may be null
 
-            return ListView.builder(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: posts.length,
-              itemBuilder: (context, index) {
-                final p = posts[index];
-                final content = p.content.isEmpty
-                    ? 'No Content'
-                    : (p.content.length > 80 ? '${p.content.substring(0, 80)}…' : p.content);
-                final author = p.authorDisplayName.isEmpty ? 'Anonymous' : p.authorDisplayName;
-                final dt = p.timestamp.toDate();
-                final formattedTime = DateFormat('MMM d, h:mm a').format(dt);
+                if (snap != null && snap.exists) {
+                  final acc = snap.data()!;
+                  final first = (acc['firstname'] as String?)?.trim() ?? '';
+                  final last  = (acc['lastname']  as String?)?.trim() ?? '';
+                  final full  = '$first $last'.trim();
+                  author = full.isEmpty ? (acc['email'] as String? ?? 'Anonymous') : full;
+                }
 
                 return Card(
                   margin: const EdgeInsets.only(bottom: 12),
@@ -657,25 +927,30 @@ Widget _buildElderlyInfoCard(
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   child: ListTile(
                     contentPadding: const EdgeInsets.all(16.0),
-                    title: Text(content, style: const TextStyle(fontSize: 15, height: 1.4, fontWeight: FontWeight.w500)),
+                    title: Text(
+                      content,
+                      style: const TextStyle(fontSize: 15, height: 1.4, fontWeight: FontWeight.w500),
+                    ),
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 8.0),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('by $author', style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: Colors.deepPurple.shade700)),
+                          Text('by $author',
+                              style: TextStyle(
+                                  fontSize: 12, fontStyle: FontStyle.italic, color: Colors.deepPurple.shade700)),
                           Text(formattedTime, style: TextStyle(fontSize: 12, color: Colors.grey.shade600)),
                         ],
                       ),
                     ),
-                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CommunityPage())),
+                    onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage())),
                   ),
                 );
               },
             );
           },
-        ),
-      ],
+        );
+      },
     );
   }
 }

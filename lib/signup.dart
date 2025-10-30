@@ -43,6 +43,11 @@ class _SignupPageState extends State<SignupPage> {
     super.dispose();
   }
 
+  // Helper functions
+  String _isoNow() => DateTime.now().toUtc().toIso8601String();
+  String _ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(d.toUtc());
+  String _randId() => FirebaseFirestore.instance.collection('_ids').doc().id;
+
   Future<void> _selectDOB(BuildContext context) async {
     final picked = await showDatePicker(
       context: context,
@@ -51,90 +56,80 @@ class _SignupPageState extends State<SignupPage> {
       lastDate: DateTime.now(),
     );
     if (picked != null) {
-      setState(() {
-        _dob = picked;
-      });
+      setState(() => _dob = picked);
     }
   }
 
   void _showTermsAndConditionsDialog() {
     showDialog(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text("Terms and Conditions"),
-          content: const SingleChildScrollView(
-            child: Text(
-              """
-              Last Updated: August 10, 2025
+      builder: (context) => AlertDialog(
+        title: const Text("Terms and Conditions"),
+        content: const SingleChildScrollView(
+          child: Text("""
+Last Updated: August 10, 2025
 
-              Welcome to Allcare! These Terms and Conditions govern your access to and use of the Allcare website and mobile application (the "Platform"). By creating an account or using the Platform, you agree to be bound by these terms. If you do not agree, you may not use the Platform.
+Welcome to Allcare! These Terms and Conditions govern your access to and use of the Allcare website and mobile application (the "Platform"). By creating an account or using the Platform, you agree to be bound by these terms. If you do not agree, you may not use the Platform.
 
-              1. Acceptance of Terms: By using the Allcare Platform, you confirm that you are at least 18 years of age or a legal guardian of an elderly user. All caregivers and administrators must be at least 18 years of age. Elderly users who are not of legal age to enter into a contract must have their account created and managed by a legal guardian.
+1. Acceptance of Terms: You must be at least 18 years old to create or manage an account.
+2. Platform Purpose: Allcare supports elderly users and caregivers with AI assistance, scheduling, learning, and community features.
+3. Responsibilities: You must provide accurate information and protect your account credentials.
+4. Privacy Policy: Your data is handled per our Privacy Policy.
+5. Limitation of Liability: The Platform is provided “as is”. Allcare is not liable for damages arising from its use.
+6. Governing Law: These Terms are governed by Singapore law.
 
-              2. Platform Purpose and Features: Allcare is a digital platform designed to assist elderly individuals and their caregivers. The Platform's features include, but are not limited to: an AI assistant to provide personalized support; scheduling and reminders for appointments and events; learning resources and social activities; experience sharing and social media integration.
-
-              3. User Accounts and Responsibilities: You are responsible for providing accurate and complete information during registration. You are responsible for safeguarding your password and for all activities that occur under your account. You must notify us immediately of any unauthorized use.
-
-              4. Content and Conduct: You agree to use the Platform for its intended purpose and not for any unlawful or prohibited activities. You are solely responsible for any content you post, share, or submit on the Platform.
-
-              5. Privacy Policy: Your privacy is important to us. Our Privacy Policy, which is incorporated into these Terms by reference, explains how we collect, use, and protect your personal information. By using the Platform, you consent to our collection and use of your data as described in the Privacy Policy.
-
-              6. Disclaimers and Limitation of Liability: The Platform is provided "as is" and "as available" without any warranties of any kind, whether express or implied. Allcare, its developers, and its affiliates will not be liable for any damages, including but not limited to direct, indirect, or incidental damages, arising from your use or inability to use the Platform.
-
-              7. Changes to Terms: We may revise these Terms and Conditions from time to time. The most current version will always be posted on the Platform. By continuing to use the Platform after changes have been made, you agree to be bound by the revised terms.
-
-              8. Governing Law: These Terms and Conditions are governed by the laws of Singapore. Any disputes arising from these terms will be resolved in the courts of Singapore.
-
-              9. Contact Information: If you have any questions about these Terms and Conditions, please contact us at admin@allcare.com.
-              """,
-            ),
+For questions, contact admin@allcare.com.
+"""),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text("Close"),
           ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-              child: const Text("Close"),
-            ),
-          ],
-        );
-      },
+        ],
+      ),
     );
   }
 
   Future<void> _signup() async {
     if (!_formKey.currentState!.validate()) return;
+
     if (!_acceptedTerms) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("You must accept the terms and conditions.")),
       );
       return;
     }
+
     if (_dob == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Date of Birth is required.")),
       );
       return;
     }
+
     if (_role == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("User type is required.")),
       );
       return;
     }
+
     if (_isAdmin && _adminKeyController.text.trim() != _adminKey) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Invalid Admin Key.")),
       );
       return;
     }
-    if (_role == "Elderly" && DateTime.now().difference(_dob!).inDays ~/ 365 < 60) {
+
+    final age = DateTime.now().difference(_dob!).inDays ~/ 365;
+    if (_role == "elderly" && age < 60) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Elderly users must be at least 60 years old.")),
       );
       return;
     }
+
     if (_passwordController.text.trim() != _confirmPasswordController.text.trim()) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Passwords do not match.")),
@@ -143,47 +138,65 @@ class _SignupPageState extends State<SignupPage> {
     }
 
     try {
-      final UserCredential userCredential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
+      final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
-      await FirebaseFirestore.instance.collection('users').doc(userCredential.user!.uid).set({
-        'firstName': _firstNameController.text.trim(),
-        'lastName': _lastNameController.text.trim(),
-        'email': _emailController.text.trim(),
-        'role': _role,
-        'phone': _phoneController.text.trim(),
-        'dob': _dob?.toIso8601String(),
-        'elderlyId': _isCaregiver ? _elderlyIdController.text.trim() : null,
-        'createdAt': FieldValue.serverTimestamp(),
-      });
+      final uid = credential.user!.uid;
+      final nowIso = _isoNow();
 
-      if (mounted) {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (context) => const PaymentPage()),
-        );
-      }
+      final data = <String, dynamic>{
+  'firstname': _firstNameController.text.trim(),
+  'lastname': _lastNameController.text.trim(),
+  'email': _emailController.text.trim(),
+  'phoneNum': _phoneController.text.trim(),
+  'userType': _role,
+  'dob': Timestamp.fromDate(_dob!), // <— use Timestamp
+  'elderlyId': _isCaregiver ? _elderlyIdController.text.trim() : null,
+  'createdAt': FieldValue.serverTimestamp(),
+  'lastLoginDate': FieldValue.serverTimestamp(),
+  'lastPasswordUpdate': FieldValue.serverTimestamp(),
+  'status': 'Active',
+  'uid': uid,
+  'loginLogs': {
+    _randId(): {'date': FieldValue.serverTimestamp()},
+  },
+  // Optional: record ToS version
+  'tosAccepted': {
+    'version': '2025-08-10',
+    'acceptedAt': FieldValue.serverTimestamp(),
+  },
+};
+
+      await FirebaseFirestore.instance.collection('Account').doc(uid).set(data);
+
+      if (!mounted) return;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PaymentPage()),
+      );
     } on FirebaseAuthException catch (e) {
-      if (mounted) {
-        String errorMessage;
-        if (e.code == 'weak-password') {
-          errorMessage = 'The password provided is too weak.';
-        } else if (e.code == 'email-already-in-use') {
-          errorMessage = 'The account already exists for that email.';
-        } else {
-          errorMessage = 'An error occurred during signup: ${e.message}';
-        }
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(errorMessage)),
-        );
+      if (!mounted) return;
+      String msg;
+      switch (e.code) {
+        case 'weak-password':
+          msg = 'The password provided is too weak.';
+          break;
+        case 'email-already-in-use':
+          msg = 'The account already exists for that email.';
+          break;
+        case 'invalid-email':
+          msg = 'The email address is invalid.';
+          break;
+        default:
+          msg = 'An error occurred during signup: ${e.message}';
       }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('An unexpected error occurred.')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('An unexpected error occurred.')),
+      );
       debugPrint('Signup error: $e');
     }
   }
@@ -191,7 +204,7 @@ class _SignupPageState extends State<SignupPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Create an account")),
+      appBar: AppBar(title: const Text("Create an Account")),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Form(
@@ -218,21 +231,20 @@ class _SignupPageState extends State<SignupPage> {
                 decoration: const InputDecoration(labelText: "Email"),
                 keyboardType: TextInputType.emailAddress,
                 validator: (val) =>
-                val!.isEmpty || !val.contains("@") ? "Valid email" : null,
+                    val!.isEmpty || !val.contains("@") ? "Valid email required" : null,
               ),
               TextFormField(
                 controller: _passwordController,
                 decoration: const InputDecoration(labelText: "Password"),
                 obscureText: true,
-                validator: (val) =>
-                val!.length < 8 ? "Min 8 characters" : null,
+                validator: (val) => val!.length < 8 ? "Min 8 characters" : null,
               ),
               TextFormField(
                 controller: _confirmPasswordController,
                 decoration: const InputDecoration(labelText: "Confirm Password"),
                 obscureText: true,
                 validator: (val) =>
-                val != _passwordController.text ? "Passwords do not match" : null,
+                    val != _passwordController.text ? "Passwords do not match" : null,
               ),
               const SizedBox(height: 10),
               Row(
@@ -254,17 +266,17 @@ class _SignupPageState extends State<SignupPage> {
               DropdownButtonFormField<String>(
                 value: _role,
                 decoration: const InputDecoration(labelText: "User Type"),
-                items: ["Admin", "Elderly", "Caregiver"]
+                items: ["admin", "elderly", "caregiver"]
                     .map((role) => DropdownMenuItem(
-                  value: role,
-                  child: Text(role),
-                ))
+                          value: role,
+                          child: Text(role),
+                        ))
                     .toList(),
                 onChanged: (val) {
                   setState(() {
                     _role = val;
-                    _isCaregiver = val == "Caregiver";
-                    _isAdmin = val == "Admin";
+                    _isCaregiver = val == "caregiver";
+                    _isAdmin = val == "admin";
                   });
                 },
                 validator: (val) => val == null ? "Required" : null,
@@ -272,32 +284,26 @@ class _SignupPageState extends State<SignupPage> {
               if (_isAdmin)
                 TextFormField(
                   controller: _adminKeyController,
-                  decoration: const InputDecoration(
-                    labelText: "Admin Key",
-                  ),
+                  decoration: const InputDecoration(labelText: "Admin Key"),
                   obscureText: true,
                   validator: (val) =>
-                  val!.isEmpty ? "Admin key is required" : null,
+                      val!.isEmpty ? "Admin key is required" : null,
                 ),
               if (_isCaregiver)
                 TextFormField(
                   controller: _elderlyIdController,
-                  decoration: const InputDecoration(
-                    labelText: "Elderly ID (to match with user)",
-                  ),
+                  decoration:
+                      const InputDecoration(labelText: "Elderly ID (to match with user)"),
                   validator: (val) =>
-                  val!.isEmpty ? "Required for caregiver" : null,
+                      val!.isEmpty ? "Required for caregiver" : null,
                 ),
               const SizedBox(height: 20),
               Row(
                 children: [
                   Checkbox(
                     value: _acceptedTerms,
-                    onChanged: (val) {
-                      setState(() {
-                        _acceptedTerms = val ?? false;
-                      });
-                    },
+                    onChanged: (val) =>
+                        setState(() => _acceptedTerms = val ?? false),
                   ),
                   Expanded(
                     child: GestureDetector(

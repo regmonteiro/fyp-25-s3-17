@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../controller/account/payment_controller.dart';
+import 'package:elderly_aiassistant/payment.dart';
 
 class PaymentDetailsPage extends StatefulWidget {
   const PaymentDetailsPage({Key? key}) : super(key: key);

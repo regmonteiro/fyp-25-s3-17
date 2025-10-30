@@ -17,7 +17,7 @@ Future<void> goToConsultationWithProfile(BuildContext context) async {
     }
 
     final snap = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('Account')
         .doc(authUser.uid)
         .get();
 
@@ -32,8 +32,8 @@ Future<void> goToConsultationWithProfile(BuildContext context) async {
 
     // If caregiver, act on elder’s UID; else use own UID
     final patientUid =
-        (profile.role == 'caregiver' && (profile.uidOfElder?.isNotEmpty ?? false))
-            ? profile.uidOfElder!
+        (profile.userType == 'caregiver' && (profile.elderlyId?.isNotEmpty ?? false))
+            ? profile.elderlyId!
             : profile.uid;
 
     // Navigate (

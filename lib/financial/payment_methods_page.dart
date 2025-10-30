@@ -209,7 +209,9 @@ class _SectionHeader extends StatelessWidget {
 
 class _AddCardButton extends StatelessWidget {
   final String forUid;
-  const _AddCardButton({required this.forUid});
+  final formKey = GlobalKey<FormState>();
+
+  _AddCardButton({required this.forUid});
 
   @override
   Widget build(BuildContext context) {
@@ -226,7 +228,7 @@ class _AddCardButton extends StatelessWidget {
           context: context,
           builder: (_) => AlertDialog(
             title: const Text('Add card'),
-            content: SingleChildScrollView(
+            content: Form(
               key: formKey,
               child: Column(mainAxisSize: MainAxisSize.min, children: [
                 TextFormField(controller: name, decoration: const InputDecoration(labelText: 'Cardholder name'), validator: (v) => (v == null || v.isEmpty) ? 'Required' : null),

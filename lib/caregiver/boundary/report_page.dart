@@ -1,484 +1,230 @@
 import 'dart:async';
-import 'package:elderly_aiassistant/models/user_profile.dart';
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../controller/report_controller.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import '../../report_models.dart';
+import '../../models/user_profile.dart';
 
-class ElderlyReportData {
-  final String name;
-  final int age;
-  final List<ReportCardData> reports; // cards with chart + stats
-  final List<AlertItem> alerts;
-  ElderlyReportData({
-    required this.name,
-    required this.age,
-    required this.reports,
-    required this.alerts,
-  });
-}
+const List<Color> _pieColors = <Color>[
+  Color(0xFF4ECDC4), // teal
+  Color(0xFFFF6B6B), // red
+  Color(0xFFFEC057), // amber
+  Color(0xFF45B7D1), // blue
+  Color(0xFF96C93D), // green (optional extra)
+];
 
-class ReportCardData {
-  final String id;
-  final String title;
-  /// 'health' | 'medication' | 'activity' | 'emergency'
-  final String category;
-  /// one of: 'line' | 'bar' | 'doughnut'
-  final String chartType;
-  /// X labels
-  final List<String> labels;
-  /// datasets as list of numbers (single-series for simplicity; extend as needed)
-  final List<double> values;
-  /// stats row under chart
-  final List<ReportStat> stats;
-  ReportCardData({
-    required this.id,
-    required this.title,
-    required this.category,
-    required this.chartType,
-    required this.labels,
-    required this.values,
-    required this.stats,
-  });
-}
-
-class ReportStat {
-  final String label;
-  final String number;
-  ReportStat({required this.label, required this.number});
-}
-
-class AlertItem {
-  final String id;
-  /// 'critical' | 'warning' | 'info'
-  final String type;
-  final String title;
-  final String message;
-  final String time; // e.g. "2h ago"
-  AlertItem({
-    required this.id,
-    required this.type,
-    required this.title,
-    required this.message,
-    required this.time,
-  });
-}
-
-// ----- Page -----
 class ViewReportsCaregiverPage extends StatefulWidget {
-  final UserProfile userProfile;
+  final UserProfile? userProfile;
   const ViewReportsCaregiverPage({super.key, required this.userProfile});
-
   @override
   State<ViewReportsCaregiverPage> createState() => _ViewReportsCaregiverPageState();
 }
 
 class _ViewReportsCaregiverPageState extends State<ViewReportsCaregiverPage> {
-  final _controller = ViewReportsCaregiverController();
-
+  late final CaregiverReportsController _controller;
+  StreamSubscription<CaregiverReportsVM>? _sub;
+  CaregiverReportsVM? _vm;
   String _filter = 'all';
-  ElderlyReportData? _data;
-  bool _loading = true;
-  String? _error;
-
-  Future<Map<String, String>> _currentUserForController() async {
-  final auth = FirebaseAuth.instance;
-  final fs = FirebaseFirestore.instance;
-
-  // 1) Ensure logged in
-  final user = auth.currentUser;
-  if (user == null) {
-    throw Exception('No logged-in user. Please log in again.');
-  }
-
-  // 2) Start with auth email; may be empty for some providers
-  String email = (user.email ?? '').trim();
-
-  // 3) Fetch role (and fallback email) from Firestore: users/{uid}
-  final doc = await fs.collection('users').doc(user.uid).get();
-  if (!doc.exists) {
-    throw Exception('User profile not found in Firestore.');
-  }
-  final data = doc.data() as Map<String, dynamic>;
-
-  // Normalize role to lowercase (e.g., "caregiver")
-  final roleRaw = (data['role'] as String?) ?? '';
-  final userType = roleRaw.trim().toLowerCase();
-  if (userType.isEmpty) {
-    throw Exception('User role is missing in profile.');
-  }
-
-  // If auth email missing, fall back to profile email
-  if (email.isEmpty) {
-    email = ((data['email'] as String?) ?? '').trim();
-  }
-  if (email.isEmpty) {
-    throw Exception('No email associated with this account.');
-  }
-
-  return {
-    'email': email.toLowerCase(),
-    'userType': userType, // expected: 'caregiver'
-  };
-}
 
   @override
   void initState() {
     super.initState();
-    _fetch();
-  }
-
-  Future<void> _fetch() async {
-    setState(() {
-      _loading = true;
-      _error = null;
+    _controller = CaregiverReportsController();
+    _sub = _controller.streamVm().listen((vm) {
+      setState(() => _vm = vm);
+    }, onError: (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
     });
-    try {
-      final user = await _currentUserForController();
-      final email = (user['email'] ?? '').toLowerCase();
-      final userType = user['userType'];
-      if (email.isEmpty || userType != 'caregiver') {
-        throw Exception('Only caregivers can view reports. Please log in again.');
-      }
-      final result = await _controller.getElderlyReportData(
-        email: email,
-        userType: userType!,
-      );
-      setState(() {
-        _data = result;
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
-    }
   }
 
-  // ---- Export to PDF (simple capture of current screen) ----
-  Future<void> _exportPDF() async {
-    try {
-      await _controller.exportReportsAsPDF(data: _data);
-      // If your controller handles PDF generation. Alternatively:
-      // await Printing.layoutPdf(onLayout: (format) async => await _buildPdfBytes());
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Export started (PDF)')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Export failed: $e')),
-        );
-      }
-    }
+  @override
+  void dispose() {
+    _sub?.cancel();
+    super.dispose();
   }
 
-  void _goGenerateCustomReport() {
-    // Use your own route name
-    Navigator.of(context).pushNamed('/caregiver/generatecustomreport');
+  Future<void> _switchElder(String uid) async {
+    if (_vm == null) return;
+    final nextVm = await _controller.switchElder(uid, _vm!.elders);
+    if (mounted) setState(() => _vm = nextVm);
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(
-        body: Center(child: Text('Loading reports...')),
-      );
-    }
-    if (_error != null) {
-      return Scaffold(
-        body: Center(
-          child: _ErrorBox(
-            title: 'Error Loading Reports',
-            message: _error!,
-            onRetry: _fetch,
-            onLogin: () => Navigator.of(context).pushReplacementNamed('/login'),
-          ),
-        ),
-      );
+    if (_vm == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    final data = _data!;
-    final todayFmt = DateFormat('MMM d, yyyy • h:mm a').format(DateTime.now());
-
-    final filteredReports = data.reports.where((r) {
-      return _filter == 'all' || r.category == _filter;
-    }).toList();
+    final elders = _vm!.elders;
+    final bundle = _vm!.bundle;
+    final filteredReports =
+        bundle.reports.where((r) => _filter == 'all' || r.category == _filter).toList();
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Reports'),
-        flexibleSpace: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(colors: [Color(0xFF667EEA), Color(0xFF764BA2)]),
-          ),
-        ),
       ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFF5F7FA), Color(0xFFC3CFE2)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: ListView(
-          padding: const EdgeInsets.all(12),
-          children: [
-            _HeaderCard(
-              name: data.name,
-              age: data.age,
-              lastUpdated: todayFmt,
-            ),
-            const SizedBox(height: 12),
-            _FiltersRow(
-              active: _filter,
-              onChange: (f) => setState(() => _filter = f),
-            ),
-            const SizedBox(height: 8),
-            if (filteredReports.isEmpty)
-              const _NoReports()
-            else
-              _ReportsGrid(reports: filteredReports),
-            const SizedBox(height: 16),
-            _AlertsSection(alerts: data.alerts),
-            const SizedBox(height: 120),
-          ],
-        ),
-      ),
-      floatingActionButton: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Export button (round)
-          FloatingActionButton(
-            heroTag: 'export_pdf',
-            onPressed: _exportPDF,
-            backgroundColor: const Color(0xFF4CAF50),
-            child: const Icon(Icons.download),
-          ),
-          const SizedBox(height: 16),
-          // Generate custom report (pill button)
-          FloatingActionButton.extended(
-            heroTag: 'generate_custom',
-            onPressed: _goGenerateCustomReport,
-            backgroundColor: const Color(0xFF2196F3),
-            icon: const Icon(Icons.auto_awesome),
-            label: const Text('Generate Custom Report'),
-          ),
-        ],
-      ),
-    );
-  }
-}
+      body: RefreshIndicator(
+        onRefresh: () async => _switchElder(_vm!.activeElderUid),
+        child: SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (elders.length > 1)
+                Wrap(
+                  spacing: 8,
+                  children: elders
+                      .map((e) => ChoiceChip(
+                            label: Text('${e.displayName}${e.age != null ? ' (${e.age})' : ''}'),
+                            selected: e.uid == _vm!.activeElderUid,
+                            onSelected: (_) => _switchElder(e.uid),
+                          ))
+                      .toList(),
+                ),
+              if (elders.length > 1) const SizedBox(height: 12),
 
-// ---------- UI Pieces ----------
-
-class _HeaderCard extends StatelessWidget {
-  final String name;
-  final int age;
-  final String lastUpdated;
-  const _HeaderCard({
-    required this.name,
-    required this.age,
-    required this.lastUpdated,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      elevation: 12,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      child: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(colors: [Color(0xFF667EEA), Color(0xFF764BA2)]),
-          borderRadius: BorderRadius.all(Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.all(20),
-        child: Row(
-          children: [
-            Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                // ignore: deprecated_member_use
-                color: Colors.white.withOpacity(0.2),
-                shape: BoxShape.circle,
-          
-                // ignore: deprecated_member_use
-                border: Border.all(color: Colors.white.withOpacity(0.3)),
-              ),
-              alignment: Alignment.center,
-              child: const Text('👵', style: TextStyle(fontSize: 24)),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: DefaultTextStyle(
-                style: const TextStyle(color: Colors.white),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('$name (Age: $age)',
-                        style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600, color: Colors.white)),
-                    const SizedBox(height: 4),
-                    Text('Last updated: $lastUpdated',
-                        style: const TextStyle(color: Colors.white70)),
-                  ],
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        radius: 26,
+                        child: Text('👵', style: TextStyle(fontSize: 24)),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${bundle.elderly.displayName}${bundle.elderly.age != null ? ' (Age: ${bundle.elderly.age})' : ''}',
+                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Updated ${DateFormat.jm().format(DateTime.now())}',
+                              style: TextStyle(color: Colors.grey.shade700),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+
+              const SizedBox(height: 12),
+
+              Wrap(
+                spacing: 8,
+                runSpacing: -8,
+                children: ['all', 'health', 'medication', 'activity', 'emergency']
+                    .map((cat) => ChoiceChip(
+                          label: Text('${cat[0].toUpperCase()}${cat.substring(1)} Reports'),
+                          selected: _filter == cat,
+                          onSelected: (_) => setState(() => _filter = cat),
+                        ))
+                    .toList(),
+              ),
+
+              const SizedBox(height: 16),
+
+              LayoutBuilder(builder: (context, c) {
+                final wide = c.maxWidth >= 900;
+                final medium = c.maxWidth >= 600;
+                final cross = wide ? 3 : (medium ? 2 : 1);
+                return GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: filteredReports.length,
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: cross,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.05,
+                  ),
+                  itemBuilder: (_, i) => _ReportCard(report: filteredReports[i]),
+                );
+              }),
+
+              const SizedBox(height: 20),
+
+              Text('Recent Alerts & Notifications',
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 12),
+
+              if (bundle.alerts.isEmpty)
+                const Card(
+                  child: ListTile(
+                    leading: Icon(Icons.notifications_none),
+                    title: Text('No recent alerts'),
+                    subtitle: Text('We’ll show new items here.'),
+                  ),
+                )
+              else
+                Column(children: bundle.alerts.map((a) => _AlertTile(item: a)).toList()),
+            ],
+          ),
         ),
       ),
-    );
-  }
-}
-
-class _FiltersRow extends StatelessWidget {
-  final String active;
-  final ValueChanged<String> onChange;
-  const _FiltersRow({required this.active, required this.onChange});
-
-  static const cats = ['all', 'health', 'medication', 'activity', 'emergency'];
-
-  @override
-  Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      alignment: WrapAlignment.center,
-      children: [
-        for (final c in cats)
-          ChoiceChip(
-            label: Text('${c[0].toUpperCase()}${c.substring(1)} Reports'),
-            selected: active == c,
-            onSelected: (_) => onChange(c),
-          ),
-      ],
-    );
-  }
-}
-
-class _ReportsGrid extends StatelessWidget {
-  final List<ReportCardData> reports;
-  const _ReportsGrid({required this.reports});
-
-  @override
-  Widget build(BuildContext context) {
-    final width = MediaQuery.of(context).size.width;
-    final cross = width >= 1200 ? 2 : width >= 800 ? 2 : 1;
-    return GridView.builder(
-      itemCount: reports.length,
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: cross,
-        crossAxisSpacing: 16,
-        mainAxisSpacing: 16,
-        childAspectRatio: 1.1,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => Navigator.of(context).pushNamed('/caregiver/generatecustomreport'),
+        icon: const Icon(Icons.auto_awesome),
+        label: const Text('Generate Custom Report'),
       ),
-      itemBuilder: (_, i) => _ReportCard(report: reports[i]),
     );
   }
 }
 
 class _ReportCard extends StatelessWidget {
-  final ReportCardData report;
   const _ReportCard({required this.report});
-
-  Color _iconColor() {
-    switch (report.category) {
-      case 'health':
-        return const Color(0xFFFF6B6B);
-      case 'medication':
-        return const Color(0xFF4ECDC4);
-      case 'activity':
-        return const Color(0xFF45B7D1);
-      case 'emergency':
-        return const Color(0xFFF093FB);
-      default:
-        return const Color(0xFF667EEA);
-    }
-  }
+  final ReportCardData report;
 
   @override
   Widget build(BuildContext context) {
-    final accent = _iconColor();
-
     return Card(
-      elevation: 10,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0x11000000)),
-        ),
-        padding: const EdgeInsets.all(16),
+      elevation: 3,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12.0)),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
         child: Column(
           children: [
-            // header
             Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(report.title,
-                    style:
-                        const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF2C3E50))),
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: accent,
-                    borderRadius: BorderRadius.circular(8),
-                    // ignore: deprecated_member_use
-                    gradient: LinearGradient(colors: [accent, accent.withOpacity(0.8)]),
-                  ),
-                  alignment: Alignment.center,
-                  child: const Icon(Icons.insert_chart, color: Colors.white, size: 18),
+                Expanded(
+                  child: Text(report.title,
+                      style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                 ),
+                Text(report.icon, style: const TextStyle(fontSize: 22)),
               ],
             ),
-            const SizedBox(height: 12),
-            // chart
-            SizedBox(
-              height: 220,
-              child: _ChartView(
-                type: report.chartType,
-                labels: report.labels,
-                values: report.values,
-                accent: accent,
-              ),
-            ),
-            const SizedBox(height: 12),
-            // stats row
+            const SizedBox(height: 8),
+            Expanded(child: _ChartSwitcher(report: report)),
+            const SizedBox(height: 8),
             Row(
-              children: [
-                for (final s in report.stats)
-                  Expanded(
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 10),
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8F9FA),
-                        borderRadius: BorderRadius.circular(10),
-                        border: const Border(left: BorderSide(color: Color(0xFF667EEA), width: 3)),
-                      ),
+              children: report.stats
+                  .map(
+                    (s) => Expanded(
                       child: Column(
                         children: [
                           Text(s.number,
                               style: const TextStyle(
-                                  fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF2C3E50))),
-                          const SizedBox(height: 4),
-                          Text(s.label, style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                                  fontWeight: FontWeight.bold, fontSize: 16)),
+                          const SizedBox(height: 2),
+                          Text(s.label, style: TextStyle(color: Colors.grey.shade700)),
                         ],
                       ),
                     ),
-                  ),
-              ],
+                  )
+                  .toList(),
             ),
           ],
         ),
@@ -487,197 +233,153 @@ class _ReportCard extends StatelessWidget {
   }
 }
 
-class _ChartView extends StatelessWidget {
-  final String type; // 'line' | 'bar' | 'doughnut'
-  final List<String> labels;
-  final List<double> values;
-  final Color accent;
-  const _ChartView({
-    required this.type,
-    required this.labels,
-    required this.values,
-    required this.accent,
-  });
+class _ChartSwitcher extends StatelessWidget {
+  const _ChartSwitcher({required this.report});
+  final ReportCardData report;
 
   @override
   Widget build(BuildContext context) {
-    switch (type) {
-      case 'line':
-        return LineChart(LineChartData(
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, _) {
-                final i = v.toInt();
-                return i >= 0 && i < labels.length
-                    ? Transform.translate(
-                        offset: const Offset(0, 8),
-                        child: Text(labels[i], style: const TextStyle(fontSize: 10)))
-                    : const SizedBox.shrink();
-              }),
-            ),
-            leftTitles: AxisTitles(
-              sideTitles: SideTitles(showTitles: true, reservedSize: 32),
-            ),
-          ),
-          gridData: FlGridData(show: true),
-          lineBarsData: [
-            LineChartBarData(
-              isCurved: true,
-              barWidth: 3,
-              color: accent,
-              dotData: const FlDotData(show: false),
-              spots: [
-                for (int i = 0; i < values.length; i++) FlSpot(i.toDouble(), values[i]),
-              ],
-            ),
-          ],
-        ));
-      case 'bar':
-        return BarChart(BarChartData(
-          titlesData: FlTitlesData(
-            bottomTitles: AxisTitles(
-              sideTitles: SideTitles(showTitles: true, getTitlesWidget: (v, _) {
-                final i = v.toInt();
-                return i >= 0 && i < labels.length
-                    ? Transform.translate(
-                        offset: const Offset(0, 8),
-                        child: Text(labels[i], style: const TextStyle(fontSize: 10)))
-                    : const SizedBox.shrink();
-              }),
-            ),
-            leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 32)),
-          ),
-          gridData: FlGridData(show: true),
-          barGroups: [
-            for (int i = 0; i < values.length; i++)
-              BarChartGroupData(
-                x: i,
-                barRods: [BarChartRodData(toY: values[i], color: accent, borderRadius: BorderRadius.circular(4))],
+    if (report.category == 'medication') {
+      final values = report.series.first.data.map((e) => (e ?? 0).toDouble()).toList();
+      final total = values.fold<double>(0, (a, b) => a + b);
+      if (total <= 0) {
+        return const Center(child: Text('No data for this period'));
+      }
+      // ✅ RETURN the pie
+      return PieChart(
+        PieChartData(
+          sectionsSpace: 2,
+          centerSpaceRadius: 40,
+          sections: [
+            for (var i = 0; i < values.length; i++)
+              PieChartSectionData(
+                value: values[i],
+                title: '${((values[i] / total) * 100).round()}%',
+                titleStyle: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold),
+                radius: 60,
+                color: _pieColors[i % _pieColors.length],
               ),
           ],
-        ));
-      case 'doughnut':
-      default:
-        final total = values.fold<double>(0, (a, b) => a + b);
-        final sections = <PieChartSectionData>[];
-        for (int i = 0; i < values.length; i++) {
-          final v = values[i];
-          final color = HSLColor.fromAHSL(1, (i * 50) % 360.0, 0.55, 0.55).toColor();
-          sections.add(PieChartSectionData(
-            value: v,
-            color: color,
-            title: total > 0 ? '${((v / total) * 100).toStringAsFixed(0)}%' : '',
-            radius: 70,
-          ));
-        }
-        return PieChart(PieChartData(
-          sectionsSpace: 2,
-          centerSpaceRadius: 50, // donut hole
-          sections: sections,
-        ));
-    }
-  }
-}
-
-class _AlertsSection extends StatelessWidget {
-  final List<AlertItem> alerts;
-  const _AlertsSection({required this.alerts});
-
-  Color _border(String type) {
-    switch (type) {
-      case 'critical':
-        return const Color(0xFFE74C3C);
-      case 'warning':
-        return const Color(0xFFF39C12);
-      case 'info':
-      default:
-        return const Color(0xFF3498DB);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.only(left: 4, bottom: 10),
-          child: Text('Recent Alerts & Notifications',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFF2C3E50))),
         ),
-        for (final a in alerts)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border(left: BorderSide(color: _border(a.type), width: 5)),
-              borderRadius: BorderRadius.circular(12),
-              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 3))],
+      );
+    }
+
+    if (report.category == 'activity') {
+      final bars = report.series.first.data.asMap().entries.map((e) {
+        return BarChartGroupData(
+          x: e.key,
+          barRods: [
+            BarChartRodData(
+              toY: e.value.toDouble(),
+              width: 12,
+              borderRadius: BorderRadius.circular(4),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text(a.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                  Text(a.time, style: const TextStyle(fontSize: 12, color: Colors.black54)),
-                ]),
-                const SizedBox(height: 6),
-                Text(a.message),
-              ],
+          ],
+        );
+      }).toList();
+
+      return BarChart(
+        BarChartData(
+          gridData: FlGridData(show: true),
+          titlesData: FlTitlesData(
+            leftTitles:
+                const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 36)),
+            bottomTitles: AxisTitles(
+              sideTitles: SideTitles(
+                showTitles: true,
+                getTitlesWidget: (v, _) {
+                  final i = v.toInt();
+                  if (i < 0 || i >= report.labels.length) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(report.labels[i], style: const TextStyle(fontSize: 10)),
+                  );
+                },
+              ),
+            ),
+            rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+            topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          ),
+          barGroups: bars,
+        ),
+      );
+    }
+
+    final lines = report.series
+        .map(
+          (s) => LineChartBarData(
+            spots: s.data
+                .asMap()
+                .entries
+                .map((e) => FlSpot(e.key.toDouble(), e.value.toDouble()))
+                .toList(),
+            isCurved: true,
+            color: s.color,
+            barWidth: 3,
+            belowBarData: BarAreaData(show: s.filled, color: s.color.withOpacity(0.2)),
+            dotData: const FlDotData(show: false),
+          ),
+        )
+        .toList();
+
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(show: true),
+        titlesData: FlTitlesData(
+          leftTitles:
+              const AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 36)),
+          bottomTitles: AxisTitles(
+            sideTitles: SideTitles(
+              showTitles: true,
+              getTitlesWidget: (v, _) {
+                final i = v.toInt();
+                if (i < 0 || i >= report.labels.length) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(report.labels[i], style: const TextStyle(fontSize: 10)),
+                );
+              },
             ),
           ),
-      ],
+          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+        ),
+        lineBarsData: lines,
+      ),
     );
   }
 }
 
-class _NoReports extends StatelessWidget {
-  const _NoReports();
+class _AlertTile extends StatelessWidget {
+  const _AlertTile({required this.item});
+  final AlertItem item;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      alignment: Alignment.center,
-      child: const Text('No reports found for this filter.', style: TextStyle(color: Colors.black54)),
-    );
-  }
-}
+    final color = item.type == 'critical'
+        ? Colors.red.shade100
+        : item.type == 'warning'
+            ? Colors.orange.shade100
+            : Colors.blue.shade50;
+    final icon = item.type == 'critical'
+        ? Icons.error
+        : item.type == 'warning'
+            ? Icons.warning_amber
+            : Icons.info;
 
-class _ErrorBox extends StatelessWidget {
-  final String title;
-  final String message;
-  final VoidCallback onRetry;
-  final VoidCallback onLogin;
-  const _ErrorBox({
-    required this.title,
-    required this.message,
-    required this.onRetry,
-    required this.onLogin,
-  });
-
-  @override
-  Widget build(BuildContext context) {
     return Card(
-      margin: const EdgeInsets.all(16),
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      color: color,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        leading: Icon(icon, color: Colors.black54),
+        title: Text(item.title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 8),
-            Text(message, style: const TextStyle(color: Colors.red)),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                ElevatedButton(onPressed: onRetry, child: const Text('Try Again')),
-                const SizedBox(width: 12),
-                OutlinedButton(onPressed: onLogin, child: const Text('Go to Login')),
-              ],
-            ),
+            Text(item.message),
+            const SizedBox(height: 6),
+            Text(item.timeLabel, style: TextStyle(color: Colors.grey.shade700)),
           ],
         ),
       ),

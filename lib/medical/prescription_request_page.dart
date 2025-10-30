@@ -9,8 +9,8 @@ import 'controller/prescription_controller.dart';
 
 
 class PrescriptionRequestPage extends StatefulWidget {
-  final String? uidOfElder;
-  const PrescriptionRequestPage({Key? key, this.uidOfElder}) : super(key: key);
+  final String? elderlyId;
+  const PrescriptionRequestPage({Key? key, this.elderlyId}) : super(key: key);
 
   @override
   State<PrescriptionRequestPage> createState() => _PrescriptionRequestPageState();
@@ -36,13 +36,13 @@ class _PrescriptionRequestPageState extends State<PrescriptionRequestPage> {
       if (authUid == null) {
         throw 'No signed-in user';
       }
-      final userDoc = await FirebaseFirestore.instance.collection('users').doc(authUid).get();
+      final userDoc = await FirebaseFirestore.instance.collection('Account').doc(authUid).get();
       final profile = UserProfile.fromDocumentSnapshot(userDoc);
 
       // 2) Determine patient UID (elder if caregiver and linked, else self)
-      final patientUid = (profile.role == 'caregiver' && (profile.uidOfElder?.isNotEmpty ?? false))
-          ? profile.uidOfElder!
-          : (widget.uidOfElder ?? profile.uid);
+      final patientUid = (profile.userType == 'caregiver' && (profile.elderlyId?.isNotEmpty ?? false))
+          ? profile.elderlyId!
+          : (widget.elderlyId ?? profile.uid);
 
       // 3) Load active prescription
       final presc = await PrescriptionController.loadActivePrescription(patientUid);
@@ -84,7 +84,7 @@ class _PrescriptionRequestPageState extends State<PrescriptionRequestPage> {
           totalAmount: _active!.price,
           cartItems: [refillItem],
           userProfile: _currentProfile!,          // pass an instance
-          elderlyUidOverride: _patientUid, // ensure order is for the patient
+          elderlyIdOverride: _patientUid, // ensure order is for the patient
         ),
       ),
     );
@@ -119,7 +119,7 @@ class _PrescriptionRequestPageState extends State<PrescriptionRequestPage> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ConsultationRequestPage(
-          user: _currentProfile!,
+          userProfile: _currentProfile!,
           patientUid: _patientUid, // <-- REQUIRED named arg
         ),
       ),
