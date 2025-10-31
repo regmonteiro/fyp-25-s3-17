@@ -1,5 +1,24 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+// 🔹 Get Account/{docRef} by real Firebase uid stored in field 'uid'
+Future<DocumentReference<Map<String, dynamic>>> _accountDocRefByUid(
+  FirebaseFirestore db,
+  String uid,
+) async {
+  final q = await db.collection('Account').where('uid', isEqualTo: uid).limit(1).get();
+  if (q.docs.isNotEmpty) return q.docs.first.reference;
+  // fallback for old docs keyed by uid directly
+  return db.collection('Account').doc(uid);
+}
+
+/// 🔹 Get both the DocumentReference and its data as a tuple
+Future<(DocumentReference<Map<String, dynamic>>, Map<String, dynamic>)>
+    _accountDocAndDataByUid(FirebaseFirestore db, String uid) async {
+  final ref = await _accountDocRefByUid(db, uid);
+  final snap = await ref.get();
+  return (ref, snap.data() ?? <String, dynamic>{});
+}
+
 class BookingResult {
   final bool ok;
   final String message;
@@ -15,103 +34,101 @@ class GpAppointmentController {
     this.mirrorToCaregivers = true,
   }) : _db = db ?? FirebaseFirestore.instance;
 
-  /// Robustly normalize caregivers to a list of UIDs from Account/{elder}.linkedCaregivers
-  /// Accepts either:
-  /// - ['uid1','uid2'] OR
-  /// - [{'uid':'x','displayName':...}, {...}]
-  Future<List<String>> fetchLinkedCaregivers(String elderUid) async {
-    final doc = await _db.collection('Account').doc(elderUid).get();
-    final data = doc.data() ?? const <String, dynamic>{};
-    final raw = data['linkedCaregivers'];
+  // ---- linking --------------------------------------------------------------
 
+  Future<List<String>> fetchLinkedCaregivers(String elderUid) async {
+    final (elderRef, elder) = await _accountDocAndDataByUid(_db, elderUid);
+    final raw = elder['linkedCaregiverUids'] ?? elder['linkedCaregivers'];
     if (raw is List) {
       return raw.map<String>((e) {
         if (e is String) return e.trim();
-        if (e is Map) {
-          final m = Map<String, dynamic>.from(e);
-          final id = (m['uid'] as String?)?.trim();
-          return id ?? '';
-        }
+        if (e is Map) return (e['uid'] as String? ?? '').trim();
         return '';
       }).where((s) => s.isNotEmpty).toList(growable: false);
     }
     return const <String>[];
   }
 
-  /// Primary caregiver = first in linkedCaregivers list (if present).
-  /// Returns minimal map: { 'uid': <uid>, 'name': <best-effort name> }
   Future<Map<String, String>?> fetchPrimaryCaregiver(String elderUid) async {
-    final caregivers = await fetchLinkedCaregivers(elderUid);
-    if (caregivers.isEmpty) return null;
-
-    final firstUid = caregivers.first;
-    final cgDoc = await _db.collection('Account').doc(firstUid).get();
-    final cgData = cgDoc.data() ?? const <String, dynamic>{};
-
-    // Try displayName, then firstName + lastName, then fallback
-    final displayName = (cgData['displayName'] as String?)?.trim();
-    final firstName = (cgData['firstName'] as String?)?.trim();
-    final lastName  = (cgData['lastName'] as String?)?.trim();
-
-    final bestName = displayName?.isNotEmpty == true
-        ? displayName!
-        : [
-            if (firstName != null && firstName.isNotEmpty) firstName,
-            if (lastName != null && lastName.isNotEmpty) lastName,
-          ].join(' ').trim();
-
-    return {'uid': firstUid, 'name': bestName.isEmpty ? 'Caregiver' : bestName};
+    final cgs = await fetchLinkedCaregivers(elderUid);
+    if (cgs.isEmpty) return null;
+    final (ref, data) = await _accountDocAndDataByUid(_db, cgs.first);
+    final display = (data['displayName'] as String?)?.trim();
+    final first   = (data['firstName'] as String?)?.trim() ?? (data['firstname'] as String?)?.trim();
+    final last    = (data['lastName']  as String?)?.trim() ?? (data['lastname']  as String?)?.trim();
+    final best    = display?.isNotEmpty == true ? display! : [first, last].where((x) => (x ?? '').isNotEmpty).join(' ').trim();
+    return {'uid': cgs.first, 'name': best.isEmpty ? 'Caregiver' : best};
   }
 
-  /// Book a future GP call for an elder.
-  ///
-  /// Creates:
-  /// 1) Global event in /events with fields your controllers expect (elderlyId, start, end)
-  /// 2) Appointment under Account/{elder}/appointments
-  /// 3) (Optional) Mirrors an appointment doc under each caregiver’s Account/{cg}/appointments
-  /// 4) (Optional) A top-level /appointments doc for notification/Cloud Function triggers
+  /// Ensure **bi-directional** link:
+  /// caregiver.Account.elderlyIds += elderUid
+  /// elder.Account.linkedCaregiverUids += caregiverUid
+  Future<void> ensureCaregiverLink({
+    required String elderUid,
+    required String caregiverUid,
+  }) async {
+    final cgRef = await _accountDocRefByUid(_db, caregiverUid);
+    final elderRef = await _accountDocRefByUid(_db, elderUid);
+
+    final batch = _db.batch();
+    batch.set(cgRef, {'elderlyIds': FieldValue.arrayUnion([elderUid])}, SetOptions(merge: true));
+    batch.set(elderRef, {'linkedCaregiverUids': FieldValue.arrayUnion([caregiverUid])}, SetOptions(merge: true));
+    await batch.commit();
+  }
+
+  // ---- booking -------------------------------------------------------------
+
+  /// 1) /events (flat)  2) Account/{elder}/appointments
+  /// 3) mirror to each Account/{caregiver}/appointments
+  /// 4) (optional) top-level /appointments (for CF or notifications)
   Future<BookingResult> bookFutureGpCall({
     required String elderlyId,
     required String elderlyName,
     required DateTime start,
     required Duration duration,
     required String reason,
-    bool invitePrimaryCaregiver = false,
+    bool linkPrimaryCaregiverIfAny = true,
+    bool invitePrimaryCaregiver   = false,
   }) async {
     if (reason.trim().isEmpty) {
       return BookingResult(false, 'Please provide a reason for the appointment.');
     }
 
     try {
+      // resolve elder & caregivers
+      final elderRef = await _accountDocRefByUid(_db, elderlyId);
       final caregivers = await fetchLinkedCaregivers(elderlyId);
 
-      String? invitedCaregiverUid;
+      String? invitedCg;
       if (invitePrimaryCaregiver && caregivers.isNotEmpty) {
-        invitedCaregiverUid = caregivers.first;
+        invitedCg = caregivers.first;
+        if (linkPrimaryCaregiverIfAny) {
+          await ensureCaregiverLink(elderUid: elderlyId, caregiverUid: invitedCg);
+        }
       }
 
       final end = start.add(duration);
 
-      // ── 1) GLOBAL EVENT (/events)  ───────────────────────────────
-      // Use the same field names your UI/controllers use: elderlyId, start, end
+      // (1) flat event
+      final eventRef = _db.collection('events').doc();
       final eventPayload = {
         'title': 'GP Consultation (Online)',
         'description': reason,
         'type': 'gp_consultation_booking',
-        'elderlyId': elderlyId,                 // <- your controllers/rules expect this
+        'elderlyId': elderlyId,
         'elderlyName': elderlyName,
-        'linkedCaregivers': caregivers,         // FYI: optional convenience
-        'invitedCaregiverUid': invitedCaregiverUid,
+        'caregiverId': invitedCg,                 // creator/primary (optional)
+        'linkedCaregivers': caregivers,
+        'invitedCaregiverUid': invitedCg,
         'start': Timestamp.fromDate(start),
         'end': Timestamp.fromDate(end),
         'isAllDay': false,
-        'creatorUid': elderlyId,
-        'status': 'scheduled', // scheduled | canceled | done
+        'status': 'scheduled',
         'createdAt': FieldValue.serverTimestamp(),
       };
-      await _db.collection('events').add(eventPayload);
 
-      // ── 2) Elder’s appointments subcollection (Account/{elderlyId}/appointments) ──
+      // (2) elder subcollection
+      final elderApptRef = elderRef.collection('appointments').doc();
       final elderAppt = {
         'title': 'GP Consultation (Online)',
         'description': reason,
@@ -120,24 +137,20 @@ class GpAppointmentController {
         'endDateTime': Timestamp.fromDate(end),
         'isAllDay': false,
         'status': 'scheduled',
+        'mirrorEventId': eventRef.id,
         'createdAt': FieldValue.serverTimestamp(),
       };
-      await _db
-          .collection('Account')
-          .doc(elderlyId)
-          .collection('appointments')
-          .add(elderAppt);
 
-      // ── 3) Mirror to caregivers’ subcollections ──────────────────
+      final batch = _db.batch();
+      batch.set(eventRef, eventPayload);
+      batch.set(elderApptRef, elderAppt);
+
+      // (3) mirror into each caregiver's subcollection
       if (mirrorToCaregivers && caregivers.isNotEmpty) {
-        final batch = _db.batch();
         for (final cgUid in caregivers) {
-          final ref = _db
-              .collection('Account')
-              .doc(cgUid)
-              .collection('appointments')
-              .doc();
-          batch.set(ref, {
+          final cgRef = await _accountDocRefByUid(_db, cgUid);
+          final cgApptRef = cgRef.collection('appointments').doc();
+          batch.set(cgApptRef, {
             'title': 'Elder: $elderlyName — GP Consultation',
             'description': reason,
             'type': 'elder_gp_consult',
@@ -145,25 +158,28 @@ class GpAppointmentController {
             'endDateTime': Timestamp.fromDate(end),
             'isAllDay': false,
             'status': 'scheduled',
+            'elderUid': elderlyId,
+            'mirrorEventId': eventRef.id,
             'createdAt': FieldValue.serverTimestamp(),
           });
         }
-        await batch.commit();
       }
 
-      // ── 4) (Optional) Top-level /appointments doc for notifications/CF ─────
-      if (invitePrimaryCaregiver && invitedCaregiverUid != null) {
-        await _db.collection('appointments').add({
-          'elderlyUid': elderlyId,                // <- your rules check this
-          'caregiverUid': invitedCaregiverUid,
-          'timestamp': FieldValue.serverTimestamp(),
+      // (4) optional top-level marker for CF/notifications
+      if (invitedCg != null) {
+        final top = _db.collection('appointments').doc();
+        batch.set(top, {
+          'elderlyUid': elderlyId,
+          'caregiverUid': invitedCg,
           'scheduledAt': Timestamp.fromDate(start),
+          'status': 'scheduled',
           'type': 'GP Consultation',
-          'notifyCaregiver': true,               // for Cloud Function trigger
+          'createdAt': FieldValue.serverTimestamp(),
         });
       }
 
-      return BookingResult(true, 'Appointment booked. We’ll remind you before the call.');
+      await batch.commit();
+      return BookingResult(true, 'Appointment booked and synced to calendar.');
     } on FirebaseException catch (e) {
       return BookingResult(false, e.message ?? e.code);
     } catch (e) {
@@ -171,16 +187,11 @@ class GpAppointmentController {
     }
   }
 
-  /// Optional: quick reasons (chips) from Firestore config.
+  // Optional quick reasons
   Stream<List<String>> quickReasonsStream() {
-    return _db
-        .collection('config')
-        .doc('quickReasons')
-        .snapshots()
-        .map((doc) {
-      final data = doc.data();
-      if (data == null) return const <String>[];
-      final raw = data['reasons'];
+    return _db.collection('config').doc('quickReasons').snapshots().map((d) {
+      final data = d.data();
+      final raw = data?['reasons'];
       if (raw is List) return raw.map((e) => e.toString()).toList();
       return const <String>[];
     });
