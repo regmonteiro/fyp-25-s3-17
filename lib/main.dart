@@ -12,6 +12,9 @@ import 'controller/app_settings.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'features/share_experiences_service.dart';
 import 'features/controller/share_experience_controller.dart';
+import 'medical/controller/cart_controller.dart';
+import 'services/cart_repository.dart';
+
 
 
 Future<void> main() async {
@@ -22,7 +25,7 @@ Future<void> main() async {
   );
   print('[BOOT] Firebase initialized. Apps: ${Firebase.apps}');
 
-  // 🔌 Realtime Database: optional but recommended
+  //Realtime Database: optional but recommended
   try {
     // enable local cache
     FirebaseDatabase.instance.setPersistenceEnabled(true);
@@ -97,6 +100,9 @@ class MyApp extends StatelessWidget {
             create: (_) => ShareExperienceController(),
           ),
 
+          ChangeNotifierProvider(create: (_) => CartController()),
+
+
         Provider<ShareExperienceService>.value(
         value: ShareExperienceService.instance,
     ),
@@ -138,15 +144,21 @@ class _RootGate extends StatelessWidget {
     final user = context.watch<User?>();
     final profile = context.watch<UserProfile?>();
 
-    if (user == null) {
-      return const _NotSignedInScreen();
-    } else if (profile == null) {
-      return const WelcomeScreen();
-    } else {
-      return MainWrapper(userProfile: profile);
-    }
+    if (user == null) return const _NotSignedInScreen();
+    if (profile == null) return const WelcomeScreen();
+
+    // one-shot attach (idempotent)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final cart = context.read<CartController>();
+  cart.attachRepository(CartRepository());
+  await cart.loadFromFirestore();
+    });
+
+    return MainWrapper(userProfile: profile);
   }
 }
+
+
 
 class _NotSignedInScreen extends StatelessWidget {
   const _NotSignedInScreen({super.key});

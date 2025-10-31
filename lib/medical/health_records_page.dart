@@ -1,35 +1,80 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import '../../models/user_profile.dart';
 import 'controller/health_records_controller.dart';
 import 'health_upload_page.dart';
 
-class HealthRecordsPage extends StatelessWidget {
+class HealthRecordsPage extends StatefulWidget {
   final UserProfile userProfile;
   const HealthRecordsPage({super.key, required this.userProfile});
 
   @override
-  Widget build(BuildContext context) {
-    final isCaregiver = userProfile.userType == 'caregiver';
-    final elderlyUid = isCaregiver && (userProfile.elderlyId ?? '').isNotEmpty
-        ? userProfile.elderlyId!
-        : userProfile.uid;
+  State<HealthRecordsPage> createState() => _HealthRecordsPageState();
+}
 
-    final controller = HealthRecordsController(
-      elderlyUid: elderlyUid,
-      currentUserUid: userProfile.uid,
-      currentUserName: userProfile.safeDisplayName,
-    );
+
+class _HealthRecordsPageState extends State<HealthRecordsPage> {
+  HealthRecordsController? _controller;
+  bool _loading = true;
+  String? _elderUid;
+
+  @override
+  void initState() {
+    super.initState();
+    _bootstrap();
+  }
+
+  Future<void> _bootstrap() async {
+    final me = widget.userProfile;
+    final elderUid = await HealthRecordsController.resolveElderUidFor(me);
+
+    setState(() {
+      _elderUid = elderUid;
+      if (elderUid != null) {
+        _controller = HealthRecordsController(
+          elderlyUid: elderUid,            // <-- non-null here
+          currentUserUid: me.uid,
+          currentUserName: me.safeDisplayName,
+        );
+      } else {
+        _controller = null;                // caregiver has no linked elder yet
+      }
+      _loading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (_controller == null) {
+      // No elder linked yet (caregiver) → show friendly message
+      return Scaffold(
+        appBar: AppBar(title: const Text('Health Records')),
+        body: const Center(
+          child: Padding(
+            padding: EdgeInsets.all(24),
+            child: Text(
+              'No elderly is linked to your account yet.\nLink one to view or upload health records.',
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      );
+    }
 
     return ChangeNotifierProvider.value(
-      value: controller,
+      value: _controller!,
       child: DefaultTabController(
         length: 2,
         child: Scaffold(
           appBar: AppBar(
             title: const Text("Health Records"),
-            backgroundColor: Colors.blue.shade800,
+            backgroundColor: Colors.blue,
             foregroundColor: Colors.white,
             bottom: const TabBar(
               indicatorColor: Colors.white,
@@ -52,7 +97,6 @@ class HealthRecordsPage extends StatelessWidget {
     );
   }
 }
-
 class _YourRecordsView extends StatelessWidget {
   const _YourRecordsView({super.key});
 
@@ -97,11 +141,18 @@ class _YourRecordsView extends StatelessWidget {
                 ),
                 isThreeLine: true,
                 trailing: const Icon(Icons.open_in_new, color: Colors.blue),
-                onTap: () {
-                  // TODO: open a viewer / url_launcher
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Open: ${r.fileUrl}')),
-                  );
+                onTap: () async {
+                  if (r.fileUrl.isEmpty) return;
+                  final uri = Uri.tryParse(r.fileUrl);
+                  if (uri != null && await canLaunchUrl(uri)) {
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  } else {
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Could not open: ${r.fileUrl}')),
+                      );
+                    }
+                  }
                 },
               ),
             );

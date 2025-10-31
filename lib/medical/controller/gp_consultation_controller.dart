@@ -115,13 +115,12 @@ class ElderlyGPController {
   Future<void> unlinkCaregiver(String caregiverUid) async {
     if (caregiverUid.trim().isEmpty) return;
 
-    final cgQ = await _db
-        .collection(_FS.account)
-        .where(_FS.uid, isEqualTo: caregiverUid)
-        .limit(1)
-        .get();
-    if (cgQ.docs.isEmpty) return;
-    final cgRef = cgQ.docs.first.reference;
+    final cgRef = _db.collection(_FS.account).doc(caregiverUid);
+final cgSnap = await cgRef.get();
+if (!cgSnap.exists) {
+  throw StateError(' Caregiver account not found for uid=$caregiverUid');
+}
+
 
     final elderQ = await _db
         .collection(_FS.account)

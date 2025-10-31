@@ -11,7 +11,7 @@ import '../../financial/wallet_page.dart';
 import '../../medical/gp_consultation_page.dart';
 import '../../medical/appointment_booking_page.dart';
 import 'package:provider/provider.dart';
-import '../../medical/medication_shop_page.dart' as shop;
+import '../../medical/shop_page.dart' as shop;
 import '../../medical/controller/cart_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../features/share_experience_page.dart';
@@ -1078,7 +1078,7 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
               iconColor: Colors.orange.shade800,
               page: ChangeNotifierProvider(
                 create: (_) => CartController(),
-                child: const shop.MedicationShopPage(),
+                child: const shop.ShopPage(),
               ),
             ),
           ],

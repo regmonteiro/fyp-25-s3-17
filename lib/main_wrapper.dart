@@ -8,6 +8,8 @@ import 'elderly/boundary/elderly_dashboard_page.dart';
 import 'admin/boundary/admin_dashboard.dart';
 import 'models/user_profile.dart';
 import 'features/controller/community_controller.dart';
+import 'medical/controller/cart_controller.dart';
+import 'services/cart_repository.dart';
 
 class MainWrapper extends StatefulWidget {
   final UserProfile? userProfile;
@@ -21,17 +23,19 @@ class _MainWrapperState extends State<MainWrapper> {
   Future<void>? _ensureFuture;
 
   @override
-  void initState() {
-    super.initState();
-    final user = FirebaseAuth.instance.currentUser;
-    _ensureFuture = (user == null)
-    ? Future.value()
-    : _ensureUidDoc(user)
-        .timeout(const Duration(seconds: 8), onTimeout: () {
-          debugPrint('[MainWrapper] ensureUidDoc timed out — SKIPPING WRITE (UI will continue).');
-          return;
-        });
-  }
+void initState() {
+  super.initState();
+  final user = FirebaseAuth.instance.currentUser;
+
+  _ensureFuture = (user == null)
+      ? Future.value()
+      : _ensureUidDoc(user)
+          .timeout(const Duration(seconds: 8), onTimeout: () {
+            debugPrint('[MainWrapper] ensureUidDoc timed out — SKIPPING WRITE (UI will continue).');
+            return;
+          });
+}
+
 
   @override
   Widget build(BuildContext context) {

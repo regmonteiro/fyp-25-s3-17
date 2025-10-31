@@ -8,7 +8,7 @@ import '../../medical/gp_consultation_page.dart';
 import '../../medical/appointment_booking_page.dart';
 import '../../medical/consultation_history_page.dart' as ch;
 import '../../medical/health_records_page.dart' as hr;
-import '../../medical/medication_shop_page.dart' as shop;
+import '../../medical/shop_page.dart' as shop;
 import '../../financial/wallet_page.dart';
 import 'account/caregiver_access_page.dart';
 import '../../medical/controller/cart_controller.dart';
@@ -554,7 +554,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
             Icons.shopping_bag,
             Colors.orange.shade100,
             Colors.orange.shade800,
-            ChangeNotifierProvider(create: (_) => CartController(), child: const shop.MedicationShopPage()),
+            ChangeNotifierProvider(create: (_) => CartController(), child: const shop.ShopPage()),
           ),
           _buildActionButton(
             context,

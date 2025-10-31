@@ -1,3 +1,4 @@
+import 'package:elderly_aiassistant/services/cart_repository.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../financial/payment_confirmation_page.dart';
@@ -242,15 +243,22 @@ class _ProductCard extends StatelessWidget {
                     Text('S\$${(product['price'] as num).toDouble().toStringAsFixed(2)}',
                         style: TextStyle(fontWeight: FontWeight.w900, color: Colors.pink.shade600, fontSize: 16)),
                     IconButton(
-                      icon: const Icon(Icons.add_shopping_cart, color: Colors.lightGreen),
-                      onPressed: () {
-                        cart.add(product);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('${product['name']} added to cart!'),
-                            duration: const Duration(milliseconds: 800)),
-                        );
-                      },
-                    ),
+                        icon: const Icon(Icons.add_shopping_cart, color: Colors.lightGreen),
+                        onPressed: () {
+                          context.read<CartController>().addOrIncrement({
+                            'id': product['id'],
+                            'name': product['name'],
+                            'price': (product['price'] as num).toDouble(),
+                            'imageUrl': product['imageUrl'],
+                          });
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('${product['name']} added to cart!'),
+                              duration: const Duration(milliseconds: 800),
+                            ),
+                          );
+                        },
+                      ),
                   ],
                 ),
               ],

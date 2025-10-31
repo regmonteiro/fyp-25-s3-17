@@ -42,20 +42,29 @@ class _CommunicatePageState extends State<CommunicatePage> {
   }
 
   Future<void> _bootstrap() async {
-    final profile = widget.userProfile;
+  final profile = widget.userProfile;
+  final firebaseUser = _controller.firebaseUser;
+  _myUid = firebaseUser?.uid ?? profile.uid;
 
-    final firebaseUser = _controller.firebaseUser;
-    _myUid = firebaseUser?.uid ?? profile.uid;
+  String? partner = widget.partnerUid;
+  partner ??= await _controller.resolvePartnerUid(profile);
 
-    String? partner = widget.partnerUid;
-    partner ??= await _controller.resolvePartnerUid(profile);
-
-    if (!mounted) return;
-    setState(() {
-      _partnerUid = partner;
-      _loading = false;
-    });
+  // 🔹 Auto-create the link if found but missing
+  if (partner != null) {
+    if (profile.userType == 'caregiver') {
+      await _controller.ensureLink(partner, _myUid!); // elder → caregiver
+    } else {
+      await _controller.ensureLink(_myUid!, partner); // caregiver → elder
+    }
   }
+
+  if (!mounted) return;
+  setState(() {
+    _partnerUid = partner;
+    _loading = false;
+  });
+}
+
 
   @override
   void dispose() {

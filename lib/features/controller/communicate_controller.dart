@@ -14,12 +14,8 @@ import '../../elderly/boundary/models/chat_message.dart';
 ///   ts: Timestamp
 ///
 /// Account/{uid}:
-///   // elderly record
-///   linkedCaregivers: [
-///     // can be strings or maps like { uid: "...", displayName: "...", role: "primary" }
-///   ]
-///   // caregiver record
-///   linkedElderlyIds / elderlyIds / elderlyId (any of these may exist)
+///   - elderly: linkedCaregivers [uid,...]
+///   - caregiver: elderlyIds [uid,...]
 
 class CommunicateController {
   final UserProfile currentUser;
@@ -30,47 +26,73 @@ class CommunicateController {
 
   User? get firebaseUser => _auth.currentUser;
 
-  /// Stable conversation id for a pair of uids (order-independent).
+  /// Consistent conversation id (order-independent)
   String conversationIdFor(String a, String b) {
     return (a.compareTo(b) < 0) ? '${a}__${b}' : '${b}__${a}';
   }
 
-  /// Resolve partner uid based on current user type and Account document.
-  /// Returns the first reasonable link it finds.
+  /// Ensure both accounts are linked
+  Future<void> ensureLink(String elderUid, String caregiverUid) async {
+    final elderRef = _db.collection('Account').doc(elderUid);
+    final cgRef = _db.collection('Account').doc(caregiverUid);
+
+    final elderSnap = await elderRef.get();
+    final cgSnap = await cgRef.get();
+    if (!elderSnap.exists || !cgSnap.exists) return;
+
+    final elderData = elderSnap.data() ?? {};
+    final cgData = cgSnap.data() ?? {};
+
+    final elderLinks = _asStringList(elderData['linkedCaregivers']);
+    final cgLinks = _asStringList(cgData['elderlyIds']);
+
+    final batch = _db.batch();
+
+    if (!elderLinks.contains(caregiverUid)) {
+      batch.set(elderRef, {
+        'linkedCaregivers': FieldValue.arrayUnion([caregiverUid])
+      }, SetOptions(merge: true));
+    }
+
+    if (!cgLinks.contains(elderUid)) {
+      batch.set(cgRef, {
+        'elderlyIds': FieldValue.arrayUnion([elderUid])
+      }, SetOptions(merge: true));
+    }
+
+    if (batch is WriteBatch) await batch.commit();
+  }
+
+  /// Resolve partner uid via Account link fields.
   Future<String?> resolvePartnerUid(UserProfile me) async {
     final acc = await _db.collection('Account').doc(me.uid).get();
-    final data = acc.data() ?? const {};
+    final data = acc.data() ?? {};
 
     if (me.userType == 'caregiver') {
-      // caregiver -> elder
-      // Try elderlyId, elderlyIds, linkedElderlyIds
       final single = (data['elderlyId'] as String?)?.trim();
-      if (single != null && single.isNotEmpty) return single;
+      if (single?.isNotEmpty == true) return single;
 
       final many = [
         ..._asStringList(data['elderlyIds']),
         ..._asStringList(data['linkedElderlyIds']),
       ];
-      if (many.isNotEmpty) return many.first;
-      return null;
+      return many.isNotEmpty ? many.first : null;
     } else {
-      // elderly -> caregiver
-      // linkedCaregivers can be strings or maps
+      // elderly
       final raw = data['linkedCaregivers'];
       final caregivers = _normalizeCaregivers(raw);
       if (caregivers.isNotEmpty) {
-        // Prefer primary if available, else the first
         final primary = caregivers.firstWhere(
-          (m) => (m['role'] as String).toLowerCase() == 'primary',
+          (m) => (m['role'] as String?)?.toLowerCase() == 'primary',
           orElse: () => caregivers.first,
         );
-        return primary['uid'] as String;
+        return primary['uid'] as String?;
       }
       return null;
     }
   }
 
-  /// Send a message (creates the conversation container if needed).
+  /// Send chat message
   Future<void> send({
     required String myUid,
     required String partnerUid,
@@ -82,7 +104,6 @@ class CommunicateController {
 
     final now = FieldValue.serverTimestamp();
 
-    // Upsert conversation header
     await convoRef.set({
       'participants': [myUid, partnerUid],
       'updatedAt': now,
@@ -90,7 +111,6 @@ class CommunicateController {
       'lastSender': myUid,
     }, SetOptions(merge: true));
 
-    // Add message item
     await itemsRef.add({
       'senderUid': myUid,
       'text': text,
@@ -98,7 +118,7 @@ class CommunicateController {
     });
   }
 
-  /// Stream messages newest-first for the pair.
+  /// Stream of messages
   Stream<List<ChatMessage>> messagesStream({
     required String myUid,
     required String partnerUid,
@@ -115,39 +135,33 @@ class CommunicateController {
     return q.snapshots().map((snap) {
       return snap.docs.map((d) {
         final m = d.data();
-        // TODO adapt to your ChatMessage API if different
         return ChatMessage(
           id: d.id,
-          senderUid: m['senderUid'] as String? ?? '',
-          text: m['text'] as String? ?? '',
+          senderUid: m['senderUid'] ?? '',
+          text: m['text'] ?? '',
           ts: (m['ts'] as Timestamp?)?.toDate(),
         );
       }).toList();
     });
   }
 
-  // ───────────────────────── helpers ─────────────────────────
-
+  // ─────────────── Helpers ───────────────
   List<String> _asStringList(Object? raw) {
     if (raw is List) {
       return raw
-          .map((e) => (e is String) ? e.trim() : (e?.toString() ?? ''))
+          .map((e) => e is String ? e.trim() : e?.toString() ?? '')
           .where((s) => s.isNotEmpty)
           .toList();
     }
     return const [];
   }
 
-  /// Accepts null / List<String> / List<Map>
   List<Map<String, dynamic>> _normalizeCaregivers(Object? raw) {
     final list = (raw is List) ? raw : const [];
     final out = <Map<String, dynamic>>[];
     for (final e in list) {
       if (e is String) {
-        final uid = e.trim();
-        if (uid.isNotEmpty) {
-          out.add({'uid': uid, 'displayName': null, 'role': 'caregiver'});
-        }
+        out.add({'uid': e.trim(), 'displayName': null, 'role': 'caregiver'});
       } else if (e is Map) {
         final m = Map<String, dynamic>.from(e);
         final uid = (m['uid'] as String?)?.trim() ?? '';

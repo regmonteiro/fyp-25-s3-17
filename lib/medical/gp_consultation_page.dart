@@ -51,43 +51,51 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
   }
 
   Future<void> _startConsultationProcess() async {
-    final reason = _symptomsController.text.trim();
-    if (reason.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please describe your symptoms before starting.')),
-      );
-      return;
-    }
-
-    final bool? isVerified = await _showVerificationDialog(context);
-    if (isVerified != true) return;
-
-    setState(() => _isLoading = true);
-
-    // Pass the first selected caregiver for now (API supports single caregiver)
-    final String? caregiverUid = _includedCaregivers.isNotEmpty ? _includedCaregivers.first : null;
-
-    final id = await _gpController.startConsultation(
-      reason: reason,
-      caregiverUid: caregiverUid,
+  final reason = _symptomsController.text.trim();
+  if (reason.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Please describe your symptoms before starting.')),
     );
-
-    setState(() => _isLoading = false);
-
-    if (id.isNotEmpty) {
-      _activeConsultationId = id;
-      _activeConsultation = {
-        'uid': id,
-        'reason': reason,
-        'elderlyName': widget.userProfile.displayName ?? 'Patient',
-      };
-      setState(() => _showCallInit = true);
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Failed to start consultation. Please try again.')),
-      );
-    }
+    return;
   }
+
+  final bool? isVerified = await _showVerificationDialog(context);
+  if (isVerified != true) return;
+
+  setState(() => _isLoading = true);
+
+  // Pass the first selected caregiver for now (API supports single caregiver)
+  final String? caregiverUid =
+      _includedCaregivers.isNotEmpty ? _includedCaregivers.first : null;
+
+  try {
+  final id = await _gpController.startConsultation(
+    reason: reason,
+    caregiverUid: caregiverUid,
+  );
+  if (!mounted) return; // prevent setState after widget disposal
+  if (id.isEmpty) throw Exception('Consultation could not be started.');
+
+  setState(() {
+    _activeConsultationId = id;
+    _activeConsultation = {
+      'uid': id,
+      'reason': reason,
+      'elderlyName': widget.userProfile.displayName ?? 'Patient',
+    };
+    _showCallInit = true;
+    _isLoading = false;
+  });
+} catch (e, st) {
+  if (!mounted) return;
+  debugPrint('startConsultation failed: $e\n$st');
+  setState(() => _isLoading = false);
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Error starting consultation: ${e.toString()}')),
+  );
+}
+}
+
 
   Future<bool?> _showVerificationDialog(BuildContext context) {
     final safePreview = _elderlyId.length > 8 ? _elderlyId.substring(0, 8) : _elderlyId;
@@ -112,20 +120,22 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
   }
 
   Future<void> _onStartCall(String type) async {
-    setState(() {
-      _callType = type;
-      _showCallInit = false;
-      _showCall = true;
-    });
-  }
+  if (!mounted) return;
+  setState(() {
+    _callType = type;
+    _showCallInit = false;
+    _showCall = true;
+  });
+}
 
-  Future<void> _onEndCall(int seconds) async {
-    if (!mounted) return;
-    setState(() => _showCall = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Call ended. Duration: ${seconds}s')),
-    );
-  }
+Future<void> _onEndCall(int seconds) async {
+  if (!mounted) return;
+  setState(() => _showCall = false);
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text('Call ended. Duration: ${seconds}s')),
+  );
+}
+
 
   @override
   Widget build(BuildContext context) {

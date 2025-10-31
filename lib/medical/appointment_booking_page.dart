@@ -22,6 +22,9 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
   final _reasonCtrl = TextEditingController();
   bool _invitePrimaryCaregiver = false;
 
+  // NEW: prevents double taps & helps avoid re-entrancy
+  bool _busy = false;
+
   final Set<String> _selectedReasons = {};
   final _fallbackReasons = const [
     'Fever / Flu-like',
@@ -60,7 +63,7 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
       firstDate: DateTime.now(),
       lastDate: DateTime(DateTime.now().year + 2),
     );
-    if (picked != null) setState(() => _date = picked);
+    if (picked != null && mounted) setState(() => _date = picked);
   }
 
   Future<void> _pickTime() async {
@@ -68,53 +71,76 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
       context: context,
       initialTime: _time ?? TimeOfDay.now(),
     );
-    if (picked != null) setState(() => _time = picked);
+    if (picked != null && mounted) setState(() => _time = picked);
   }
 
   Future<void> _submit() async {
+    if (_busy) return;
     FocusScope.of(context).unfocus();
     if (!_formKey.currentState!.validate()) return;
 
     final start = _composeStart();
     if (start == null) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please choose date and time.')),
       );
       return;
     }
 
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Confirm booking'),
-        content: Text(
-          'Book GP consultation on ${DateFormat('EEE, MMM d, h:mm a').format(start)}'
-          '${_invitePrimaryCaregiver ? '\nCaregiver will be invited.' : ''}',
+    setState(() => _busy = true);
+    try {
+      // 1) Confirm (use dialog's ctx to pop the dialog, not the page)
+      final ok = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Confirm booking'),
+          content: Text(
+            'Book GP consultation on '
+            '${DateFormat('EEE, MMM d, h:mm a').format(start)}',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+            ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirm')),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Confirm')),
-        ],
-      ),
-    );
-    if (ok != true) return;
+      );
 
-    // ✅ Align with controller’s signature (elderlyId)
-    final res = await _ctrl.bookFutureGpCall(
-      elderlyId: widget.userProfile.uid,
-      elderlyName: widget.userProfile.safeDisplayName,
-      start: start,
-      duration: _duration,
-      reason: _reasonCtrl.text.trim(),
-      invitePrimaryCaregiver: _invitePrimaryCaregiver,
-    );
+      if (ok != true) return; // cancelled
+      if (!mounted) return;    // page might have been closed while dialog open
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(res.message), backgroundColor: res.ok ? Colors.green : Colors.red),
-    );
+      // 2) Do the booking
+      final res = await _ctrl.bookFutureGpCall(
+        elderlyId: widget.userProfile.uid,
+        elderlyName: widget.userProfile.safeDisplayName,
+        start: start,
+        duration: _duration,
+        reason: _reasonCtrl.text.trim(),
+        invitePrimaryCaregiver: _invitePrimaryCaregiver,
+      );
 
-    if (res.ok) Navigator.pop(context);
+      if (!mounted) return;
+
+      // 3) Feedback
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(res.message),
+          backgroundColor: res.ok ? Colors.green : Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+
+      // 4) Leave page on success (schedule on microtask to avoid using context in same frame)
+      if (res.ok) {
+        Future.microtask(() {
+          if (mounted) Navigator.of(context).maybePop();
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -229,7 +255,6 @@ class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
             ),
             const SizedBox(height: 16),
 
-            // ✅ Works with Account/{elderlyId}
             FutureBuilder<Map<String, String>?>(
               future: _ctrl.fetchPrimaryCaregiver(widget.userProfile.uid),
               builder: (_, careSnap) {

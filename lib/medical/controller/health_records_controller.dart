@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 
+import '../../models/user_profile.dart';
+
 class HealthRecord {
   final String id;
   final String recordName;
@@ -58,10 +60,32 @@ class HealthRecordsController extends ChangeNotifier {
   })  : _db = db ?? FirebaseFirestore.instance,
         _storage = storage ?? FirebaseStorage.instance;
 
-  /// Path: users/{elderlyUid}/health_records/{recordId}
+  /// Resolve elder uid for a given logged-in user profile.
+  /// - elderly: return self.uid
+  /// - caregiver: return first from Account/{uid}.elderlyIds (if any)
+  static Future<String?> resolveElderUidFor(UserProfile me) async {
+    if (me.userType == 'elderly') return me.uid;
+
+    // caregiver
+    final doc = await FirebaseFirestore.instance.collection('Account').doc(me.uid).get();
+    final data = doc.data() ?? {};
+    final list = _asStringList(data['elderlyIds']);
+    if (list.isNotEmpty) return list.first;
+
+    // Legacy fallbacks (if present in your DB)
+    final legacySingle = (data['elderlyId'] as String?)?.trim();
+    if (legacySingle != null && legacySingle.isNotEmpty) return legacySingle;
+
+    final legacyMany = _asStringList(data['linkedElderlyIds']);
+    if (legacyMany.isNotEmpty) return legacyMany.first;
+
+    return null;
+  }
+
+  /// Account/{elderUid}/health_records
   Stream<List<HealthRecord>> recordsStream() {
     return _db
-        .collection('users')
+        .collection('Account')
         .doc(elderlyUid)
         .collection('health_records')
         .orderBy('documentDate', descending: true)
@@ -73,7 +97,8 @@ class HealthRecordsController extends ChangeNotifier {
         .map((snap) => snap.docs.map(HealthRecord.fromDoc).toList());
   }
 
-  /// Upload one or multiple local files (mobile/desktop).
+  /// Upload documents (creates docs under Account/{elderUid}/health_records).
+  /// Your rules allow CREATE when isOwnerOrLinked(elderUid) is true.
   Future<bool> uploadRecords({
     required String recordName,
     required String recordType,
@@ -82,7 +107,7 @@ class HealthRecordsController extends ChangeNotifier {
   }) async {
     if (files.isEmpty) return false;
 
-    final col = _db.collection('users').doc(elderlyUid).collection('health_records');
+    final col = _db.collection('Account').doc(elderlyUid).collection('health_records');
 
     try {
       for (final file in files) {
@@ -112,6 +137,16 @@ class HealthRecordsController extends ChangeNotifier {
       debugPrint('Upload failed: ${e.code} ${e.message}');
       return false;
     }
+  }
+
+  static List<String> _asStringList(Object? raw) {
+    if (raw is List) {
+      return raw
+          .map((e) => e is String ? e.trim() : e?.toString() ?? '')
+          .where((s) => s.isNotEmpty)
+          .toList();
+    }
+    return const [];
   }
 
   String _guessMime(String filename) {
