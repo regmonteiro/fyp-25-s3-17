@@ -5,49 +5,52 @@ class CartController extends ChangeNotifier {
   final List<Map<String, dynamic>> _items = [];
   CartRepository? _repo;
 
-  /// Optionally attach a repository (Firestore)
   void attachRepository(CartRepository repo) {
     _repo = repo;
   }
 
   List<Map<String, dynamic>> get items => List.unmodifiable(_items);
-
-  /// Number of distinct line items
   int get count => _items.length;
-
-  /// Total units across all items
   int get totalCount =>
       _items.fold<int>(0, (sum, it) => sum + ((it['quantity'] ?? 1) as int));
-
-  /// Sum of price * quantity
   double get subtotal => _items.fold<double>(
         0.0,
         (sum, it) =>
             sum +
-            (((it['price'] as num?)?.toDouble() ?? 0.0) *
-                ((it['quantity'] ?? 1) as int)),
+            (_asDouble(it['price']) * ((it['quantity'] ?? 1) as int)),
       );
 
-  /// Load from Firestore (if attached), else do nothing
+  double _asDouble(dynamic v) {
+    if (v is num) return v.toDouble();
+    if (v is String) {
+      final cleaned = v.replaceAll(RegExp(r'[^\d\.]'), '');
+      return double.tryParse(cleaned) ?? 0.0;
+    }
+    return 0.0;
+    }
+
   Future<void> loadFromFirestore() async {
     if (_repo == null) return;
-    final list = await _repo!.fetchItems();
-    _items
-      ..clear()
-      ..addAll(list.map((e) => {
-            'id': e['id'],
-            'name': e['name'],
-            'price': (e['price'] as num?)?.toDouble() ?? 0.0,
-            'imageUrl': (e['imageUrl'] ?? '').toString(),
-            'quantity': (e['quantity'] ?? 1) as int,
-          }));
+    try {
+      final list = await _repo!.fetchItems();
+      _items
+        ..clear()
+        ..addAll(list.map((e) => {
+              'id': e['id'],
+              'name': e['name'],
+              'price': _asDouble(e['price']),
+              'imageUrl': (e['imageUrl'] ?? '').toString(),
+              'quantity': (e['quantity'] ?? 1) as int,
+            }));
+    } catch (_) {
+      // keep UI usable if permission denied / offline
+    }
     notifyListeners();
   }
 
-  /// Add or increment by 1
   Future<void> addOrIncrement(Map<String, dynamic> product) async {
     final id = product['id'].toString();
-    final price = (product['price'] as num).toDouble();
+    final price = _asDouble(product['price']);
     final imageUrl = (product['imageUrl'] ?? '').toString();
     final idx = _items.indexWhere((e) => e['id'] == id);
 
@@ -72,45 +75,49 @@ class CartController extends ChangeNotifier {
         imageUrl: imageUrl,
         deltaQty: 1,
       );
+      // optional strict sync:
+      // await loadFromFirestore();
     }
   }
 
-  /// Decrement by 1; remove if quantity hits 0
   Future<void> decrement(String id) async {
     final idx = _items.indexWhere((e) => e['id'] == id);
     if (idx < 0) return;
+
     final q = ((_items[idx]['quantity'] ?? 1) as int) - 1;
     if (q <= 0) {
       _items.removeAt(idx);
+      notifyListeners();
       if (_repo != null) await _repo!.removeItem(id);
     } else {
       _items[idx]['quantity'] = q;
+      notifyListeners();
       if (_repo != null) {
         await _repo!.upsertItem(
           productId: id,
           name: _items[idx]['name'],
-          price: (_items[idx]['price'] as num).toDouble(),
+          price: _asDouble(_items[idx]['price']),
           imageUrl: (_items[idx]['imageUrl'] ?? '').toString(),
           deltaQty: -1,
         );
       }
     }
-    notifyListeners();
+    // optional strict sync:
+    // if (_repo != null) await loadFromFirestore();
   }
 
-  /// Remove the whole line (no matter the quantity)
   Future<void> removeAt(int index) async {
     if (index < 0 || index >= _items.length) return;
     final id = _items[index]['id'].toString();
     _items.removeAt(index);
     notifyListeners();
     if (_repo != null) await _repo!.removeItem(id);
+    // optional: await loadFromFirestore();
   }
 
-  /// Clear all items
   Future<void> clear() async {
     _items.clear();
     notifyListeners();
-    if (_repo != null) await _repo!.clear();
+    if (_repo != null) await _repo!.clear(); // alias to clearCart()
   }
 }

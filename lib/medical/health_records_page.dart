@@ -35,12 +35,10 @@ class _HealthRecordsPageState extends State<HealthRecordsPage> {
       _elderUid = elderUid;
       if (elderUid != null) {
         _controller = HealthRecordsController(
-          elderlyUid: elderUid,            // <-- non-null here
-          currentUserUid: me.uid,
-          currentUserName: me.safeDisplayName,
+        elderlyId: elderUid!,
         );
       } else {
-        _controller = null;                // caregiver has no linked elder yet
+        _controller = null;
       }
       _loading = false;
     });

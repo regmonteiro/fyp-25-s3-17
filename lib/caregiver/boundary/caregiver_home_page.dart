@@ -17,6 +17,9 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../features/share_experience_page.dart';
 import '../../features/communicate_page.dart';
 import 'accounts_pages/elderly_access_page.dart';
+import '../../medical/health_upload_page.dart';
+import '../../medical/controller/health_records_controller.dart';
+
 
 // If you still need these helpers, align names; otherwise remove both.
 List<String> _extractElderlyId(Map<String, dynamic> d) {
@@ -449,7 +452,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                   _RecommendationsSection(recs: vm.learningRecs),
                   const SizedBox(height: 12),
 
-                  _ShareExperienceSection(),
+                  _CommunityFeedPreview(),
                   const SizedBox(height: 12),
 
 
@@ -611,16 +614,16 @@ class _LinkedElderInfoCardState extends State<_LinkedElderInfoCard> {
             const SizedBox(height: 10),
             if (isLinked)
               Wrap(
-                spacing: 8,
-                runSpacing: 8,
+                spacing: 12,
+                runSpacing: 12,
                 children: widget.linkedIds.map((id) {
                   final isSel = id == widget.selected;
                   return ChoiceChip(
                     label: Text(widget.elderNameFor(id)),
                     selected: isSel,
                     onSelected: (_) => widget.onPick(id),
-                    labelStyle: const TextStyle(color: Colors.white),
-                    selectedColor: Colors.white24,
+                    labelStyle: const TextStyle(color: Colors.black),
+                    selectedColor: Colors.white70,
                     backgroundColor: Colors.white12,
                     side: const BorderSide(color: Colors.white30),
                   );
@@ -1048,7 +1051,7 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
         Text('Medical Access & Shopping', style: Theme.of(context).textTheme.titleMedium),
         const SizedBox(height: 8),
         GridView.count(
-          crossAxisCount: 3,
+          crossAxisCount: 4,
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
           shrinkWrap: true,
@@ -1081,6 +1084,19 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
                 child: const shop.ShopPage(),
               ),
             ),
+            _medicalButton(
+              context,
+                title: 'Upload Health',
+                icon: Icons.upload_file,
+                color: Colors.teal.shade100,
+                iconColor: Colors.teal.shade800,
+                page: ChangeNotifierProvider(
+                create: (_) => HealthRecordsController(elderlyId: elderlyId!),
+                child: const Material(
+                child: HealthUploadPage(),
+              ),
+              ),
+            )
           ],
         ),
       ],
@@ -1439,28 +1455,33 @@ class _NotificationsSection extends StatelessWidget {
   }
 }
 
-class _ShareExperienceSection extends StatelessWidget {
+class _CommunityFeedPreview extends StatelessWidget {
   final int limit;
-  const _ShareExperienceSection({this.limit = 3});
+  const _CommunityFeedPreview({this.limit = 3});
 
   @override
   Widget build(BuildContext context) {
+    final q = FirebaseFirestore.instance
+        .collection('SharedExperiences')            // same as ElderlyHomePage
+        .orderBy('sharedAt', descending: true)
+        .limit(limit);
+
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: FirebaseFirestore.instance
-          .collection('experiences')
-          .orderBy('createdAt', descending: true)
-          .limit(limit)
-          .snapshots(),
-      builder: (context, snap) {
-        if (!snap.hasData) {
-          return const Card(child: ListTile(title: Text('Loading experiences…')));
+      stream: q.snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Card(child: ListTile(title: Text('Loading community…')));
         }
-        final docs = snap.data!.docs;
+        if (snapshot.hasError) {
+          return const Card(child: ListTile(title: Text('Error loading community feed.')));
+        }
+
+        final docs = snapshot.data?.docs ?? [];
         if (docs.isEmpty) {
           return Card(
             child: ListTile(
               leading: const Icon(Icons.groups_2_outlined),
-              title: const Text('No shared experiences yet.'),
+              title: const Text('Be the first to share in the community!'),
               trailing: TextButton.icon(
                 onPressed: () => Navigator.push(
                   context,
@@ -1472,38 +1493,44 @@ class _ShareExperienceSection extends StatelessWidget {
             ),
           );
         }
+
         return Card(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Text('Shared Experiences', style: Theme.of(context).textTheme.titleMedium),
-                    const Spacer(),
-                    TextButton.icon(
-                      onPressed: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => ShareExperiencePage()),
-                      ),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Share'),
+                Row(children: [
+                  Text('Community Feed', style: Theme.of(context).textTheme.titleMedium),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => ShareExperiencePage()),
                     ),
-                  ],
-                ),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Share'),
+                  ),
+                ]),
                 const SizedBox(height: 6),
                 ...docs.map((d) {
                   final m = d.data();
-                  final title = (m['title'] ?? 'Experience').toString();
-                  final summary = (m['summary'] ?? '').toString();
+                  final title = (m['title'] ?? '').toString().trim();
+                  final description = (m['description'] ?? '').toString().trim();
+                  final content = description.isEmpty
+                      ? (title.isEmpty ? 'Untitled' : title)
+                      : (description.length > 100 ? '${description.substring(0, 100)}…' : description);
+
                   return ListTile(
                     leading: const Icon(Icons.forum_outlined),
-                    title: Text(title),
-                    subtitle: Text(summary.isEmpty ? '—' : summary, maxLines: 2, overflow: TextOverflow.ellipsis),
+                    title: Text(content),
                     trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                     onTap: () {
-                      // If you have a details page, navigate to it here.
+                      // If you have a details page, navigate there.
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => ShareExperiencePage()),
+                      );
                     },
                   );
                 }),
@@ -1515,6 +1542,7 @@ class _ShareExperienceSection extends StatelessWidget {
     );
   }
 }
+
 
 
 class _QuickActions extends StatelessWidget {

@@ -16,6 +16,21 @@ import 'medical/controller/cart_controller.dart';
 import 'services/cart_repository.dart';
 
 
+Future<DocumentReference<Map<String, dynamic>>> _accountDocRefByUid(String uid) async {
+  final byUid = await FirebaseFirestore.instance
+      .collection('Account')
+      .where('uid', isEqualTo: uid)
+      .limit(1)
+      .get();
+  if (byUid.docs.isNotEmpty) return byUid.docs.first.reference;
+
+  // Fallback: in case some accounts were already migrated to uid docIds
+  final byId = FirebaseFirestore.instance.collection('Account').doc(uid);
+  final snap = await byId.get();
+  if (snap.exists) return byId;
+
+  throw StateError('Account doc not found for uid=$uid');
+}
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -43,23 +58,22 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
+
+
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   /// Firebase Auth stream
   Stream<User?> get _authStream => FirebaseAuth.instance.authStateChanges();
 
-  /// Firestore profile stream
-  Stream<UserProfile?> get _userProfileStream {
-    return FirebaseAuth.instance.authStateChanges().asyncExpand((user) {
-      if (user == null) return Stream<UserProfile?>.value(null);
+  /// Firestore profile stream (email-keyed Account docs)
+Stream<UserProfile?> get _userProfileStream {
+  return FirebaseAuth.instance.authStateChanges().asyncExpand((user) {
+    if (user == null) return Stream.value(null);
 
-      final docStream = FirebaseFirestore.instance
-          .collection('Account')
-          .doc(user.uid)
-          .snapshots();
-
-      return docStream.map<UserProfile?>((snap) {
+    // wrap in a stream from a future so we can listen to snapshots()
+    return Stream.fromFuture(_accountDocRefByUid(user.uid)).asyncExpand((ref) {
+      return ref.snapshots().map<UserProfile?>((snap) {
         if (!snap.exists) return null;
         try {
           return UserProfile.fromDocumentSnapshot(snap);
@@ -67,11 +81,13 @@ class MyApp extends StatelessWidget {
           debugPrint('UserProfile parse error: $e');
           return null;
         }
-      }).handleError((err, _) {
-        debugPrint('userProfileStream Firestore error: $err');
       });
+    }).handleError((err, _) {
+      debugPrint('userProfileStream Firestore error: $err');
     });
-  }
+  });
+}
+
 
   @override
   Widget build(BuildContext context) {

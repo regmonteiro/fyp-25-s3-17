@@ -8,11 +8,9 @@ import 'elderly/boundary/elderly_dashboard_page.dart';
 import 'admin/boundary/admin_dashboard.dart';
 import 'models/user_profile.dart';
 import 'features/controller/community_controller.dart';
-import 'medical/controller/cart_controller.dart';
-import 'services/cart_repository.dart';
 
 class MainWrapper extends StatefulWidget {
-  final UserProfile? userProfile;
+  final UserProfile? userProfile; // (kept for compatibility; not used)
   const MainWrapper({super.key, required this.userProfile});
 
   @override
@@ -20,22 +18,20 @@ class MainWrapper extends StatefulWidget {
 }
 
 class _MainWrapperState extends State<MainWrapper> {
-  Future<void>? _ensureFuture;
+  // ───────── helpers ─────────
+  String _emailDocIdFor(String email) {
+    final lower = email.trim().toLowerCase();
+    final at = lower.indexOf('@');
+    if (at < 0) return lower;
+    final local = lower.substring(0, at);
+    final domain = lower.substring(at + 1).replaceAll('.', '_');
+    return '$local@$domain';
+  }
 
-  @override
-void initState() {
-  super.initState();
-  final user = FirebaseAuth.instance.currentUser;
-
-  _ensureFuture = (user == null)
-      ? Future.value()
-      : _ensureUidDoc(user)
-          .timeout(const Duration(seconds: 8), onTimeout: () {
-            debugPrint('[MainWrapper] ensureUidDoc timed out — SKIPPING WRITE (UI will continue).');
-            return;
-          });
-}
-
+  bool _isValidRole(dynamic v) {
+    final s = (v is String) ? v.trim().toLowerCase() : '';
+    return s == 'elderly' || s == 'caregiver' || s == 'admin';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -43,51 +39,53 @@ void initState() {
     if (user == null) {
       return const Scaffold(body: Center(child: Text('Please log in.')));
     }
+    final email = user.email?.trim().toLowerCase();
+    if (email == null || email.isEmpty) {
+      return const _ProblemScreen(
+        message: 'This account has no email.',
+        tip: 'Use a non-anonymous account with a verified email.',
+      );
+    }
 
-    return FutureBuilder<void>(
-      future: _ensureFuture,
-      builder: (context, migSnap) {
-        if (migSnap.connectionState != ConnectionState.done) {
+    final emailDocId = _emailDocIdFor(email);
+    final emailRef = FirebaseFirestore.instance.collection('Account').doc(emailDocId);
+    final uidRef   = FirebaseFirestore.instance.collection('Account').doc(user.uid);
+
+    // First try: email-keyed doc stream
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: emailRef.snapshots(includeMetadataChanges: true),
+      builder: (context, emailSnap) {
+        // If listener itself errors (e.g., rules)
+        if (emailSnap.hasError) {
+          final err = emailSnap.error;
+          if (err is FirebaseException && err.code == 'permission-denied') {
+            return _ProblemScreen(
+              message: 'No permission to read Account/$emailDocId.',
+              tip: 'Rules must allow read when doc.email == auth.email.',
+            );
+          }
+          return _ProblemScreen(message: 'Failed to load profile.\n$err');
+        }
+
+        // While waiting, show spinner
+        if (emailSnap.connectionState == ConnectionState.waiting) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
-        if (migSnap.hasError) {
-          return _ProblemScreen(
-            message: 'Could not prepare your profile.\n${migSnap.error}',
-            tip: 'If you see "permission-denied", check /Account rules for uid OR email match.',
-          );
-        }
 
-        final uidDocRef = FirebaseFirestore.instance.collection('Account').doc(user.uid);
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: uidDocRef.snapshots(includeMetadataChanges: true),
-          builder: (context, snap) {
-            if (snap.hasError) {
-              final err = snap.error;
-              if (err is FirebaseException && err.code == 'permission-denied') {
-                return _ProblemScreen(
-                  message: 'No permission to read Account/${user.uid}.',
-                  tip: 'Rules: allow read when request.auth.uid == uid OR doc.email == auth.email.',
-                );
-              }
-              return _ProblemScreen(message: 'Failed to load profile.\n$err');
-            }
+        final emailDoc = emailSnap.data;
+        final emailExists = emailDoc != null && emailDoc.exists;
 
-            if (snap.connectionState == ConnectionState.waiting) {
-              return const Scaffold(body: Center(child: CircularProgressIndicator()));
-            }
+        // If email doc exists and role is valid → route by this doc
+        if (emailExists) {
+          final data = emailDoc!.data() ?? {};
+          final rawRole = data['userType'];
+          final role = (rawRole is String) ? rawRole.trim().toLowerCase() : '';
 
-            final doc = snap.data;
-            if (doc == null || !doc.exists) {
-              return _CreateProfileScreen(uid: user.uid, email: user.email);
-            }
+          debugPrint('[MainWrapper] emailDoc=$emailDocId role="$role"');
 
-            final data = doc.data()!;
-            final rawUserType = data['userType'];
-            final userType = (rawUserType is String) ? rawUserType.trim().toLowerCase() : '';
-
+          if (_isValidRole(role)) {
             final profile = UserProfile.fromMap(data, user.uid);
-
-            switch (userType) {
+            switch (role) {
               case 'caregiver':
                 return CaregiverDashboardPage(userProfile: profile);
               case 'elderly':
@@ -97,109 +95,63 @@ void initState() {
                 );
               case 'admin':
                 return AdminDashboard(userProfile: profile);
-              default:
-                return _ProblemScreen(
-                  message: 'Profile exists but role is missing/invalid. Got: "$rawUserType".',
-                  tip: 'Set userType to one of: elderly, caregiver, admin.',
-                );
             }
+          }
+          // If email doc exists but missing/invalid role, let user set it.
+          return _CreateProfileScreen(uid: user.uid, email: email);
+        }
+
+        // Email doc not found → fall back to UID doc stream (allowed by rules)
+        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+          stream: uidRef.snapshots(includeMetadataChanges: true),
+          builder: (context, uidSnap) {
+            if (uidSnap.hasError) {
+              final err = uidSnap.error;
+              if (err is FirebaseException && err.code == 'permission-denied') {
+                return _ProblemScreen(
+                  message: 'No permission to read Account/${user.uid}.',
+                  tip: 'Rules: allow read when request.auth.uid == uid OR doc.email == auth.email.',
+                );
+              }
+              return _ProblemScreen(message: 'Failed to load profile.\n$err');
+            }
+
+            if (uidSnap.connectionState == ConnectionState.waiting) {
+              return const Scaffold(body: Center(child: CircularProgressIndicator()));
+            }
+
+            final uidDoc = uidSnap.data;
+            if (uidDoc == null || !uidDoc.exists) {
+              // Nothing at UID either → create profile
+              return _CreateProfileScreen(uid: user.uid, email: email);
+            }
+
+            final data = uidDoc.data()!;
+            final rawRole = data['userType'];
+            final role = (rawRole is String) ? rawRole.trim().toLowerCase() : '';
+            debugPrint('[MainWrapper] uidDoc=${user.uid} role="$role"');
+
+            if (_isValidRole(role)) {
+              final profile = UserProfile.fromMap(data, user.uid);
+              switch (role) {
+                case 'caregiver':
+                  return CaregiverDashboardPage(userProfile: profile);
+                case 'elderly':
+                  return ChangeNotifierProvider(
+                    create: (_) => CommunityController(),
+                    child: ElderlyDashboardPage(userProfile: profile),
+                  );
+                case 'admin':
+                  return AdminDashboard(userProfile: profile);
+              }
+            }
+
+            // UID doc exists but invalid role
+            return _CreateProfileScreen(uid: user.uid, email: email);
           },
         );
       },
     );
-  }
-}
-
-String _legacyIdFromEmail(String email) {
-  final lower = email.trim().toLowerCase();
-  final at = lower.indexOf('@');
-  if (at < 0) return lower;
-  final local = lower.substring(0, at);
-  final domain = lower.substring(at + 1).replaceAll('.', '_');
-  return '$local@$domain';
-}
-Future<void> _ensureUidDoc(User user) async {
-  final fs = FirebaseFirestore.instance;
-  final uidRef = fs.collection('Account').doc(user.uid);
-
-  Future<void> _mirrorLegacyIfExists() async {
-    final email = user.email?.trim().toLowerCase();
-    if (email == null || email.isEmpty) return;
-
-    final legacyId = _legacyIdFromEmail(email);
-    final legacyRef = fs.collection('Account').doc(legacyId);
-
-    try {
-      final legacySnap = await legacyRef.get(const GetOptions(source: Source.server));
-      if (!legacySnap.exists) return;
-
-      final legacy = legacySnap.data() ?? {};
-      final uidSnap = await uidRef.get(const GetOptions(source: Source.server));
-      final existing = uidSnap.data() ?? {};
-
-      final desired = {
-        ...legacy,
-        'uid': user.uid,
-        'email': email,
-        'migratedFrom': legacyId,
-      };
-
-      bool needsWrite = false;
-      for (final k in desired.keys) {
-        if ('migratedAt' == k) continue;
-        if (existing[k] != desired[k]) {
-          needsWrite = true;
-          break;
-        }
-      }
-      if (!needsWrite && existing.containsKey('migratedFrom')) return;
-
-      await uidRef.set({
-        ...desired,
-        if (!existing.containsKey('migratedFrom'))
-          'migratedAt': FieldValue.serverTimestamp(),
-      }, SetOptions(merge: true));
-    } catch (e) {
-      debugPrint('[ensureUidDoc] legacy mirror skipped: $e');
-    }
-  }
-
-  try {
-    final serverSnap = await uidRef.get(const GetOptions(source: Source.server));
-    if (!serverSnap.exists) {
-      await _mirrorLegacyIfExists();
-      final after = await uidRef.get(const GetOptions(source: Source.server));
-      if (!after.exists) {
-        // create minimal doc once
-        await uidRef.set({
-          'uid': user.uid,
-          'email': user.email?.trim().toLowerCase() ?? '',
-          'userType': '', // forces profile creation screen
-          'createdAt': FieldValue.serverTimestamp(),
-        }, SetOptions(merge: true));
-      }
-    } else {
-      final data = serverSnap.data() ?? {};
-      final wantEmail = user.email?.trim().toLowerCase();
-      final needUid = data['uid'] != user.uid;
-      final needEmail = (wantEmail != null && (data['email']?.toString().toLowerCase() != wantEmail));
-      if (needUid || needEmail) {
-        await uidRef.set({
-          if (needUid) 'uid': user.uid,
-          if (needEmail) 'email': wantEmail,
-        }, SetOptions(merge: true));
-      }
-    }
-  } catch (e) {
-    // Network/rules hiccups: create a minimal shell so UI can proceed
-    debugPrint('[ensureUidDoc] error: $e — creating minimal shell.');
-    await uidRef.set({
-      'uid': user.uid,
-      'email': user.email?.trim().toLowerCase() ?? '',
-      'userType': '',
-      'createdAt': FieldValue.serverTimestamp(),
-      'ensureUidFallback': true,
-    }, SetOptions(merge: true));
   }
 }
 
@@ -246,17 +198,51 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
   bool _busy = false;
   String? _err;
 
+  String _emailDocIdFor(String email) {
+    final lower = email.trim().toLowerCase();
+    final at = lower.indexOf('@');
+    if (at < 0) return lower;
+    final local = lower.substring(0, at);
+    final domain = lower.substring(at + 1).replaceAll('.', '_');
+    return '$local@$domain';
+  }
+
   Future<void> _create() async {
-    setState(() { _busy = true; _err = null; });
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    final email = (widget.email ?? '').trim().toLowerCase();
+
     try {
-      await FirebaseFirestore.instance.collection('Account').doc(widget.uid).set({
+      // Always write to UID doc (allowed by your rules)
+      final uidRef = FirebaseFirestore.instance.collection('Account').doc(widget.uid);
+      await uidRef.set({
         'uid': widget.uid,
-        'email': (widget.email ?? '').trim().toLowerCase(),
+        'email': email,
         'userType': _userType.toLowerCase(),
         'firstname': '',
         'lastname': '',
         'createdAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
+
+      // Best-effort mirror to email-keyed doc if rules allow it
+      if (email.isNotEmpty) {
+        final emailId = _emailDocIdFor(email);
+        final emailRef = FirebaseFirestore.instance.collection('Account').doc(emailId);
+        try {
+          await emailRef.set({
+            'uid': widget.uid,
+            'email': email,
+            'userType': _userType.toLowerCase(),
+            'firstname': '',
+            'lastname': '',
+            'createdAt': FieldValue.serverTimestamp(),
+          }, SetOptions(merge: true));
+        } catch (_) {
+          // ignore if rules disallow; app will still work via UID doc fallback
+        }
+      }
     } on FirebaseException catch (e) {
       setState(() => _err = '${e.code}: ${e.message}');
     } finally {

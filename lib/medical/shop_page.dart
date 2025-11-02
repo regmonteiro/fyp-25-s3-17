@@ -1,11 +1,14 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'controller/medical_products_controller.dart';   // ensure this path matches your project
-import '../models/medical_products_entity.dart';           // ensure relative path
-import '../services/cart_repository.dart';                 // Firestore repo (NOT CartService)
+import 'controller/medical_products_controller.dart';
+import '../models/medical_products_entity.dart';
+import '../models/user_profile.dart';
+import '../services/cart_repository.dart';
+import 'cart_page.dart';
 
 class ShopPage extends StatefulWidget {
   const ShopPage({super.key});
@@ -53,7 +56,10 @@ class _ShopPageState extends State<ShopPage> {
   }
 
   Future<void> _fetchProducts() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final items = await _controller.getAllProducts();
       items.sort((a, b) => a.title.compareTo(b.title));
@@ -61,7 +67,8 @@ class _ShopPageState extends State<ShopPage> {
     } catch (_) {
       setState(() => _error = 'Failed to load products.');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (!mounted) return;
+      setState(() => _loading = false);
     }
   }
 
@@ -91,7 +98,7 @@ class _ShopPageState extends State<ShopPage> {
 
   ImageProvider _imageProvider(String? pathOrUrl) {
     if (pathOrUrl == null || pathOrUrl.isEmpty) {
-      return const AssetImage('assets/placeholder.png'); // add a tiny png in assets
+      return const AssetImage('assets/placeholder.png'); // include a tiny png in assets
     }
     if (pathOrUrl.startsWith('http')) return NetworkImage(pathOrUrl);
     if (pathOrUrl.startsWith('data:')) {
@@ -106,7 +113,6 @@ class _ShopPageState extends State<ShopPage> {
     final price = _parsePrice(p.price);
 
     try {
-      // Single upsert with deltaQty=1 (no FieldValue import needed here)
       await _cartRepo.upsertItem(
         productId: id,
         name: p.title,
@@ -116,7 +122,9 @@ class _ShopPageState extends State<ShopPage> {
       );
 
       await _loadCartCount();
-      setState(() { _messages[p.id] = 'Product is added to cart.'; });
+      setState(() {
+        _messages[p.id] = 'Product is added to cart.';
+      });
       Future.delayed(const Duration(seconds: 3), () {
         if (!mounted) return;
         setState(() => _messages.remove(p.id));
@@ -135,7 +143,7 @@ class _ShopPageState extends State<ShopPage> {
           'id': id,
           'name': p.title,
           'price': price,
-          'imageUrl': p.img ?? '',   // <- standardize on imageUrl
+          'imageUrl': p.img ?? '',
           'quantity': 1,
           'productData': {
             'category': p.category,
@@ -148,7 +156,9 @@ class _ShopPageState extends State<ShopPage> {
       }
       await sp.setString('shoppingCart', jsonEncode(list));
       await _loadCartCount();
-      setState(() { _messages[p.id] = 'Product is added to cart.'; });
+      setState(() {
+        _messages[p.id] = 'Product is added to cart.';
+      });
       Future.delayed(const Duration(seconds: 3), () {
         if (mounted) setState(() => _messages.remove(p.id));
       });
@@ -181,11 +191,24 @@ class _ShopPageState extends State<ShopPage> {
         title: const Text('AllCare Shop'),
         actions: [
           InkWell(
-            onTap: () => Navigator.pushNamed(context, '/elderly/cart'),
+            onTap: () {
+              final profile = context.read<UserProfile?>();
+              if (profile == null) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please sign in to open your cart.')),
+                );
+                return;
+              }
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => CartPage(userProfile: profile)),
+              ).then((_) => _loadCartCount());
+            },
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Row(children: [
-                const Text('🛒'), const SizedBox(width: 6),
+                const Text('🛒'),
+                const SizedBox(width: 6),
                 CircleAvatar(radius: 12, child: Text('$_cartCount')),
               ]),
             ),
@@ -224,65 +247,76 @@ class _ShopPageState extends State<ShopPage> {
                 final price = _parsePrice(p.price);
                 final oldPrice = _parsePrice(p.oldPrice);
                 final hasOld = oldPrice > price && oldPrice > 0;
+
                 return Container(
                   decoration: BoxDecoration(
-                    color: Colors.white, borderRadius: BorderRadius.circular(14),
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
                     boxShadow: const [BoxShadow(blurRadius: 6, color: Color(0x14000000))],
                   ),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    if (p.discount != null && p.discount!.isNotEmpty)
-                      Container(
-                        margin: const EdgeInsets.all(8),
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(8)),
-                        child: Text(p.discount!, style: const TextStyle(color: Colors.white)),
-                      ),
-                    Expanded(
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: Image(
-                          image: _imageProvider(p.img),
-                          fit: BoxFit.cover,
-                          errorBuilder: (_, __, ___) => Center(
-                            child: Text('Image not available', style: TextStyle(color: Colors.grey[600])),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (p.discount != null && p.discount!.isNotEmpty)
+                        Container(
+                          margin: const EdgeInsets.all(8),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(color: Colors.redAccent, borderRadius: BorderRadius.circular(8)),
+                          child: Text(p.discount!, style: const TextStyle(color: Colors.white)),
+                        ),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image(
+                            image: _imageProvider(p.img),
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                Center(child: Text('Image not available', style: TextStyle(color: Colors.grey[600]))),
                           ),
                         ),
                       ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-                      child: Text(p.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w600)),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-                      child: Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: TextStyle(color: Colors.grey[700], fontSize: 12)),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
-                      child: Row(children: [
-                        Text('\$${price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(width: 8),
-                        if (hasOld) Text('\$${oldPrice.toStringAsFixed(2)}', style: const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey)),
-                      ]),
-                    ),
-                    const Padding(
-                      padding: EdgeInsets.fromLTRB(12, 2, 12, 0),
-                      child: Text('🚚 Same day delivery', style: TextStyle(fontSize: 12)),
-                    ),
-                    const SizedBox(height: 6),
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                      child: SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(onPressed: () => _addToCart(p), child: const Text('Add to Cart')),
-                      ),
-                    ),
-                    if (_messages[p.id] != null)
                       Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                        child: Text(_messages[p.id]!, style: const TextStyle(color: Colors.green)),
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+                        child: Text(p.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600)),
                       ),
-                  ]),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                        child: Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis,
+                            style: TextStyle(color: Colors.grey[700], fontSize: 12)),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+                        child: Row(children: [
+                          Text('\$${price.toStringAsFixed(2)}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                          const SizedBox(width: 8),
+                          if (hasOld)
+                            Text('\$${oldPrice.toStringAsFixed(2)}',
+                                style: const TextStyle(decoration: TextDecoration.lineThrough, color: Colors.grey)),
+                        ]),
+                      ),
+                      const Padding(
+                        padding: EdgeInsets.fromLTRB(12, 2, 12, 0),
+                        child: Text('🚚 Same day delivery', style: TextStyle(fontSize: 12)),
+                      ),
+                      const SizedBox(height: 6),
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () => _addToCart(p),
+                            child: const Text('Add to Cart'),
+                          ),
+                        ),
+                      ),
+                      if (_messages[p.id] != null)
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                          child: Text(_messages[p.id]!, style: const TextStyle(color: Colors.green)),
+                        ),
+                    ],
+                  ),
                 );
               },
             ),
