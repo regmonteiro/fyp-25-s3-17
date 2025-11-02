@@ -19,6 +19,8 @@ import '../../features/communicate_page.dart';
 import 'accounts_pages/elderly_access_page.dart';
 import '../../medical/health_upload_page.dart';
 import '../../medical/controller/health_records_controller.dart';
+import '../../services/care_routine_template_service.dart';
+import 'care_routine_template_page.dart';
 
 
 // If you still need these helpers, align names; otherwise remove both.
@@ -437,6 +439,19 @@ Widget _buildCommunicateRow(BuildContext context) {
                     metricsDoc: vm.metricsByElder[_selectedElderlyId!],
                   ),
                   const SizedBox(height: 12),
+
+                  _ElderDetailsCard(elderUid: _selectedElderlyId!),
+                  const SizedBox(height: 12),
+
+                  _DailyCareRoutineSection(
+                    elderlyId: _selectedElderlyId!,
+                    onManage: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const CareRoutineTemplatePage()),
+                      );
+                    },
+                  ),
 
                   _AnnouncementsSection(announcements: vm.announcements),
                   const SizedBox(height: 12),
@@ -892,6 +907,178 @@ class _AllLinkedEldersDetails extends StatelessWidget {
   }
 }
 
+class _DailyCareRoutineSection extends StatelessWidget {
+  final String elderlyId;
+  final VoidCallback onManage;
+
+  const _DailyCareRoutineSection({
+    required this.elderlyId,
+    required this.onManage,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final svc = CareRoutineTemplateService();
+
+    return StreamBuilder<List<Map<String, dynamic>>>(
+      stream: svc.subscribeAssignedRoutines(elderlyId),
+      builder: (context, snap) {
+        final isLoading = snap.connectionState == ConnectionState.waiting;
+        final assigned = snap.data ?? const <Map<String, dynamic>>[];
+
+        if (isLoading) {
+          return const Card(
+            child: ListTile(
+              leading: CircularProgressIndicator(),
+              title: Text('Loading care routine…'),
+            ),
+          );
+        }
+
+        // Nothing assigned yet
+        if (assigned.isEmpty) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Text('Care Routine', style: Theme.of(context).textTheme.titleMedium),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: onManage,
+                      icon: const Icon(Icons.settings),
+                      label: const Text('Manage'),
+                    ),
+                  ]),
+                  const SizedBox(height: 6),
+                  const ListTile(
+                    leading: Icon(Icons.schedule),
+                    title: Text('No routine assigned yet'),
+                    subtitle: Text('Create or assign a routine to see daily items here.'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        // Flatten all items across assigned templates
+        final rows = <_RoutineRow>[];
+        for (final a in assigned) {
+          final tpl = Map<String, dynamic>.from(a['templateData'] as Map);
+          final name = (tpl['name'] ?? 'Routine').toString();
+          final items = List<Map<String, dynamic>>.from(tpl['items'] as List);
+          for (final it in items) {
+            rows.add(_RoutineRow(
+              templateName: name,
+              type: (it['type'] ?? '').toString(),
+              time: (it['time'] ?? '').toString(),
+              title: (it['title'] ?? '').toString(),
+              description: (it['description'] ?? '').toString(),
+            ));
+          }
+        }
+
+        // Sort by time (HH:mm); unknown times go last
+        rows.sort((a, b) => _timeKey(a.time).compareTo(_timeKey(b.time)));
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Text('Care Routine (Today)', style: Theme.of(context).textTheme.titleMedium),
+                  const Spacer(),
+                  TextButton.icon(
+                    onPressed: onManage,
+                    icon: const Icon(Icons.settings),
+                    label: const Text('Manage'),
+                  ),
+                ]),
+                const SizedBox(height: 6),
+
+                if (rows.isEmpty)
+                  const ListTile(
+                    leading: Icon(Icons.schedule),
+                    title: Text('No activities in your routine'),
+                    subtitle: Text('Add activities to the template to see them here.'),
+                  )
+                else
+                  ...rows.map((r) => ListTile(
+                        leading: _typeIcon(r.type),
+                        title: Text('${r.time.isEmpty ? '' : '${r.time} — '}${r.title}'),
+                        subtitle: r.description.isEmpty
+                            ? Text(r.templateName, style: const TextStyle(color: Colors.grey))
+                            : Text('${r.templateName} • ${r.description}'),
+                      )),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // Convert "HH:mm" into sortable integer (e.g., "08:30" -> 830)
+  static int _timeKey(String t) {
+    if (t.isEmpty) return 99999;
+    final parts = t.split(':');
+    if (parts.length != 2) return 99999;
+    final h = int.tryParse(parts[0]) ?? 99;
+    final m = int.tryParse(parts[1]) ?? 99;
+    return (h * 100) + m;
+  }
+
+  static Widget _typeIcon(String type) {
+    IconData data;
+    Color color;
+    switch (type) {
+      case 'medication':
+        data = Icons.medication;
+        color = Colors.red;
+        break;
+      case 'meal':
+        data = Icons.restaurant;
+        color = Colors.orange;
+        break;
+      case 'rest':
+        data = Icons.nightlight_round;
+        color = Colors.blueGrey;
+        break;
+      case 'entertainment':
+        data = Icons.favorite;
+        color = Colors.purple;
+        break;
+      default:
+        data = Icons.access_time;
+        color = Colors.teal;
+    }
+    return CircleAvatar(
+      radius: 16,
+      backgroundColor: color.withOpacity(0.12),
+      child: Icon(data, color: color, size: 18),
+    );
+  }
+}
+
+class _RoutineRow {
+  final String templateName;
+  final String type;
+  final String time;
+  final String title;
+  final String description;
+  _RoutineRow({
+    required this.templateName,
+    required this.type,
+    required this.time,
+    required this.title,
+    required this.description,
+  });
+}
 
 class _HealthSection extends StatelessWidget {
   final Map<String, dynamic>? metricsDoc;
@@ -1577,6 +1764,9 @@ class _QuickActions extends StatelessWidget {
       _QA(Icons.groups, 'Share Experiences', () {
         Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage()));
       }),
+      _QA(Icons.access_time, 'Care Routine', () {
+  Navigator.push(context, MaterialPageRoute(builder: (_) => const CareRoutineTemplatePage()));
+}),
       _QA(Icons.notifications, 'Notifications', onNotifications),
       _QA(Icons.settings, 'Settings', onSettings),
 
