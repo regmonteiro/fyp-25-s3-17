@@ -11,7 +11,7 @@ import '../../medical/health_records_page.dart' as hr;
 import '../../medical/shop_page.dart' as shop;
 import '../../financial/wallet_page.dart';
 import 'account/caregiver_access_page.dart';
-import '../../medical/controller/cart_controller.dart';
+import '../../services/cart_services.dart';
 import 'package:provider/provider.dart';
 import '../../features/share_experience_page.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -591,7 +591,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
             Icons.shopping_bag,
             Colors.orange.shade100,
             Colors.orange.shade800,
-            ChangeNotifierProvider(create: (_) => CartController(), child: const shop.ShopPage()),
+            const shop.ShopPage(),
           ),
           _buildActionButton(
             context,

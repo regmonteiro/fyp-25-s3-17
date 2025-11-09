@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../services/cart_services.dart';
 import '../financial/wallet_service_ps.dart';
 import '../services/address_service_fs.dart';
@@ -15,12 +16,12 @@ class CartPage extends StatefulWidget {
 class _CartPageState extends State<CartPage> {
   final _auth = FirebaseAuth.instance;
 
-  late final String _email;
-  late final CartServiceFs _cartSvc;
-  late final PaymentMethodsServiceFs _pmSvc;
-  late final OrderServiceFs _orderSvc;
-  late final AddressServiceFs _addrSvc;
-  late final WalletServicePs _walletSvc;
+  late String _email;
+  late CartServiceFs _cartSvc;
+  late PaymentMethodsServiceFs _pmSvc;
+  late OrderServiceFs _orderSvc;
+  late AddressServiceFs _addrSvc;
+  late WalletServicePs _walletSvc;
 
   bool _loading = true;
   String? _err;
@@ -38,22 +39,47 @@ class _CartPageState extends State<CartPage> {
   @override
   void initState() {
     super.initState();
+
+    // 0) Must have a signed-in user with a real email
     final user = _auth.currentUser;
-    _email = (user?.email ?? '').trim().toLowerCase();
+    final email = (user?.email ?? '').trim().toLowerCase();
+    if (user == null || email.isEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please sign in with an email to use the cart.')),
+        );
+        Navigator.of(context).pop();
+      });
+      return;
+    }
 
-    final db = FirebaseFirestore.instance;
-    _cartSvc  = CartServiceFs(email: _email, db: db);
-    _pmSvc    = PaymentMethodsServiceFs(email: _email, db: db);
-    _orderSvc = OrderServiceFs(email: _email, db: db);
-    _addrSvc  = AddressServiceFs(db: db);
-    _walletSvc = WalletServicePs(email: _email);
+    // 1) Initialize with a freshly refreshed ID token (rules read request.auth.token.*)
+    _initWithFreshToken();
+  }
 
-    _bootstrap();
+  Future<void> _initWithFreshToken() async {
+    try {
+      await FirebaseAuth.instance.currentUser?.getIdToken(true);
+
+      _email = (_auth.currentUser!.email ?? '').trim().toLowerCase();
+      final db = FirebaseFirestore.instance;
+
+      _cartSvc  = CartServiceFs(email: _email, db: db);
+      _pmSvc    = PaymentMethodsServiceFs(email: _email, db: db);
+      _orderSvc = OrderServiceFs(email: _email, db: db);
+      _addrSvc  = AddressServiceFs(db: db);
+      _walletSvc = WalletServicePs(email: _email);
+
+      await _bootstrap();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _err = 'Auth refresh failed: $e');
+    }
   }
 
   Future<void> _bootstrap() async {
     try {
-      setState(() { _loading = true; _err = null; });
+      if (mounted) setState(() { _loading = true; _err = null; });
 
       // 1) Guarantee cart doc exists before any reads
       await _cartSvc.ensureCartDoc();
@@ -114,7 +140,7 @@ class _CartPageState extends State<CartPage> {
     } else {
       _cart[idx] = {..._cart[idx], 'quantity': q - 1};
     }
-    setState(() {});
+    if (mounted) setState(() {});
 
     // persist to Firestore via service
     await _cartSvc.removeItem(productId);
@@ -260,7 +286,6 @@ class _CartPageState extends State<CartPage> {
                   const SizedBox(height: 8),
                   Text('Wallet: ${f.format(_walletBalance)}'),
                   const Divider(height: 24),
-
                   const Text('Delivery Address', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
                   if (_addresses.isEmpty)
@@ -287,7 +312,6 @@ class _CartPageState extends State<CartPage> {
                         );
                       }).toList(),
                     ),
-
                   const Divider(height: 24),
                   const Text('Payment Method', style: TextStyle(fontWeight: FontWeight.bold)),
                   RadioListTile<String>(
@@ -338,50 +362,7 @@ class _CartPageState extends State<CartPage> {
                           );
                         }).toList(),
                       ),
-                    const SizedBox(height: 8),
-                    OutlinedButton.icon(
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add Card'),
-                      onPressed: () async {
-                        final numberCtrl = TextEditingController();
-                        final holderCtrl = TextEditingController();
-                        final expiryCtrl = TextEditingController();
-                        await showDialog(
-                          context: context,
-                          builder: (_) => AlertDialog(
-                            title: const Text('Add Card'),
-                            content: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                TextField(controller: numberCtrl, decoration: const InputDecoration(labelText: 'Card Number')),
-                                TextField(controller: holderCtrl, decoration: const InputDecoration(labelText: 'Cardholder Name')),
-                                TextField(controller: expiryCtrl, decoration: const InputDecoration(labelText: 'Expiry (MM/YY)')),
-                              ],
-                            ),
-                            actions: [
-                              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-                              ElevatedButton(
-                                onPressed: () async {
-                                  final saved = await _pmSvc.saveCard({
-                                    'cardHolder': holderCtrl.text.trim(),
-                                    'fullNumber': numberCtrl.text.trim(),
-                                    'expiryDate': expiryCtrl.text.trim(),
-                                  });
-                                  setState(() {
-                                    _cards.add(saved);
-                                    _selectedCardId = saved['id'] as String;
-                                  });
-                                  if (mounted) Navigator.pop(context);
-                                },
-                                child: const Text('Save'),
-                              ),
-                            ],
-                          ),
-                        );
-                      },
-                    ),
                   ],
-
                   const SizedBox(height: 16),
                   ElevatedButton(
                     onPressed: _canPay()

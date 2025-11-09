@@ -12,7 +12,7 @@ import '../../medical/gp_consultation_page.dart';
 import '../../medical/consultation_booking_page.dart';
 import 'package:provider/provider.dart';
 import '../../medical/shop_page.dart' as shop;
-import '../../medical/controller/cart_controller.dart';
+import '../../services/cart_services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../features/share_experience_page.dart';
 import '../../features/communicate_page.dart';
@@ -1333,16 +1333,13 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
               page: ConsultationBookingPage(userProfile: userProfile),
             ),
             _medicalButton(
-              context,
-              title: 'Shop Meds',
-              icon: Icons.shopping_bag,
-              color: Colors.orange.shade100,
-              iconColor: Colors.orange.shade800,
-              page: ChangeNotifierProvider(
-                create: (_) => CartController(),
-                child: const shop.ShopPage(),
+                context,
+                title: 'Shop Meds',
+                icon: Icons.shopping_bag,
+                color: Colors.orange.shade100,
+                iconColor: Colors.orange.shade800,
+                page: const shop.ShopPage(),
               ),
-            ),
             _medicalButton(
               context,
                 title: 'Upload Health',

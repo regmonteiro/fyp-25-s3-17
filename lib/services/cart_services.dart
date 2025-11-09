@@ -1,5 +1,6 @@
-// lib/services/cart_fs.dart
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 String emailKeyFrom(String email) {
   final lower = email.trim().toLowerCase();
@@ -15,18 +16,26 @@ class CartServiceFs {
   final FirebaseFirestore db;
   CartServiceFs({required this.email, required this.db});
 
-  String get _emailKey => emailKeyFrom(email);
+  String get _emailLower => email.trim().toLowerCase();
+  String get _emailKey   => emailKeyFrom(email);
 
-  /// Canonical cart doc:
-  /// /MedicalProducts/orders (doc)/ users (col)/ {emailKey} (doc)
   CollectionReference<Map<String, dynamic>> get _ordersCol =>
       db.collection('MedicalProducts').doc('orders').collection('orders');
 
+  // ⬇️ cart doc id is exactly the emailKey, no prefix
   DocumentReference<Map<String, dynamic>> get _cartDoc =>
-  db.collection('MedicalProducts')
-    .doc('orders')
-    .collection('orders')
-    .doc('_cart_${emailKeyFrom(email)}');
+      _ordersCol.doc(_emailKey);
+
+  Future<void> ensureCartDoc() async {
+    await _cartDoc.set({
+      'docType': 'cart',
+      'emailKey': _emailKey,
+      'userEmail': _emailLower,
+      'userEmailMirror': _emailLower,
+      'items': FieldValue.arrayUnion(const []),
+      'lastUpdated': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+  }
 
     Future<List<Map<String, dynamic>>> _safeGetCartOrCreate() async {
   try {
@@ -47,16 +56,6 @@ class CartServiceFs {
 
   Future<List<Map<String, dynamic>>> getCart() => _safeGetCartOrCreate();
 
-  Future<void> ensureCartDoc() async {
-  await _cartDoc.set({
-    'docType': 'cart',
-    'emailKey': emailKeyFrom(email),
-    'userEmail': email.trim().toLowerCase(),        // for rules
-    'userEmailMirror': email.trim().toLowerCase(),  // for rules (either one ok)
-    'items': FieldValue.arrayUnion(const []),
-    'lastUpdated': FieldValue.serverTimestamp(),
-  }, SetOptions(merge: true));
-}
 
   Future<void> saveCart(List<Map<String, dynamic>> items) async {
     await _cartDoc.set({
@@ -210,55 +209,74 @@ class OrderServiceFs {
   final FirebaseFirestore db;
   OrderServiceFs({required this.email, required this.db});
 
-  // Final orders live here:
-  // /MedicalProducts/orders (doc)/ orders (col)/ {autoId}
   CollectionReference<Map<String, dynamic>> get _ordersCol =>
       db.collection('MedicalProducts').doc('orders').collection('orders');
 
-  /// Create a final order document at /MedicalProducts/orders/orders/{autoId}
+  /// Create order USING your target schema
   Future<Map<String, dynamic>> createOrder({
     required List<Map<String, dynamic>> items,
     required double totalAmount,
-    required Map<String, dynamic> deliveryAddress,
-    required Map<String, dynamic> paymentMethod,
+    required Map<String, dynamic> deliveryAddress, // we’ll store it as `address`
+    required Map<String, dynamic> paymentMethod,   // we’ll flatten to amount/method/status
   }) async {
     final now = DateTime.now().toUtc();
+    final emailLower = email.trim().toLowerCase();
+
     final docRef = _ordersCol.doc(); // auto ID
+
     final payload = {
       'id': docRef.id,
-      'userEmailMirror': email.trim().toLowerCase(), // for rules
-      'items': items,
+
+      // 📌 Your schema starts here
+      'address': {
+        'recipientName': deliveryAddress['recipientName'] ?? '',
+        'phoneNumber' : deliveryAddress['phoneNumber']  ?? '',
+        'name'        : deliveryAddress['name']         ?? '',
+        'blockStreet' : deliveryAddress['blockStreet']  ?? '',
+        'unitNumber'  : deliveryAddress['unitNumber']   ?? '',
+        'postalCode'  : deliveryAddress['postalCode']   ?? '',
+      },
+
+      // Flatten payment
+      'amount': (paymentMethod['amount'] as num?)?.toDouble() ?? totalAmount,
+      'method': (paymentMethod['method'] ?? '').toString(),
+      'status': (paymentMethod['status'] ?? 'Confirmed').toString(),
+
+      // Optional - if you use it elsewhere
+      'targetUid': FirebaseAuth.instance.currentUser?.uid ?? '',
+
+      // Order meta
+      'userEmail'  : emailLower,
+      'items'      : items,
       'totalAmount': totalAmount,
-      'deliveryAddress': deliveryAddress,
-      'paymentMethod': paymentMethod,
-      'status': 'confirmed',
-      'createdAt': now.toIso8601String(),
-      'timestamp': now.millisecondsSinceEpoch,
-      'docType': 'order',
+      'timestamp'  : now.millisecondsSinceEpoch,
+      'createdAt'  : now.toIso8601String(),
     };
+
     await docRef.set(payload);
     return payload;
   }
 
-  /// Read user orders
   Future<List<Map<String, dynamic>>> getUserOrders() async {
+    final emailLower = email.trim().toLowerCase();
+
     final qs = await _ordersCol
-        .where('userEmailMirror', isEqualTo: email.trim().toLowerCase())
-        .where('docType', isEqualTo: 'order')
+        .where('userEmail', isEqualTo: emailLower)
         .orderBy('timestamp', descending: true)
         .get();
+
     return qs.docs.map((d) => d.data()).toList();
   }
 
   Future<void> clearUserCartDoc(String email) async {
-  final emailKey = emailKeyFrom(email);
+  final key = emailKeyFrom(email);
   final cartDoc = db
     .collection('MedicalProducts')
     .doc('orders')
     .collection('orders')
-    .doc('_cart_$emailKey');
-
+    .doc(key);
   final snap = await cartDoc.get();
   if (snap.exists) await cartDoc.delete();
 }
+
 }

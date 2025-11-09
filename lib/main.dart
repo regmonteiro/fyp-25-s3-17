@@ -1,31 +1,37 @@
+
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
+
 import 'firebase_options.dart';
+
+
 import 'models/user_profile.dart';
+import 'controller/app_settings.dart';
 import 'features/controller/community_controller.dart';
+import 'features/controller/share_experience_controller.dart';
+import 'features/share_experiences_service.dart';
+import 'services/cart_services.dart';
+import 'services/account_bootstrap.dart';
 import 'main_wrapper.dart';
 import 'welcome.dart';
-import 'controller/app_settings.dart';
-import 'package:firebase_database/firebase_database.dart';
-import 'features/share_experiences_service.dart';
-import 'features/controller/share_experience_controller.dart';
-import 'medical/controller/cart_controller.dart';
-import 'services/cart_services.dart';
 import 'assistant_chat.dart';
-import 'services/account_bootstrap.dart';
-import 'dart:async';
-import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:shared_preferences/shared_preferences.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
   final p = await SharedPreferences.getInstance();
   await p.setString("selectedLang", "zh");
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   try {
     FirebaseDatabase.instance.setPersistenceEnabled(true);
   } catch (_) {}
@@ -33,96 +39,95 @@ Future<void> main() async {
   runApp(const MyApp());
 }
 
-
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  // ---------- Streams ----------
   Stream<User?> get _authStream => FirebaseAuth.instance.authStateChanges();
 
-Stream<UserProfile?> get _userProfileStream {
-  final auth = FirebaseAuth.instance;
-  final fs = FirebaseFirestore.instance;
+  Stream<UserProfile?> get _userProfileStream {
+    final auth = FirebaseAuth.instance;
+    final fs = FirebaseFirestore.instance;
 
-  Future<DocumentReference<Map<String, dynamic>>> _pickReadableAccountDoc(User u) async {
-    final uidRef = fs.collection('Account').doc(u.uid);
+    Future<DocumentReference<Map<String, dynamic>>> _pickReadableAccountDoc(
+        User u) async {
+      final uidRef = fs.collection('Account').doc(u.uid);
 
-    final email = u.email?.trim().toLowerCase();
-    if (email != null && email.isNotEmpty) {
-      final emailRef = fs.collection('Account').doc(email);
-      try {
-
-        await emailRef.get(const GetOptions(source: Source.server));
-        await upsertAccountMapping();
-        await verifyReminderAccess();
-        return emailRef;
-      } catch (_) {
+      final email = u.email?.trim().toLowerCase();
+      if (email != null && email.isNotEmpty) {
+        final emailRef = fs.collection('Account').doc(email);
+        try {
+          // Force a server read once so rules & mappings are exercised
+          await emailRef.get(const GetOptions(source: Source.server));
+          // Keep your mapping helpers (if you have them)
+          await upsertAccountMapping();
+          await verifyReminderAccess();
+          return emailRef;
+        } catch (_) {/* fall back to uid doc */}
       }
+      return uidRef;
     }
-    return uidRef;
-  }
 
-  return auth.authStateChanges().asyncExpand((user) {
-    if (user == null) return Stream.value(null);
+    return auth.authStateChanges().asyncExpand((user) {
+      if (user == null) return Stream.value(null);
 
-    final controller = StreamController<UserProfile?>();
-    _pickReadableAccountDoc(user).then((ref) {
-      final sub = ref.snapshots().listen(
-        (snap) {
-          if (!snap.exists) {
+      final controller = StreamController<UserProfile?>();
+      _pickReadableAccountDoc(user).then((ref) {
+        final sub = ref.snapshots().listen(
+          (snap) {
+            if (!snap.exists) {
+              controller.add(null);
+              return;
+            }
+            try {
+              controller.add(UserProfile.fromDocumentSnapshot(snap));
+            } catch (e) {
+              debugPrint('UserProfile parse error: $e');
+              controller.add(null);
+            }
+          },
+          onError: (e, st) {
+            debugPrint('userProfileStream error on ${ref.path}: $e');
             controller.add(null);
-            return;
-          }
-          try {
-            controller.add(UserProfile.fromDocumentSnapshot(snap));
-          } catch (e) {
-            debugPrint('UserProfile parse error: $e');
-            controller.add(null);
-          }
-        },
-        onError: (e, st) {
-          debugPrint('userProfileStream error on ${ref.path}: $e');
-          controller.add(null);
-        },
-      );
-      controller.onCancel = () => sub.cancel();
-    }).catchError((e, st) {
-      debugPrint('userProfileStream failed to pick doc: $e');
-      controller.add(null);
-      controller.close();
+          },
+        );
+        controller.onCancel = () => sub.cancel();
+      }).catchError((e, st) {
+        debugPrint('userProfileStream failed to pick doc: $e');
+        controller.add(null);
+        controller.close();
+      });
+
+      return controller.stream;
     });
-
-    return controller.stream;
-  });
-}
-
+  }
 
   @override
   Widget build(BuildContext context) {
-          return MultiProvider(
-        providers: [
-          // Auth stream
-          StreamProvider<User?>.value(
-            value: _authStream,
-            initialData: null,
-            catchError: (_, __) => null,
-          ),
+    return MultiProvider(
+      providers: [
+        // Auth stream
+        StreamProvider<User?>.value(
+          value: _authStream,
+          initialData: null,
+          catchError: (_, __) => null,
+        ),
 
-          // Profile stream
-          StreamProvider<UserProfile?>.value(
-            value: _userProfileStream,
-            initialData: null,
-            catchError: (_, __) => null,
-          ),
+        // Profile stream
+        StreamProvider<UserProfile?>.value(
+          value: _userProfileStream,
+          initialData: null,
+          catchError: (_, __) => null,
+        ),
 
-          ChangeNotifierProvider(create: (_) => CommunityController()),
-          ChangeNotifierProvider(create: (_) => AppSettings()),
-          ChangeNotifierProvider(create: (_) => ShareExperienceController()),
-          ChangeNotifierProvider(create: (_) => CartController()),
+        ChangeNotifierProvider(create: (_) => CommunityController()),
+        ChangeNotifierProvider(create: (_) => AppSettings()),
+        ChangeNotifierProvider(create: (_) => ShareExperienceController()),
 
-          Provider<ShareExperienceService>.value(
-            value: ShareExperienceService.instance,
-          ),
-        ],
+        Provider<ShareExperienceService>.value(
+          value: ShareExperienceService.instance,
+        ),
+      ],
       child: Consumer<AppSettings>(
         builder: (context, appSettings, _) {
           return MaterialApp(
@@ -144,19 +149,32 @@ Stream<UserProfile?> get _userProfileStream {
             home: const _RootGate(),
             routes: {
               '/assistant': (context) {
-                final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+                final email =
+                    FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
                 return AssistantChat(userEmail: email);
               },
             },
           );
         },
-      )
+      ),
     );
   }
 }
 
 class _RootGate extends StatelessWidget {
   const _RootGate({super.key});
+
+  Future<void> _warmUpCartForSignedInEmail() async {
+    final user = FirebaseAuth.instance.currentUser;
+    final email = user?.email?.trim().toLowerCase();
+    if (user == null || email == null || email.isEmpty) return;
+
+    await user.getIdToken(true);
+
+    final svc = CartServiceFs(email: email, db: FirebaseFirestore.instance);
+    await svc.ensureCartDoc();
+    await svc.getCart();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -166,34 +184,13 @@ class _RootGate extends StatelessWidget {
     if (user == null) return const _NotSignedInScreen();
     if (profile == null) return const WelcomeScreen();
 
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-        final profile = context.read<UserProfile>();
-        String targetUid;
-
-        if (profile.userType == 'elderly') {
-          targetUid = profile.uid;
-        } else if (profile.userType == 'caregiver') {
-          targetUid = profile.elderlyId ??
-              ((profile.elderlyIds != null && profile.elderlyIds!.isNotEmpty)
-                  ? profile.elderlyIds!.first
-                  : profile.uid);
-        } else {
-          targetUid = profile.uid;
-        }
-
-        final cart = context.read<CartController>();
-        final email = FirebaseAuth.instance.currentUser?.email?.trim().toLowerCase();
-        if (email != null && email.isNotEmpty) {
-          cart.service = CartServiceFs(email: email, db: FirebaseFirestore.instance);
-          await cart.loadFromFirestore();
-        }
-      });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _warmUpCartForSignedInEmail();
+    });
 
     return MainWrapper(userProfile: profile);
   }
 }
-
-
 
 class _NotSignedInScreen extends StatelessWidget {
   const _NotSignedInScreen({super.key});

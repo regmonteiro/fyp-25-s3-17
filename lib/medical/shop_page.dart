@@ -16,7 +16,7 @@ String emailKeyFrom(String email) {
   if (at < 0) return lower.replaceAll('.', '_');
   final local = lower.substring(0, at);
   final domain = lower.substring(at + 1).replaceAll('.', '_');
-  return '$local@$domain'; // e.g. user@gmail_com
+  return '$local@$domain';
 }
 
 // -------- local helpers used in this file --------
