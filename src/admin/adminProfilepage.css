@@ -1,0 +1,349 @@
+/* General Page Styling */
+.profile-wrapper {
+  max-width: 1200px;
+  margin: auto;
+  padding: 20px;
+  font-family: "Inter", sans-serif;
+  color: #1a1a1a;
+}
+
+/* Header */
+.profile-header {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  background: linear-gradient(90deg, #0077b6, #00b4d8);
+  color: white;
+  padding: 20px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+
+.avatar-circle {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 12px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-header h1 {
+  font-size: 1.8rem;
+  margin: 0;
+}
+
+.profile-header p {
+  font-size: 0.9rem;
+  opacity: 0.9;
+}
+
+/* Main Grid Layout */
+.profile-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+/* Login logs section - spans full width below the grid */
+.login-logs-section {
+  grid-column: 1 / -1;
+  margin-top: 20px;
+}
+
+/* Alerts */
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  margin-bottom: 15px;
+  font-size: 0.9rem;
+}
+
+.alert-error {
+  background: #ffe5e5;
+  color: #c92a2a;
+}
+
+.alert-success {
+  background: #e6f7f1;
+  color: #0a7d5e;
+}
+
+/* Profile Card */
+.profile-card {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0, 119, 182, 0.08);
+}
+
+.profile-card h2 {
+  margin-bottom: 15px;
+  color: #0077b6;
+}
+
+/* Sidebar */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.sidebar-card {
+  background: white;
+  padding: 20px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0, 119, 182, 0.08);
+}
+
+.sidebar-card h3 {
+  margin-bottom: 15px;
+  color: #0077b6;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-card p {
+  font-size: 0.95rem;
+  margin: 10px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #1a1a1a;
+}
+
+/* Danger zone specific styles */
+.danger-zone {
+  border: 2px solid #ff4d4f;
+  background-color: #fffafa;
+}
+
+.danger-zone h3 {
+  color: #ff4d4f !important;
+}
+
+.danger-zone p {
+  color: #7c0a02;
+  margin-bottom: 15px;
+}
+
+.btn-danger {
+  width: 100%;
+  background: #ff4d4f;
+  border: none;
+  color: white;
+  padding: 12px;
+  border-radius: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 0.2s;
+}
+
+.btn-danger:hover {
+  background: #d9363e;
+}
+
+.btn-danger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Form Fields */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 15px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.85rem;
+  font-weight: 500;
+  gap: 5px;
+}
+
+label span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+input,
+select {
+  padding: 8px 10px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+input:focus,
+select:focus {
+  outline: none;
+  border-color: #00b4d8;
+  box-shadow: 0 0 0 2px rgba(0, 180, 216, 0.2);
+}
+
+.full-width {
+  grid-column: 1 / -1;
+}
+
+/* Buttons */
+.form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 15px;
+  flex-wrap: wrap;
+}
+
+.btn-primary {
+  background: #0077b6;
+  color: white;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 15px;
+  width: 150px;
+  height: 50px;
+}
+
+.btn-primary:hover {
+  background: #005f87;
+}
+
+.btn-secondary {
+  background: #caf0f8;
+  color: #0077b6;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.btn-secondary:hover {
+  background: #ade8f4;
+}
+
+.btn-subscription {
+  background-color: #3399ff;
+  color: white;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: background 0.2s;
+  height: 50px;
+}
+
+.btn-subscription:hover {
+  background-color: #267acc;
+}
+
+/* Login Logs */
+.login-logs-section {
+  margin-top: 25px;
+  background: white;
+  padding: 15px;
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(0, 119, 182, 0.08);
+  overflow: hidden;
+  border: 1px solid #cce4ff;
+}
+
+.login-logs-section h3 {
+  color: #004d99;
+  margin-top: 0;
+}
+
+/* Recent Login History Table */
+.login-history-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+  font-size: 0.95rem;
+}
+
+.login-history-table th,
+.login-history-table td {
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.login-history-table th {
+  background: linear-gradient(90deg, #0077b6, #00b4d8);
+  color: white;
+  font-weight: 600;
+}
+
+.login-history-table tr:nth-child(even) {
+  background-color: #f0f8ff;
+}
+
+.login-history-table tr:nth-child(odd) {
+  background-color: #ffffff;
+}
+
+.login-history-table tr:hover {
+  background-color: #e0f2ff;
+}
+
+.login-history-table td:first-child {
+  font-weight: 500;
+  color: #0077b6;
+}
+
+/* Loading Screen */
+.loading-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 80vh;
+  gap: 15px;
+}
+
+.loading-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid #caf0f8;
+  border-top: 3px solid #0077b6;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .profile-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .form-actions {
+    flex-direction: column;
+  }
+  
+  .btn-primary, .btn-secondary, .btn-subscription {
+    width: 100%;
+  }
+}

@@ -1,0 +1,315 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+.shop-container {
+    min-height: 100vh;
+}
+
+header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 15px 20px;
+    border-bottom: 1px solid #a8c4f0;
+}
+
+header h2 {
+    margin: 0;
+    color: #333;
+}
+
+.cart-icon {
+    font-size: 22px;
+    cursor: pointer;
+    position: relative;
+    padding: 8px;
+    border-radius: 50%;
+    transition: all 0.3s ease;
+    border: 1px solid #0073e6;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.cart-icon:hover {
+    background-color: #a8c4f0;
+    transform: scale(1.05);
+}
+
+.cart-count {
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    background: #e60000;
+    color: #fff;
+    font-size: 12px;
+    font-weight: bold;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    border: 2px solid #ffffff;
+}
+
+/* FIXED: Changed nav.categories to .categories */
+.categories {
+    padding: 10px 20px;
+    border-bottom: 1px solid #a8c4f0;
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* FIXED: Changed nav.categories a to .categories a */
+.categories a,
+.categories button { /* Added button selector for your JSX */
+    text-decoration: none;
+    color: #0073e6;
+    font-size: 14px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    transition: all 0.3s ease;
+    background: #ffffff;
+    border: 1px solid #0073e6;
+    cursor: pointer;
+    font-family: Arial, sans-serif;
+}
+
+.categories a:hover,
+.categories button:hover {
+    background: #0073e6;
+    color: white;
+    transform: translateY(-2px);
+    box-shadow: 0 2px 8px rgba(0, 115, 230, 0.3);
+}
+
+.categories a.active,
+.categories button.active {
+    background: #0073e6;
+    color: white;
+    font-weight: bold;
+    box-shadow: 0 2px 4px rgba(0, 115, 230, 0.4);
+    border-color: #005bb5;
+}
+
+.product-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+    padding: 20px;
+    min-height: 500px;
+}
+
+.product-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 15px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 380px;
+    transition: all 0.3s ease;
+    border: 1px solid #e0e0e0;
+}
+
+.product-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.product-card img {
+    width: 90%;
+    height: 150px;
+    object-fit: contain;
+    border-radius: 8px;
+    background: #f8f8f8;
+    flex-shrink: 0;
+    padding: 10px;
+    border: 1px solid #f0f0f0;
+}
+
+.product-card .title {
+    font-size: 16px;
+    font-weight: bold;
+    margin: 10px 0 5px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    color: #333;
+}
+
+.product-card .description {
+    font-size: 12px;
+    color: #666;
+    margin: 5px 0 10px;
+    line-height: 1.4;
+    min-height: 50px;
+    flex: 1;
+}
+
+.product-card .price {
+    font-size: 16px;
+    color: #000;
+    margin: 0 0 5px 0;
+    font-weight: bold;
+}
+
+.product-card .delivery {
+    font-size: 12px;
+    color: #0073e6;
+    margin: 0 0 10px 0;
+}
+
+.old-price {
+    text-decoration: line-through;
+    color: #999;
+    font-size: 14px;
+    margin-left: 8px;
+    font-weight: normal;
+}
+
+.discount {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    background: #e60000;
+    color: #fff;
+    padding: 3px 8px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: bold;
+    z-index: 1;
+}
+
+.add-to-cart {
+    margin-top: auto;
+    padding: 12px;
+    background: #0073e6;
+    color: #fff;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-size: 14px;
+    width: 100%;
+    transition: all 0.3s ease;
+    font-weight: bold;
+}
+
+.add-to-cart:hover {
+    background: #005bb5;
+    transform: translateY(-2px);
+    box-shadow: 0 2px 8px rgba(0, 115, 230, 0.3);
+}
+
+.added-message {
+    color: #4CAF50;
+    font-size: 12px;
+    font-weight: bold;
+    text-align: center;
+    margin-top: 8px;
+    animation: fadeInOut 3s ease-in-out;
+    display: block;
+}
+
+@keyframes fadeInOut {
+    0% {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    20% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    80% {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    100% {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+}
+
+.loading, .error-message {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 200px;
+    font-size: 18px;
+}
+
+.retry-button {
+    margin-left: 10px;
+    padding: 5px 10px;
+    background: #0073e6;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .product-grid {
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 15px;
+        padding: 15px;
+    }
+    
+    .categories {
+        gap: 10px;
+        padding: 8px 15px;
+    }
+    
+    .categories a,
+    .categories button {
+        padding: 6px 12px;
+        font-size: 13px;
+    }
+    
+    .product-card {
+        height: 360px;
+        padding: 12px;
+    }
+    
+    .product-card img {
+        height: 140px;
+    }
+}
+
+@media (max-width: 480px) {
+    .product-grid {
+        grid-template-columns: 1fr;
+        gap: 12px;
+        padding: 12px;
+    }
+    
+    .categories {
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding: 8px 12px;
+    }
+    
+    .categories a,
+    .categories button {
+        white-space: nowrap;
+        flex-shrink: 0;
+    }
+    
+    header {
+        padding: 12px 15px;
+    }
+    
+    header h2 {
+        font-size: 18px;
+    }
+}

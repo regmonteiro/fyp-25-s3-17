@@ -1,0 +1,10 @@
+{
+  "title": "🌐 Update Personal Preference",
+  "subtitle": "Choose your preferred language or dialect for interacting with your AI Assistant.",
+  "english": "English",
+  "tamil": "Tamil",
+  "tbcDialect": "TBC Dialect",
+  "confirm": "Confirm",
+  "successMessage": "Your AI Assistant preference has been updated to {{language}}.",
+  "errorMessage": "⚠ Please select a language before confirming."
+}
