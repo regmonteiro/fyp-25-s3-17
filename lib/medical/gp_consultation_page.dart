@@ -4,6 +4,8 @@ import 'controller/gp_consultation_controller.dart';
 import '../../models/user_profile.dart';
 import '../webrtc/video_call_widgets.dart';
 
+
+enum _ConsultMode { consult, prescription }
 class GPConsultationPage extends StatefulWidget {
   final UserProfile userProfile;
   /// Optional override; defaults to userProfile.uid (elderly self)
@@ -24,7 +26,15 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
   late final Stream<UserProfile?> _elderlyAcct$;
 
   final TextEditingController _symptomsController = TextEditingController();
+
+  final TextEditingController _medicationController = TextEditingController();
+  final TextEditingController _dosageController = TextEditingController();
+  final TextEditingController _daysController = TextEditingController();
+  final TextEditingController _notesController = TextEditingController();
+
+  _ConsultMode _mode = _ConsultMode.consult;
   final Set<String> _includedCaregivers = <String>{};
+
 
   bool _isLoading = false;
 
@@ -47,6 +57,10 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
   @override
   void dispose() {
     _symptomsController.dispose();
+    _medicationController.dispose();
+    _dosageController.dispose();
+    _daysController.dispose();
+    _notesController.dispose();
     super.dispose();
   }
 
@@ -96,6 +110,57 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
 }
 }
 
+Future<void> _submitPrescriptionRequest() async {
+  final reason = _symptomsController.text.trim(); // short clinical context
+  final med    = _medicationController.text.trim();
+  final dose   = _dosageController.text.trim();
+  final days   = int.tryParse(_daysController.text.trim().isEmpty ? '0' : _daysController.text.trim()) ?? 0;
+  if (med.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Medication name is required.')),
+    );
+    return;
+  }
+
+  setState(() => _isLoading = true);
+
+  try {
+    // pick first caregiver if any (same as your consult)
+    final String? caregiverUid = _includedCaregivers.isNotEmpty ? _includedCaregivers.first : null;
+
+    final reqId = await _gpController.createPrescriptionRequest(
+      elderlyId: _elderlyId,
+      medicationName: med,
+      dosage: dose,
+      supplyDays: days,
+      reason: reason,
+      caregiverUid: caregiverUid,
+      notes: _notesController.text.trim(),
+    );
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    // optional: clear fields
+    _medicationController.clear();
+    _dosageController.clear();
+    _daysController.clear();
+    _notesController.clear();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Prescription request submitted. Ref: $reqId')),
+    );
+  } catch (e, st) {
+    debugPrint('createPrescriptionRequest failed: $e\n$st');
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Error: ${e.toString()}')),
+    );
+  }
+}
+
+
 
   Future<bool?> _showVerificationDialog(BuildContext context) {
     final safePreview = _elderlyId.length > 8 ? _elderlyId.substring(0, 8) : _elderlyId;
@@ -120,22 +185,20 @@ class _GPConsultationPageState extends State<GPConsultationPage> {
   }
 
   Future<void> _onStartCall(String type) async {
-  if (!mounted) return;
-  setState(() {
-    _callType = type;
-    _showCallInit = false;
-    _showCall = true;
-  });
-}
+    setState(() {
+      _callType = type;
+      _showCallInit = false;
+      _showCall = true;
+    });
+  }
 
-Future<void> _onEndCall(int seconds) async {
-  if (!mounted) return;
-  setState(() => _showCall = false);
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text('Call ended. Duration: ${seconds}s')),
-  );
-}
-
+  Future<void> _onEndCall(int seconds) async {
+    if (!mounted) return;
+    setState(() => _showCall = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Call ended. Duration: ${seconds}s')),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -158,8 +221,8 @@ Future<void> _onEndCall(int seconds) async {
                 final title = elderly == null
                     ? 'Consult a GP Now'
                     : 'Consult a GP Now — ${[
-                        elderly.firstName,
-                        elderly.lastName
+                        elderly.firstname,
+                        elderly.lastname
                       ].where((s) => (s ?? '').trim().isNotEmpty).join(' ').trim()}';
                 return Card(
                   elevation: 4,
@@ -189,6 +252,22 @@ Future<void> _onEndCall(int seconds) async {
             ),
 
             const SizedBox(height: 24),
+            Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('Consult GP now'),
+                    selected: _mode == _ConsultMode.consult,
+                    onSelected: (_) => setState(() => _mode = _ConsultMode.consult),
+                  ),
+                  const SizedBox(width: 12),
+                  ChoiceChip(
+                    label: const Text('Request prescription'),
+                    selected: _mode == _ConsultMode.prescription,
+                    onSelected: (_) => setState(() => _mode = _ConsultMode.prescription),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
             const Text('1. Describe your symptoms:',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
@@ -205,13 +284,50 @@ Future<void> _onEndCall(int seconds) async {
                 ),
               ),
             ),
-
+            if (_mode == _ConsultMode.prescription) ...[
+              const SizedBox(height: 24),
+              const Text('Prescription details',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 8),
+              TextFormField(
+                controller: _medicationController,
+                decoration: const InputDecoration(
+                  labelText: 'Medication name (required)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _dosageController,
+                decoration: const InputDecoration(
+                  labelText: 'Dosage & frequency (e.g., 5mg, 1 tab twice daily)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _daysController,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Days of supply (e.g., 30)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextFormField(
+                controller: _notesController,
+                maxLines: 3,
+                decoration: const InputDecoration(
+                  labelText: 'Notes to GP (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+            ],
             const SizedBox(height: 32),
             const Text('2. Three-Way Call Option:',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
 
-            // ✅ Caregivers are queried from Account where linkedElderUids contains elderly UID
             StreamBuilder<List<UserProfile>>(
               stream: _gpController.caregiversForElderlyStream(),
               builder: (context, snap) {
@@ -239,8 +355,8 @@ Future<void> _onEndCall(int seconds) async {
                   children: caregivers.map((cg) {
                     final cgUid = cg.uid;
                     final name = [
-                      (cg.firstName ?? '').trim(),
-                      (cg.lastName ?? '').trim(),
+                      (cg.firstname ?? '').trim(),
+                      (cg.lastname ?? '').trim(),
                     ].where((s) => s.isNotEmpty).join(' ');
                     final fallback = cgUid.length > 8 ? '${cgUid.substring(0, 8)}…' : cgUid;
                     final label = name.isNotEmpty ? name : fallback;
@@ -272,13 +388,23 @@ Future<void> _onEndCall(int seconds) async {
               width: double.infinity,
               height: 60,
               child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _startConsultationProcess,
+                onPressed: _isLoading
+                  ? null
+                  : () {
+
+                      if (_mode == _ConsultMode.consult) {
+                        _startConsultationProcess();
+                      } else {
+                        _submitPrescriptionRequest();
+                      }
+                    },
                 icon: _isLoading
-                    ? const SizedBox(
-                        width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
-                    : const Icon(Icons.video_call, size: 28),
+                    ? const SizedBox(width: 24, height: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
+                    : Icon(_mode == _ConsultMode.consult ? Icons.video_call : Icons.medical_services, size: 28),
                 label: Text(
-                  _isLoading ? 'Starting Consultation...' : 'Start Immediate GP Call',
+                  _isLoading
+                      ? (_mode == _ConsultMode.consult ? 'Starting Consultation...' : 'Submitting...')
+                      : (_mode == _ConsultMode.consult ? 'Start Immediate GP Call' : 'Request Prescription'),
                   style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                 ),
                 style: ElevatedButton.styleFrom(

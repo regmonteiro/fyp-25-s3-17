@@ -8,6 +8,7 @@ import 'elderly/boundary/elderly_dashboard_page.dart';
 import 'admin/boundary/admin_dashboard.dart';
 import 'models/user_profile.dart';
 import 'features/controller/community_controller.dart';
+import 'services/account_bootstrap.dart';
 
 class MainWrapper extends StatefulWidget {
   final UserProfile? userProfile; // (kept for compatibility; not used)
@@ -19,140 +20,64 @@ class MainWrapper extends StatefulWidget {
 
 class _MainWrapperState extends State<MainWrapper> {
   // ───────── helpers ─────────
-  String _emailDocIdFor(String email) {
-    final lower = email.trim().toLowerCase();
-    final at = lower.indexOf('@');
-    if (at < 0) return lower;
-    final local = lower.substring(0, at);
-    final domain = lower.substring(at + 1).replaceAll('.', '_');
-    return '$local@$domain';
-  }
+  String _emailKeyFor(String email) => emailKeyFrom(email);
 
   bool _isValidRole(dynamic v) {
     final s = (v is String) ? v.trim().toLowerCase() : '';
     return s == 'elderly' || s == 'caregiver' || s == 'admin';
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) {
-      return const Scaffold(body: Center(child: Text('Please log in.')));
-    }
-    final email = user.email?.trim().toLowerCase();
-    if (email == null || email.isEmpty) {
-      return const _ProblemScreen(
-        message: 'This account has no email.',
-        tip: 'Use a non-anonymous account with a verified email.',
-      );
-    }
+  Widget _uidOrCreate(String uid, String email) {
+  // If you no longer use UID docs, jump straight to create:
+  return _CreateProfileScreen(uid: uid, email: email);
+}
 
-    final emailDocId = _emailDocIdFor(email);
-    final emailRef = FirebaseFirestore.instance.collection('Account').doc(emailDocId);
-    final uidRef   = FirebaseFirestore.instance.collection('Account').doc(user.uid);
+@override
+Widget build(BuildContext context) {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return const Scaffold(body: Center(child: Text('Please log in.')));
 
-    // First try: email-keyed doc stream
-    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-      stream: emailRef.snapshots(includeMetadataChanges: true),
-      builder: (context, emailSnap) {
-        // If listener itself errors (e.g., rules)
-        if (emailSnap.hasError) {
-          final err = emailSnap.error;
-          if (err is FirebaseException && err.code == 'permission-denied') {
-            return _ProblemScreen(
-              message: 'No permission to read Account/$emailDocId.',
-              tip: 'Rules must allow read when doc.email == auth.email.',
-            );
-          }
-          return _ProblemScreen(message: 'Failed to load profile.\n$err');
+  final email = user.email?.trim().toLowerCase() ?? '';
+  final emailDocId = emailKeyFrom(email);
+  final emailRef = FirebaseFirestore.instance.collection('Account').doc(emailDocId);
+
+  return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+    stream: emailRef.snapshots(includeMetadataChanges: true),
+    builder: (context, snap) {
+      // If rules say permission-denied, *don’t* show an error page — continue.
+      if (snap.hasError) {
+        final err = snap.error;
+        if (err is FirebaseException && err.code == 'permission-denied') {
+          return _uidOrCreate(user.uid, email);
         }
+        return _ProblemScreen(message: 'Failed to load profile.\n$err');
+      }
 
-        // While waiting, show spinner
-        if (emailSnap.connectionState == ConnectionState.waiting) {
-          return const Scaffold(body: Center(child: CircularProgressIndicator()));
-        }
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      }
 
-        final emailDoc = emailSnap.data;
-        final emailExists = emailDoc != null && emailDoc.exists;
+      final doc = snap.data;
+      if (doc == null || !doc.exists) {
+        // Nothing at /Account/{emailKey} yet → create
+        return _uidOrCreate(user.uid, email);
+      }
 
-        // If email doc exists and role is valid → route by this doc
-        if (emailExists) {
-          final data = emailDoc!.data() ?? {};
-          final rawRole = data['userType'];
-          final role = (rawRole is String) ? rawRole.trim().toLowerCase() : '';
+      final data = doc.data()!;
+      final role = (data['userType'] as String? ?? '').trim().toLowerCase();
+      if (role == 'elderly') {
+        final profile = UserProfile.fromMap(data, user.uid);
+        return ChangeNotifierProvider(create: (_) => CommunityController(),
+          child: ElderlyDashboardPage(userProfile: profile));
+      }
+      if (role == 'caregiver') return CaregiverDashboardPage(userProfile: UserProfile.fromMap(data, user.uid));
+      if (role == 'admin')     return AdminDashboard(userProfile: UserProfile.fromMap(data, user.uid));
 
-          debugPrint('[MainWrapper] emailDoc=$emailDocId role="$role"');
-
-          if (_isValidRole(role)) {
-            final profile = UserProfile.fromMap(data, user.uid);
-            switch (role) {
-              case 'caregiver':
-                return CaregiverDashboardPage(userProfile: profile);
-              case 'elderly':
-                return ChangeNotifierProvider(
-                  create: (_) => CommunityController(),
-                  child: ElderlyDashboardPage(userProfile: profile),
-                );
-              case 'admin':
-                return AdminDashboard(userProfile: profile);
-            }
-          }
-          // If email doc exists but missing/invalid role, let user set it.
-          return _CreateProfileScreen(uid: user.uid, email: email);
-        }
-
-        // Email doc not found → fall back to UID doc stream (allowed by rules)
-        return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
-          stream: uidRef.snapshots(includeMetadataChanges: true),
-          builder: (context, uidSnap) {
-            if (uidSnap.hasError) {
-              final err = uidSnap.error;
-              if (err is FirebaseException && err.code == 'permission-denied') {
-                return _ProblemScreen(
-                  message: 'No permission to read Account/${user.uid}.',
-                  tip: 'Rules: allow read when request.auth.uid == uid OR doc.email == auth.email.',
-                );
-              }
-              return _ProblemScreen(message: 'Failed to load profile.\n$err');
-            }
-
-            if (uidSnap.connectionState == ConnectionState.waiting) {
-              return const Scaffold(body: Center(child: CircularProgressIndicator()));
-            }
-
-            final uidDoc = uidSnap.data;
-            if (uidDoc == null || !uidDoc.exists) {
-              // Nothing at UID either → create profile
-              return _CreateProfileScreen(uid: user.uid, email: email);
-            }
-
-            final data = uidDoc.data()!;
-            final rawRole = data['userType'];
-            final role = (rawRole is String) ? rawRole.trim().toLowerCase() : '';
-            debugPrint('[MainWrapper] uidDoc=${user.uid} role="$role"');
-
-            if (_isValidRole(role)) {
-              final profile = UserProfile.fromMap(data, user.uid);
-              switch (role) {
-                case 'caregiver':
-                  return CaregiverDashboardPage(userProfile: profile);
-                case 'elderly':
-                  return ChangeNotifierProvider(
-                    create: (_) => CommunityController(),
-                    child: ElderlyDashboardPage(userProfile: profile),
-                  );
-                case 'admin':
-                  return AdminDashboard(userProfile: profile);
-              }
-            }
-
-            // UID doc exists but invalid role
-            return _CreateProfileScreen(uid: user.uid, email: email);
-          },
-        );
-      },
-    );
-  }
+      // Doc exists but no role yet → create/complete profile
+      return _CreateProfileScreen(uid: user.uid, email: email);
+    },
+  );
+}
 }
 
 // ─────────────────── UI helpers ───────────────────
@@ -165,6 +90,11 @@ class _ProblemScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Profile Issue')),
+      floatingActionButton: FloatingActionButton(
+    backgroundColor: Colors.deepPurple,
+    onPressed: () => Navigator.pushNamed(context, '/assistant'),
+    child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+  ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -198,14 +128,7 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
   bool _busy = false;
   String? _err;
 
-  String _emailDocIdFor(String email) {
-    final lower = email.trim().toLowerCase();
-    final at = lower.indexOf('@');
-    if (at < 0) return lower;
-    final local = lower.substring(0, at);
-    final domain = lower.substring(at + 1).replaceAll('.', '_');
-    return '$local@$domain';
-  }
+  String _emailKeyFor(String email) => emailKeyFrom(email);
 
   Future<void> _create() async {
     setState(() {
@@ -228,8 +151,8 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
 
       // Best-effort mirror to email-keyed doc if rules allow it
       if (email.isNotEmpty) {
-        final emailId = _emailDocIdFor(email);
-        final emailRef = FirebaseFirestore.instance.collection('Account').doc(emailId);
+        final emailDocId = _emailKeyFor(email); // was _emailDocIdFor
+        final emailRef   = FirebaseFirestore.instance.collection('Account').doc(emailDocId);
         try {
           await emailRef.set({
             'uid': widget.uid,
@@ -254,6 +177,11 @@ class _CreateProfileScreenState extends State<_CreateProfileScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Create Profile')),
+      floatingActionButton: FloatingActionButton(
+    backgroundColor: Colors.deepPurple,
+    onPressed: () => Navigator.pushNamed(context, '/assistant'),
+    child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+  ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [

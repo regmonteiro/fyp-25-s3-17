@@ -4,7 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart'; // for Timestamp
 import 'package:provider/provider.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 
-import '../../controller/community_controller.dart';
+import '../../../features/controller/community_controller.dart';
 import '../post.dart';
 import '../../../models/user_profile.dart';
 

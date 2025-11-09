@@ -17,7 +17,6 @@ class CaregiverReportsController {
     final caregiverUid = _auth.currentUser?.uid;
     if (caregiverUid == null) throw Exception('Not authenticated');
 
-    // ALWAYS read from Account/{uid}
     final caregiverDoc$ = _db.collection('Account').doc(caregiverUid).snapshots();
 
     await for (final cgSnap in caregiverDoc$) {
@@ -227,13 +226,10 @@ class CaregiverReportsController {
     return set.toList();
   }
 
-  Future<List<ElderlySummary>> _fetchEldersSummaries(List<String> elderIds) async {
-    final out = <ElderlySummary>[];
-    for (final id in elderIds) {
-      out.add(await _fetchElderSummary(id));
-    }
-    return out;
-  }
+ Future<List<ElderlySummary>> _fetchEldersSummaries(List<String> elderlyIds) async {
+  return Future.wait(elderlyIds.map(_fetchElderSummary));
+}
+
 
   // READ FROM Account/{uid} and use your known name fields
   Future<ElderlySummary> _fetchElderSummary(String elderlyUid) async {

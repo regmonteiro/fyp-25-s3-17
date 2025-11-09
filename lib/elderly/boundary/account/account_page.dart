@@ -10,6 +10,7 @@ import 'caregiver_access_page.dart';
 import 'password_settings_page.dart';
 import 'support_feedback_page.dart';
 import 'settings_page.dart';
+import '../../../assistant_chat.dart';
 
 class AccountPage extends StatelessWidget {
   const AccountPage({Key? key}) : super(key: key);
@@ -19,6 +20,19 @@ class AccountPage extends StatelessWidget {
     final ctrl = AccountController();
 
     return Scaffold(
+            floatingActionButton: FloatingActionButton(
+        backgroundColor: Colors.deepPurple,
+        onPressed: () {
+          final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AssistantChat(userEmail: email),
+            ),
+          );
+        },
+        child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+      ),
       appBar: AppBar(title: const Text("Account")),
       body: ListView(
         padding: const EdgeInsets.all(16),

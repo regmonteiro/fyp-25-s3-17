@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../models/user_profile.dart';
 import 'elderly_home_page.dart';
-import 'events_page.dart';
-import 'ai_assistant_page.dart';
 import 'learning_page.dart';
 import 'account/account_page.dart';
 import '../controller/elderly_dashboard_controller.dart';
+import 'create_event_reminders_page.dart';
+import 'view_activties_page.dart';
 
 class ElderlyDashboardPage extends StatefulWidget {
   final UserProfile userProfile;
@@ -27,8 +27,8 @@ class _ElderlyDashboardPageState extends State<ElderlyDashboardPage> {
     _navigatorKeys = List.generate(5, (_) => GlobalKey<NavigatorState>());
     _rootPages = [
       ElderlyHomePage(userProfile: widget.userProfile),
-      const EventsPage(),
-      AiAssistantPage(),
+      const CreateEventRemindersPage(),
+      const ViewActivitiesPage(),
       const LearningResourcesPageRT(),
       const AccountPage(),
     ];
@@ -92,8 +92,8 @@ class _ElderlyDashboardPageState extends State<ElderlyDashboardPage> {
           type: BottomNavigationBarType.fixed,
           items: const [
             BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: 'Home'),
-            BottomNavigationBarItem(icon: Icon(Icons.calendar_today_outlined), label: 'Events'),
-            BottomNavigationBarItem(icon: Icon(Icons.mic), label: 'AI Assistant'),
+            BottomNavigationBarItem(icon: Icon(Icons.calendar_today_outlined), label: 'Create Event Reminders'),
+            BottomNavigationBarItem(icon: Icon(Icons.volunteer_activism_outlined), label: 'Activities'),
             BottomNavigationBarItem(icon: Icon(Icons.book_outlined), label: 'Learning'),
             BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Account'),
           ],

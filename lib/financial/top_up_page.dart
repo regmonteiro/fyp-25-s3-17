@@ -4,6 +4,7 @@ import 'wallet_controller.dart';
 import 'payment_methods_page.dart';
 import '../models/user_profile.dart';
 
+
 class TopUpPage extends StatefulWidget {
   final UserProfile userProfile;
   const TopUpPage({super.key, required this.userProfile});
@@ -74,9 +75,8 @@ class _TopUpPageState extends State<TopUpPage> {
                       ),
                     );
 
-                    if (selection == null) return; // user backed out
+                    if (selection == null) return;
 
-                    // 2) Perform top-up (store which method was used)
                     try {
                       await wallet.topUpWallet(
                         amount: amount,

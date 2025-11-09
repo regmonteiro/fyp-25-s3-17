@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:elderly_aiassistant/main_wrapper.dart';
+import 'services/account_bootstrap.dart';
 
 class LoginPage extends StatefulWidget {
   const LoginPage({Key? key}) : super(key: key);
@@ -40,8 +41,9 @@ class _LoginPageState extends State<LoginPage> {
       // refresh custom claims so RoleRouter sees the right role immediately
       await cred.user?.getIdTokenResult(true);
 
-      if (!mounted) return;
+      await upsertAccountMapping();
 
+      if (!mounted) return;
 
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const MainWrapper(userProfile: null)),
@@ -123,5 +125,6 @@ class _LoginPageState extends State<LoginPage> {
         ),
       ),
       );
+      
   }
 }

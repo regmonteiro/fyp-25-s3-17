@@ -1,136 +1,120 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-/// One parser to handle Firestore Timestamp, RTDB ms epoch, or ISO-8601 string.
+/// Helper to parse any date type safely.
 DateTime? parseAnyDate(dynamic v) {
   if (v == null) return null;
-  if (v is Timestamp) return v.toDate();                      // Firestore
-  if (v is int) return DateTime.fromMillisecondsSinceEpoch(v); // Realtime DB (ms)
+  if (v is Timestamp) return v.toDate();                      // Firestore Timestamp
+  if (v is int) return DateTime.fromMillisecondsSinceEpoch(v); // RTDB ms epoch
   if (v is String) return DateTime.tryParse(v);                // ISO string
   return null;
 }
 
 class UserProfile {
+  // ------------------ Core Identity ------------------
   final String uid;
   final String? email;
   final String? displayName;
-  final String? firstName;
-  final String? lastName;
+  final String? firstname;
+  final String? lastname;
   final String? userType;
+  final String? phoneNum;
+
   final String? elderlyId;
 
-  /// Store as DateTime in the model regardless of backend type.
+
+  final List<String>? elderlyIds;
+
+
   final DateTime? dob;
   final DateTime? createdAt;
 
-  final List<String>? linkedElders;
-  final List<String>? linkedCaregivers;
 
   UserProfile({
     required this.uid,
     this.email,
-    this.firstName,
     this.displayName,
-    this.lastName,
+    this.firstname,
+    this.lastname,
     this.userType,
+    this.phoneNum,
     this.elderlyId,
+    this.elderlyIds,
     this.dob,
     this.createdAt,
-    this.linkedElders,
-    this.linkedCaregivers,
   });
 
+  // ------------------ Computed Properties ------------------
   String get safeDisplayName {
     if ((displayName ?? '').isNotEmpty) return displayName!;
-    if ((firstName ?? '').isNotEmpty && (lastName ?? '').isNotEmpty) {
-      return '$firstName $lastName';
+    if ((firstname ?? '').isNotEmpty && (lastname ?? '').isNotEmpty) {
+      return '$firstname $lastname';
     }
-    if ((firstName ?? '').isNotEmpty) return firstName!;
+    if ((firstname ?? '').isNotEmpty) return firstname!;
     return 'User';
   }
 
-  /// Build from a generic Map (works for Firestore & RTDB payloads).
+  // ------------------ Factory Builders ------------------
   factory UserProfile.fromMap(Map<String, dynamic> map, String uid) {
-    final rawUserType = map['userType'];
     return UserProfile(
       uid: uid,
       email: map['email'] as String?,
-      displayName: (map['displayName'] as String?)?.trim(),
-      firstName: (map['firstName'] as String?)?.trim(),
-      lastName: (map['lastName'] as String?)?.trim(),
-      userType: rawUserType is String ? rawUserType.trim().toLowerCase() : null,
+      displayName: (map['displayName'] ?? '').toString().trim(),
+      firstname: (map['firstname'] ?? map['firstname'] ?? '').toString().trim(),
+      lastname: (map['lastname'] ?? map['lastname'] ?? '').toString().trim(),
+      userType: (map['userType'] as String?)?.trim().toLowerCase(),
+      phoneNum: (map['phoneNum'] ?? map['phone'] ?? '').toString().trim(),
       elderlyId: map['elderlyId'] as String?,
-      dob: parseAnyDate(map['dob'] ?? map['dobMs']),
-      createdAt: parseAnyDate(map['createdAt'] ?? map['createdAtMs']),
-      linkedElders:
-          (map['linkedElders'] as List?)?.map((e) => e.toString()).toList(),
-      linkedCaregivers:
-          (map['linkedCaregivers'] as List?)?.map((e) => e.toString()).toList(),
+      elderlyIds: (map['elderlyIds'] as List?)?.map((e) => e.toString()).toList(),
+      dob: parseAnyDate(map['dob']),
+      createdAt: parseAnyDate(map['createdAt']),
     );
   }
 
-  /// Build specifically from a Firestore doc snapshot.
-  factory UserProfile.fromDocumentSnapshot(
-      DocumentSnapshot<Map<String, dynamic>> snap) {
-    final m = snap.data() ?? <String, dynamic>{};
-    return UserProfile(
-      uid: snap.id,
-      email: m['email'] as String?,
-      displayName: (m['displayName'] as String?)?.trim(),
-      firstName: (m['firstName'] as String?)?.trim(),
-      lastName: (m['lastName'] as String?)?.trim(),
-      userType: (m['userType'] as String?)?.trim().toLowerCase(),
-      elderlyId: m['elderlyId'] as String?,
-      dob: parseAnyDate(m['dob'] ?? m['dobMs']),
-      createdAt: parseAnyDate(m['createdAt'] ?? m['createdAtMs']),
-      linkedElders:
-          (m['linkedElders'] as List?)?.map((e) => e.toString()).toList(),
-      linkedCaregivers:
-          (m['linkedCaregivers'] as List?)?.map((e) => e.toString()).toList(),
-    );
+  factory UserProfile.fromDocumentSnapshot(DocumentSnapshot<Map<String, dynamic>> snap) {
+    final data = snap.data() ?? <String, dynamic>{};
+    return UserProfile.fromMap(data, snap.id);
   }
 
-  /// Optional: a neutral in-memory map (not for direct Firestore/RTDB writes).
-  Map<String, dynamic> toModelMap() => {
-        'uid': uid,
-        'email': email,
-        'displayName': displayName,
-        'firstName': firstName,
-        'lastName': lastName,
-        'userType': userType,
-        'elderlyId': elderlyId,
-        'dob': dob,               // Keep as DateTime in memory
-        'createdAt': createdAt,   // Keep as DateTime in memory
-        'linkedElders': linkedElders,
-        'linkedCaregivers': linkedCaregivers,
-      }..removeWhere((k, v) => v == null);
-
-  /// For Firestore writes (DateTime → Timestamp).
+  // ------------------ Serialization ------------------
   Map<String, dynamic> toFirestoreMap() => {
         'uid': uid,
         'email': email,
         'displayName': displayName,
-        'firstName': firstName,
-        'lastName': lastName,
+        'firstname': firstname,
+        'lastname': lastname,
         'userType': userType,
+        'phoneNum': phoneNum,
         'elderlyId': elderlyId,
+        'elderlyIds': elderlyIds,
         if (dob != null) 'dob': Timestamp.fromDate(dob!),
         if (createdAt != null) 'createdAt': Timestamp.fromDate(createdAt!),
-        'linkedElders': linkedElders,
-        'linkedCaregivers': linkedCaregivers,
       }..removeWhere((k, v) => v == null);
 
-  /// For Realtime Database writes (DateTime → ms epoch ints).
   Map<String, dynamic> toRealtimeMap() => {
         'uid': uid,
         'email': email,
         'displayName': displayName,
-        'firstName': firstName,
-        'lastName': lastName,
+        'firstname': firstname,
+        'lastname': lastname,
         'userType': userType,
+        'phoneNum': phoneNum,
         'elderlyId': elderlyId,
+        'elderlyIds': elderlyIds,
         if (dob != null) 'dobMs': dob!.millisecondsSinceEpoch,
         if (createdAt != null) 'createdAtMs': createdAt!.millisecondsSinceEpoch,
-        'linkedElders': linkedElders,
-        'linkedCaregivers': linkedCaregivers,
+      }..removeWhere((k, v) => v == null);
+
+  Map<String, dynamic> toModelMap() => {
+        'uid': uid,
+        'email': email,
+        'displayName': displayName,
+        'firstname': firstname,
+        'lastname': lastname,
+        'userType': userType,
+        'phoneNum': phoneNum,
+        'elderlyId': elderlyId,
+        'elderlyIds': elderlyIds,
+        'dob': dob,
+        'createdAt': createdAt,
       }..removeWhere((k, v) => v == null);
 }

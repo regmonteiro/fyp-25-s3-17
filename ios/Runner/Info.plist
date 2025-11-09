@@ -82,5 +82,11 @@
 <key>NSBluetoothAlwaysUsageDescription</key>
 <string>This app may use Bluetooth audio devices.</string>
 
+<key>NSMicrophoneUsageDescription</key>
+<string>This app needs the microphone for voice input.</string>
+<key>NSSpeechRecognitionUsageDescription</key>
+<string>This app needs speech recognition to transcribe your voice.</string>
+
+
 </dict>
 </plist>

@@ -44,7 +44,7 @@ class _FS {
 }
 
 class ElderlyGPController {
-  final String elderlyId; // REAL Firebase UID of the elderly
+  final String elderlyId;
   final FirebaseFirestore _db;
   final FirebaseAuth _auth;
 
@@ -62,11 +62,47 @@ class ElderlyGPController {
     }
     return u;
   }
+  Future<String> createPrescriptionRequest({
+    required String elderlyId,
+    required String medicationName,
+    String? dosage,
+    int? supplyDays,
+    String? reason,
+    String? caregiverUid,
+    String? notes,
+  }) async {
+    final db = FirebaseFirestore.instance;
+    final now = FieldValue.serverTimestamp();
+
+    final doc = db
+        .collection('Account')
+        .doc(elderlyId)
+        .collection('consultations')
+        .doc();
+
+    final data = {
+      'type': 'prescription_request',   
+      'status': 'pending',
+      'elderUid': elderlyId,
+      'caregiverUid': caregiverUid,
+      'medicationName': medicationName,
+      'dosage': (dosage ?? '').trim(),
+      'supplyDays': supplyDays ?? 0,
+      'reason': (reason ?? '').trim(),
+      'notes': (notes ?? '').trim(),
+      'createdAt': now,
+      'updatedAt': now,
+      'requestedBy': FirebaseFirestore.instance.app.name, 
+    };
+
+    await doc.set(data);
+    return doc.id;
+  }
 
   Future<void> ensureCaregiverLink(String caregiverUid) async {
     if (caregiverUid.trim().isEmpty) return;
 
-    // locate caregiver Account doc by REAL uid
+  
     final cgQ = await _db
         .collection(_FS.account)
         .where(_FS.uid, isEqualTo: caregiverUid)
@@ -81,7 +117,7 @@ class ElderlyGPController {
       throw StateError('Account for uid=$caregiverUid is not a caregiver.');
     }
 
-    // locate elderly Account doc by REAL uid
+    
     final elderQ = await _db
         .collection(_FS.account)
         .where(_FS.uid, isEqualTo: elderlyId)
@@ -92,7 +128,7 @@ class ElderlyGPController {
     }
     final elderRef = elderQ.docs.first.reference;
 
-    // write both directions atomically
+    
     final batch = _db.batch();
     batch.set(
       cgRef,
@@ -111,7 +147,7 @@ class ElderlyGPController {
     await batch.commit();
   }
 
-  /// Optional: unlink if you need it
+  
   Future<void> unlinkCaregiver(String caregiverUid) async {
     if (caregiverUid.trim().isEmpty) return;
 
@@ -151,7 +187,7 @@ if (!cgSnap.exists) {
   CollectionReference<Map<String, dynamic>> _consultsCol(String uid) =>
       _db.collection(_FS.account).doc(uid).collection('consultations');
 
-  /// Start a consultation for this elderly.
+  
   /// If [caregiverUid] is provided, we ensure the link exists first.
   Future<String> startConsultation({
     required String reason,
@@ -173,7 +209,7 @@ if (!cgSnap.exists) {
     final nowServer = FieldValue.serverTimestamp();
     final includeCaregiver = caregiverUid != null && caregiverUid.isNotEmpty;
 
-    // Find the elderly's Account doc (email-keyed or otherwise) by REAL uid
+    
     final elderQ = await _db
         .collection(_FS.account)
         .where(_FS.uid, isEqualTo: elderlyId)
@@ -225,7 +261,7 @@ if (!cgSnap.exists) {
     });
   }
 
-  /// Latest in-progress consultation(s) for the elderly
+  
   Stream<QuerySnapshot<Map<String, dynamic>>> activeConsultationsStream() {
     const inProgress = ['active', 'Pending GP Connection'];
 
@@ -247,10 +283,6 @@ if (!cgSnap.exists) {
         });
   }
 
-  // ───────────────────────────────────────────────────────────────────────────
-  // Account lookups
-
-  /// Stream the elderly Account as UserProfile (by REAL uid)
   Stream<UserProfile?> elderlyAccountStream() {
     return _db
         .collection(_FS.account)
@@ -284,7 +316,6 @@ if (!cgSnap.exists) {
     .snapshots()
     .asyncExpand((s) {
       if (s.docs.isEmpty) {
-        // ⬇️ put the generic on Stream<...>, and return the right empty value
         return Stream<List<QuerySnapshot<Map<String, dynamic>>>>.value(
           const <QuerySnapshot<Map<String, dynamic>>>[],
         );
@@ -311,7 +342,7 @@ if (!cgSnap.exists) {
           base.where(_FS.uid, whereIn: c).snapshots(),
       ];
 
-      // Rx.combineLatestList returns Stream<List<QuerySnapshot<...>>>
+     
       return Rx.combineLatestList(streams);
     });
 
@@ -328,7 +359,7 @@ if (!cgSnap.exists) {
           for (final d in qs.docs) rows.add(d.data());
         }
 
-        // de-dup by REAL uid
+        
         final byUid = <String, Map<String, dynamic>>{};
         for (final m in rows) {
           final id = (m[_FS.uid] ?? '').toString();
@@ -340,8 +371,8 @@ if (!cgSnap.exists) {
           return UserProfile(
             uid: (m[_FS.uid] ?? '').toString(),
             email: m['email'] as String?,
-            firstName: (m['firstname'] ?? m['firstName']) as String?,
-            lastName: (m['lastname'] ?? m['lastName']) as String?,
+            firstname: (m['firstname'] ?? m['firstName']) as String?,
+            lastname: (m['lastname'] ?? m['lastName']) as String?,
             userType: 'caregiver',
           );
         }).toList(growable: false);
@@ -385,8 +416,8 @@ if (!cgSnap.exists) {
         return UserProfile(
           uid: (data['uid'] ?? doc.id).toString(),
           email: data['email'] as String?,
-          firstName: data['firstName'] as String?,
-          lastName: data['lastName'] as String?,
+          firstname: data['firstName'] as String?,
+          lastname: data['lastName'] as String?,
           userType: 'caregiver',
           elderlyId: elderlyId,
         );

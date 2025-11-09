@@ -6,10 +6,10 @@ import '../../models/user_profile.dart';
 import '../../ui/widgets/kpi_card.dart';
 import '../controller/caregiver_home_controller.dart'
     show CaregiverHomeController, CaregiverHomeViewModel;
-import 'create_events_page.dart';
+import 'create_appointments_page.dart';
 import '../../financial/wallet_page.dart';
 import '../../medical/gp_consultation_page.dart';
-import '../../medical/appointment_booking_page.dart';
+import '../../medical/consultation_booking_page.dart';
 import 'package:provider/provider.dart';
 import '../../medical/shop_page.dart' as shop;
 import '../../medical/controller/cart_controller.dart';
@@ -21,6 +21,14 @@ import '../../medical/health_upload_page.dart';
 import '../../medical/controller/health_records_controller.dart';
 import '../../services/care_routine_template_service.dart';
 import 'care_routine_template_page.dart';
+import '../../announcement/announcements_widget.dart';
+import '../../announcement/all_announcement_page.dart';
+import '../../announcement/announcement_controller.dart';
+import '../../models/announcement.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../assistant_chat.dart';
+
+
 
 
 // If you still need these helpers, align names; otherwise remove both.
@@ -368,10 +376,23 @@ Widget _buildCommunicateRow(BuildContext context) {
         final unread = vm.unreadNotifications;
 
         return Scaffold(
+
           appBar: AppBar(
             title: Text('Welcome back, ${widget.userProfile.safeDisplayName}!'),
             centerTitle: true,
             actions: [
+              IconButton(
+              icon: const Icon(Icons.chat),
+              onPressed: () {
+  final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => AssistantChat(userEmail: email),
+    ),
+  );
+},
+            ),
               if (unread > 0)
                 Padding(
                   padding: const EdgeInsets.only(right: 12),
@@ -452,8 +473,25 @@ Widget _buildCommunicateRow(BuildContext context) {
                       );
                     },
                   ),
+                  _AnnouncementsSection(),
+                  const AnnouncementsWidget(),
+                    const SizedBox(height: 8),
+                    // “View all” shortcut
+                    Card(
+                      child: ListTile(
+                        leading: const Icon(Icons.campaign_outlined),
+                        title: const Text('View all announcements'),
+                        trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const AllAnnouncementsPage()),
+                          );
+                        },
+                      ),
+                    ),
 
-                  _AnnouncementsSection(announcements: vm.announcements),
+                    const SizedBox(height: 12),
                   const SizedBox(height: 12),
 
                   _buildCommunicateRow(context),
@@ -491,6 +529,7 @@ Widget _buildCommunicateRow(BuildContext context) {
 
                   _NotificationsSection(
                     notifications: vm.notifications,
+                    
                     onMarkRead: _c.markNotificationRead,
                     onMarkAll: () => _c.markAllNotificationsRead(
                       vm.notifications
@@ -507,7 +546,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CreateEventsPage(
+                          builder: (_) => CreateAppointmentsPage(
                             userProfile: widget.userProfile,
                             elderlyId: _selectedElderlyId,
                           ),
@@ -533,7 +572,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => CreateEventsPage(
+                        builder: (_) => CreateAppointmentsPage(
                           userProfile: widget.userProfile,
                           elderlyId: _selectedElderlyId,
                         ),
@@ -1126,29 +1165,62 @@ class _HealthSection extends StatelessWidget {
 }
 
 class _AnnouncementsSection extends StatelessWidget {
-  final List<Map<String, dynamic>> announcements;
-
-  const _AnnouncementsSection({required this.announcements});
+  final _ctrl = AnnouncementController();
+  _AnnouncementsSection({super.key});
 
   @override
   Widget build(BuildContext context) {
-    if (announcements.isEmpty) {
-      return const Card(
-        child: ListTile(
-          leading: Icon(Icons.campaign_outlined),
-          title: Text('No new announcements.'),
-        ),
-      );
-    }
-    return Card(
-      child: Column(
-        children: announcements
-            .map((a) => ListTile(
-                  leading: const Icon(Icons.info_outline, color: Colors.blue),
-                  title: Text((a['title'] ?? 'Announcement').toString()),
-                ))
-            .toList(),
-      ),
+    return StreamBuilder<List<Announcement>>(
+      stream: _ctrl.streamForUserType('caregiver'), // or compute userType dynamically
+      builder: (context, snap) {
+        if (!snap.hasData) {
+          return const Card(
+            child: ListTile(
+              leading: CircularProgressIndicator(),
+              title: Text('Loading announcements…'),
+            ),
+          );
+        }
+        final anns = snap.data!;
+        if (anns.isEmpty) {
+          return const Card(
+            child: ListTile(
+              leading: Icon(Icons.campaign_outlined),
+              title: Text('No new announcements.'),
+            ),
+          );
+        }
+        return Card(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.campaign_outlined, color: Colors.blue),
+                title: const Text('Announcements'),
+                trailing: TextButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const AllAnnouncementsPage()),
+                    );
+                  },
+                  child: const Text('View all'),
+                ),
+              ),
+              const Divider(height: 0),
+              ...anns.take(3).map((a) => ListTile(
+                    title: Text(a.title),
+                    subtitle: Text(
+                      a.description,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  )),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -1258,7 +1330,7 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
               icon: Icons.calendar_month,
               color: Colors.blue.shade100,
               iconColor: Colors.blue.shade800,
-              page: AppointmentBookingPage(userProfile: userProfile),
+              page: ConsultationBookingPage(userProfile: userProfile),
             ),
             _medicalButton(
               context,

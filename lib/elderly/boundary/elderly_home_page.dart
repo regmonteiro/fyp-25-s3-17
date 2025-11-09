@@ -5,7 +5,7 @@ import '../controller/elderly_home_controller.dart' as ehc;
 import '../../models/user_profile.dart';
 import '../../features/communicate_page.dart';
 import '../../medical/gp_consultation_page.dart';
-import '../../medical/appointment_booking_page.dart';
+import '../../medical/consultation_booking_page.dart';
 import '../../medical/consultation_history_page.dart' as ch;
 import '../../medical/health_records_page.dart' as hr;
 import '../../medical/shop_page.dart' as shop;
@@ -13,9 +13,18 @@ import '../../financial/wallet_page.dart';
 import 'account/caregiver_access_page.dart';
 import '../../medical/controller/cart_controller.dart';
 import 'package:provider/provider.dart';
-import 'events_page.dart';
 import '../../features/share_experience_page.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../announcement/announcements_widget.dart';
+import '../../announcement/all_announcement_page.dart';
+import '../../models/announcement.dart';
+import 'create_event_reminders_page.dart';
+import 'view_activties_page.dart';
+import '../../widgets/feedback_section.dart';
+import '../../assistant_chat.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import '../../services/learning_reco_service.dart';
+import 'learning_page.dart';
 
 /// -------- Caregiver lookup for an elder (UID == elderlyId)
 Stream<List<Map<String, dynamic>>> caregiversForElder$(String elderlyId) {
@@ -98,9 +107,12 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
   final ScrollController _scrollController = ScrollController();
 
   final GlobalKey _announcementsKey = GlobalKey();
-  final GlobalKey _eventsKey = GlobalKey();
+  final GlobalKey _eventRemindersKey = GlobalKey();
   final GlobalKey _recommendationsKey = GlobalKey();
   final GlobalKey _shareExperienceKey = GlobalKey();
+  final GlobalKey _activitiesKey = GlobalKey();
+  final GlobalKey _feedbackKey = GlobalKey();
+
 
   @override
   void initState() {
@@ -108,26 +120,24 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     _homeController = ehc.ElderlyHomeController(uid: widget.userProfile.uid);
 
     final elderlyId = widget.userProfile.uid;
-  FirebaseFirestore.instance
-      .collection('Account')
-      .where('elderlyIds', arrayContains: elderlyId)
-      .get()
-      .then((qs) {
-        debugPrint('DEBUG: caregivers found for $elderlyId = ${qs.docs.length}');
-        for (final d in qs.docs) {
-          debugPrint('CG: ${d.id} → ${d.data()}');
-        }
-      })
-      .catchError((e) {
-        debugPrint('DEBUG: error fetching caregivers: $e');
-      });
+    FirebaseFirestore.instance
+        .collection('Account')
+        .where('elderlyIds', arrayContains: elderlyId)
+        .get()
+        .then((qs) {
+          debugPrint('DEBUG: caregivers found for $elderlyId = ${qs.docs.length}');
+          for (final d in qs.docs) {
+            debugPrint('CG: ${d.id} → ${d.data()}');
+          }
+        })
+        .catchError((e) {
+          debugPrint('DEBUG: error fetching caregivers: $e');
+        });
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-    _homeController.debugLogCaregiversForCurrentUser();
-  });
-}
-
-
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _homeController.debugLogCaregiversForCurrentUser();
+    });
+  }
   @override
   void dispose() {
     _scrollController.dispose();
@@ -135,9 +145,10 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
   }
 
   void _scrollToSection(GlobalKey key) {
-    if (key.currentContext != null) {
+    final ctx = key.currentContext;
+    if (ctx != null) {
       Scrollable.ensureVisible(
-        key.currentContext!,
+        ctx,
         duration: const Duration(milliseconds: 500),
         curve: Curves.easeInOut,
         alignment: 0.0,
@@ -148,6 +159,20 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: FloatingActionButton(
+  backgroundColor: Colors.deepPurple,
+  onPressed: () {
+    final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AssistantChat(userEmail: email),
+      ),
+    );
+  },
+  child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+),
+
       body: Row(
         children: [
           _buildQuickNavigation(),
@@ -175,23 +200,24 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                   _buildAnnouncementsSection(),
                   const SizedBox(height: 24),
 
-                  _buildSectionTitle(context, "Upcoming Events", _eventsKey),
-                  _buildEventsSection(),
-                  const SizedBox(height: 24),
+                  _buildSectionTitle(context, "Event Reminders", _eventRemindersKey, showSeeAll: true),
+                    _buildEventRemindersSection(),
+                    const SizedBox(height: 24),
 
-                  _buildSectionTitle(context, "Learning Recommendations", _recommendationsKey, showSeeAll: false),
+
+                  _buildSectionTitle(context, "Learning Recommendations", _recommendationsKey, showSeeAll: true),
                   _buildLearningRecommendationsSection(),
                   const SizedBox(height: 24),
+
+                  _buildSectionTitle(context, "Activities", _activitiesKey, showSeeAll: true),
+                      _buildActivitiesPreviewSection(),
+                      const SizedBox(height: 24),
 
                   _buildCommunityButton(context),
                   const SizedBox(height: 32),
 
                   _buildSectionTitle(context, "Community Feed", _shareExperienceKey, showSeeAll: true),
                   _buildCommunityFeedSection(context),
-                  const SizedBox(height: 32),
-
-                  _buildSectionTitle(context, "Shared Posts & Memories", GlobalKey(), showSeeAll: false),
-                  _buildSharedMemoriesSection(),
                   const SizedBox(height: 32),
 
                   _buildSectionTitle(context, "Shared Feedback on Platform", GlobalKey(), showSeeAll: false),
@@ -242,6 +268,10 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     required bool isLinked,
     VoidCallback? onTap,
   }) {
+    final shortId = id.isNotEmpty
+        ? (id.length > 8 ? '${id.substring(0, 8)}…' : id)
+        : '—';
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -260,10 +290,12 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
           children: [
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('ID: ${id.substring(0, 8)}…', style: const TextStyle(color: Colors.white70)),
+                Text('ID: $shortId', style: const TextStyle(color: Colors.white70)),
                 const SizedBox(height: 8),
-                Text(name,
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                Text(
+                  name,
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                ),
                 const SizedBox(height: 4),
                 Text('Caregiver: $caregiverSummary', style: const TextStyle(color: Colors.white, fontSize: 16)),
               ]),
@@ -333,14 +365,16 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                       onPressed: () async {
                         final tel = phone.trim();
                         if (tel.isEmpty) {
+                          if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('No phone on file.')),
                           );
                           return;
                         }
                         final uri = Uri(scheme: 'tel', path: tel);
-                        if (!await canLaunchUrl(uri)) {
-                          // ignore: use_build_context_synchronously
+                        final ok = await canLaunchUrl(uri);
+                        if (!ok) {
+                          if (!mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(content: Text('This device cannot place calls.')),
                           );
@@ -368,9 +402,11 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
       child: Column(
         children: [
           _buildNavLink(Icons.campaign, 'Announce', () => _scrollToSection(_announcementsKey)),
-          _buildNavLink(Icons.calendar_today, 'Events', () => _scrollToSection(_eventsKey)),
+          _buildNavLink(Icons.calendar_today, 'Event Reminders', () => _scrollToSection(_eventRemindersKey)),
           _buildNavLink(Icons.lightbulb_outline, 'Learn', () => _scrollToSection(_recommendationsKey)),
+          _buildNavLink(Icons.local_activity_outlined, 'Activities', () => _scrollToSection(_activitiesKey)),
           _buildNavLink(Icons.people_outline, 'Share Experience', () => _scrollToSection(_shareExperienceKey)),
+          _buildNavLink(Icons.feedback_outlined, 'Feedback', () => _scrollToSection(_feedbackKey)),
         ],
       ),
     );
@@ -394,8 +430,8 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
 
   /// ---------------- Header + quick actions
   Widget _buildCaregiverContactRow(BuildContext context) {
-    Future<void> _showElderlyStatusSheet() async {
-      final choice = await showModalBottomSheet<String>(
+    Future<String?> _showElderlyStatusSheet() async {
+      return showModalBottomSheet<String>(
         context: context,
         showDragHandle: true,
         builder: (_) => SafeArea(
@@ -425,40 +461,6 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
           ),
         ),
       );
-      if (choice == null) return;
-
-      try {
-        // fetch current caregivers by reverse lookup
-        final qs = await FirebaseFirestore.instance
-            .collection('Account')
-            .where('elderlyIds', arrayContains: widget.userProfile.uid)
-            .get();
-
-        final caregiverUids = qs.docs.map((d) => d.id).toList();
-        if (caregiverUids.isEmpty) {
-          // ignore: use_build_context_synchronously
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('No linked caregivers.')));
-          return;
-        }
-
-        await Future.wait(caregiverUids.map((cg) => _sendStatusPing(
-              fromUid: widget.userProfile.uid,
-              toUid: cg,
-              kind: choice,
-              elderlyId: widget.userProfile.uid,
-              caregiverId: cg,
-            )));
-
-        // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Status sent to ${caregiverUids.length} caregiver(s).')),
-        );
-      } catch (e) {
-        // ignore: use_build_context_synchronously
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Failed to send status: $e')));
-      }
     }
 
     return Row(
@@ -484,7 +486,42 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         const SizedBox(width: 12),
         Expanded(
           child: ElevatedButton.icon(
-            onPressed: _showElderlyStatusSheet,
+            onPressed: () async {
+              final choice = await _showElderlyStatusSheet();
+              if (choice == null) return;
+
+              try {
+                final qs = await FirebaseFirestore.instance
+                    .collection('Account')
+                    .where('elderlyIds', arrayContains: widget.userProfile.uid)
+                    .get();
+
+                final caregiverUids = qs.docs.map((d) => d.id).toList();
+                if (caregiverUids.isEmpty) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context)
+                      .showSnackBar(const SnackBar(content: Text('No linked caregivers.')));
+                  return;
+                }
+
+                await Future.wait(caregiverUids.map((cg) => _sendStatusPing(
+                      fromUid: widget.userProfile.uid,
+                      toUid: cg,
+                      kind: choice,
+                      elderlyId: widget.userProfile.uid,
+                      caregiverId: cg,
+                    )));
+
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Status sent to ${caregiverUids.length} caregiver(s).')),
+                );
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context)
+                    .showSnackBar(SnackBar(content: Text('Failed to send status: $e')));
+              }
+            },
             icon: const Icon(Icons.favorite_outline, size: 24),
             label: const Text("I am OK / Help", style: TextStyle(fontSize: 16)),
             style: ElevatedButton.styleFrom(
@@ -521,11 +558,11 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
           ),
           _buildActionButton(
             context,
-            'Book an appointment',
+            'Book GP Consultation',
             Icons.calendar_month,
             Colors.blue.shade100,
             Colors.blue.shade800,
-            AppointmentBookingPage(userProfile: widget.userProfile),
+            ConsultationBookingPage(userProfile: widget.userProfile),
           ),
           _buildActionButton(
             context,
@@ -616,22 +653,7 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 
-  Widget _buildSharedMemoriesSection() {
-    return Container(
-      height: 200,
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.grey.shade100,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.grey.shade300),
-      ),
-      alignment: Alignment.center,
-      child: const Text('Shared Post with Added Friends/Caregivers/Elderly Memories (Placeholder)'),
-    );
-  }
-
-  Widget _buildFeedbackSection() {
+  Widget _activitiesSection() {
     return Container(
       height: 100,
       width: double.infinity,
@@ -642,18 +664,38 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
         border: Border.all(color: Colors.grey.shade300),
       ),
       alignment: Alignment.center,
-      child: const Text('Shared Feedback on Platform (Placeholder)'),
+      child: const Text('Activites'),
     );
   }
 
+  Widget _buildFeedbackSection() {
+    return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey.shade300),
+        ),
+        child: const Text(
+          'Shared Feedback on Platform',
+          textAlign: TextAlign.center,
+        ),
+      ),
+      const SizedBox(height: 12),
+      const FeedbackSection(),
+    ],
+  );
+}
   Widget _buildHeader(BuildContext context) {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text("Welcome Back,", style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: Colors.black54)),
-          Text(widget.userProfile.safeDisplayName,
-              style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+          Text('Welcome back, ${widget.userProfile.safeDisplayName}!'),
         ]),
         TextButton.icon(
           onPressed: () => Navigator.push(
@@ -678,8 +720,8 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
           if (showSeeAll)
             TextButton(
               onPressed: () {
-                if (title == "Upcoming Events") {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const EventsPage()));
+                if (title == "Upcoming Events Reminder") {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateEventRemindersPage()));
                 } else if (title == "Community Feed") {
                   Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage()));
                 } else {
@@ -693,141 +735,475 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 
-  /// -------- Events
-  Widget _buildEventsSection() {
-    String _fmtDate(DateTime dt) => DateFormat('EEE, MMM d').format(dt);
-    String _fmtTime(DateTime dt) => DateFormat('h:mm a').format(dt);
-    bool _isAllDay(DateTime start, DateTime end) {
-      final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
-      final isStartMidnight = start.hour == 0 && start.minute == 0 && start.second == 0;
-      final isEndEOD = end.hour == 23 && end.minute == 59 && end.second == 59;
-      return sameDay && isStartMidnight && isEndEOD;
-    }
+  /// -------- Event Reminder
+  Widget _buildEventRemindersSection() {
+  String _fmtShort(DateTime dt) => DateFormat('EEE, MMM d • h:mm a').format(dt);
 
-    return StreamBuilder<List<ehc.UpcomingEvent>>(
-      stream: _homeController.getUpcomingEventsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: LinearProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          debugPrint("Events Home Page Error: ${snapshot.error}");
-          return const Center(child: Text("Error loading events"));
-        }
+  Future<void> _createReminder() async {
+    final titleCtrl = TextEditingController();
+    DateTime? start;
+    int duration = 30;
 
-        final events = snapshot.data ?? const <ehc.UpcomingEvent>[];
-        if (events.isEmpty) {
-          return const Center(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Text("No upcoming events scheduled by you or your caregiver."),
-            ),
-          );
-        }
-
-        return ListView.separated(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemCount: events.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, i) {
-            final e = events[i];
-            final allDay = _isAllDay(e.start, e.end);
-
-            final when = allDay
-                ? "${_fmtDate(e.start)} · All day"
-                : (e.start.day == e.end.day && e.start.month == e.end.month && e.start.year == e.end.year)
-                    ? "${_fmtDate(e.start)} · ${_fmtTime(e.start)} – ${_fmtTime(e.end)}"
-                    : "${_fmtDate(e.start)} ${_fmtTime(e.start)} → ${_fmtDate(e.end)} ${_fmtTime(e.end)}";
-
-            return Card(
-              elevation: 2,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              child: ListTile(
-                leading: const Icon(Icons.event, color: Colors.orange),
-                title: Text(e.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-                subtitle: Text(when),
-                trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                onTap: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const EventsPage()));
-                },
-              ),
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+          left: 16, right: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          top: 12,
+        ),
+        child: StatefulBuilder(
+          builder: (context, setS) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Create Reminder',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.schedule),
+                        label: Text(
+                          start == null ? 'Pick date & time' : _fmtShort(start!),
+                        ),
+                        onPressed: () async {
+                          final now = DateTime.now();
+                          final d = await showDatePicker(
+                            context: context,
+                            firstDate: DateTime(now.year - 1),
+                            lastDate: DateTime(now.year + 3),
+                            initialDate: now,
+                          );
+                          if (d == null) return;
+                          final t = await showTimePicker(
+                            context: context,
+                            initialTime: TimeOfDay.fromDateTime(
+                              now.add(const Duration(minutes: 5)),
+                            ),
+                          );
+                          if (t == null) return;
+                          setS(() {
+                            start = DateTime(d.year, d.month, d.day, t.hour, t.minute);
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 130,
+                      child: TextField(
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Duration (min)',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) => duration = int.tryParse(v.trim()) ?? 0,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: const Icon(Icons.check),
+                    label: const Text('Create'),
+                    onPressed: () async {
+                      final title = titleCtrl.text.trim();
+                      if (title.isEmpty || start == null || duration <= 0) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Please fill all fields.')),
+                        );
+                        return;
+                      }
+                      try {
+                        await _homeController.createReminder(
+                          title: title,
+                          start: start!,
+                          durationMinutes: duration,
+                        );
+                        if (mounted) Navigator.pop(context);
+                      } catch (e) {
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text('Failed: $e')));
+                      }
+                    },
+                  ),
+                ),
+              ],
             );
           },
-        );
-      },
+        ),
+      ),
     );
   }
 
+  Future<void> _editReminder(ehc.EventReminder r) async {
+    final titleCtrl = TextEditingController(text: r.title);
+    DateTime start = DateTime.tryParse(r.startTime) ?? DateTime.now();
+    int duration = r.duration;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => Padding(
+        padding: EdgeInsets.only(
+          left: 16, right: 16,
+          bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+          top: 12,
+        ),
+        child: StatefulBuilder(
+          builder: (context, setS) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text('Update Reminder',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: titleCtrl,
+                  decoration: const InputDecoration(
+                    labelText: 'Title',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.schedule),
+                        label: Text(_fmtShort(start)),
+                        onPressed: () async {
+                          final d = await showDatePicker(
+                            context: context,
+                            firstDate: DateTime(start.year - 1),
+                            lastDate: DateTime(start.year + 3),
+                            initialDate: start,
+                          );
+                          if (d == null) return;
+                          final t = await showTimePicker(
+                            context: context,
+                            initialTime: TimeOfDay.fromDateTime(start),
+                          );
+                          if (t == null) return;
+                          setS(() {
+                            start = DateTime(d.year, d.month, d.day, t.hour, t.minute);
+                          });
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    SizedBox(
+                      width: 130,
+                      child: TextField(
+                        controller:
+                            TextEditingController(text: r.duration.toString()),
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Duration (min)',
+                          border: OutlineInputBorder(),
+                        ),
+                        onChanged: (v) =>
+                            duration = int.tryParse(v.trim()) ?? r.duration,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.save),
+                        label: const Text('Save'),
+                        onPressed: () async {
+                          final title = titleCtrl.text.trim();
+                          if (title.isEmpty || duration <= 0) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(content: Text('Please fill all fields.')),
+                            );
+                            return;
+                          }
+                          try {
+                            await _homeController.updateReminder(
+                              reminderId: r.id,
+                              title: title,
+                              start: start,
+                              durationMinutes: duration,
+                            );
+                            if (mounted) Navigator.pop(context);
+                          } catch (e) {
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context)
+                                .showSnackBar(SnackBar(content: Text('Failed: $e')));
+                          }
+                        },
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    IconButton(
+                      tooltip: 'Delete',
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      onPressed: () async {
+                        try {
+                          await _homeController.deleteReminder(r.id);
+                          if (mounted) Navigator.pop(context);
+                        } catch (e) {
+                          if (!mounted) return;
+                          ScaffoldMessenger.of(context)
+                              .showSnackBar(SnackBar(content: Text('Failed: $e')));
+                        }
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  return Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text('My Reminders',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleLarge
+                  ?.copyWith(fontWeight: FontWeight.w700)),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.add_alarm),
+            label: const Text('Create'),
+            onPressed: _createReminder,
+          ),
+        ],
+      ),
+      const SizedBox(height: 8),
+      StreamBuilder<List<ehc.EventReminder>>(
+        stream: _homeController.reminders$(),
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: LinearProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Card(
+              color: const Color(0xFFFFEDEE),
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text('Error loading reminders: ${snap.error}',
+                    style: const TextStyle(color: Colors.red)),
+              ),
+            );
+          }
+          final list = snap.data ?? const <ehc.EventReminder>[];
+          if (list.isEmpty) {
+            return const Card(
+              child: ListTile(
+                leading: Icon(Icons.alarm_off),
+                title: Text('No reminders yet.'),
+                subtitle: Text('Tap “Create” to add one.'),
+              ),
+            );
+          }
+
+          return ListView.separated(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: list.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 6),
+            itemBuilder: (context, i) {
+              final r = list[i];
+              final dt = DateTime.tryParse(r.startTime);
+              final when = dt == null ? '—' : _fmtShort(dt);
+              return Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                child: ListTile(
+                  leading: const Icon(Icons.alarm, color: Colors.deepPurple),
+                  title: Text(r.title,
+                      style: const TextStyle(fontWeight: FontWeight.w600)),
+                  subtitle: Text('$when • ${r.duration} min'),
+                  trailing: const Icon(Icons.edit, size: 18),
+                  onTap: () => _editReminder(r),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    ],
+  );
+}
+
   /// -------- Announcements
   Widget _buildAnnouncementsSection() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _homeController.getAnnouncementsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: LinearProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return const Center(child: Text("Error loading announcements."));
-        }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const Center(child: Text("No new announcements."));
-        }
-
-        final titles = snapshot.data!.docs
-            .map((d) => (d.data() as Map<String, dynamic>?)?['title'] as String? ?? 'Announcement')
-            .toList();
-
-        return Column(
-          children: titles
-              .map((t) => Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    elevation: 1,
-                    child: ListTile(
-                      leading: const Icon(Icons.info_outline, color: Colors.blue),
-                      title: Text(t),
-                    ),
-                  ))
-              .toList(),
-        );
-      },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const AnnouncementsWidget(),
+        const SizedBox(height: 8),
+        Card(
+          child: ListTile(
+            leading: const Icon(Icons.campaign_outlined, color: Colors.blue),
+            title: const Text('View all announcements'),
+            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const AllAnnouncementsPage()),
+              );
+            },
+          ),
+        ),
+      ],
     );
   }
 
   /// -------- Learning
   Widget _buildLearningRecommendationsSection() {
-    return StreamBuilder<QuerySnapshot>(
-      stream: _homeController.getLearningRecommendationsStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Center(child: LinearProgressIndicator());
-        }
-        if (snapshot.hasError) {
-          return const Center(child: Text("Error loading recommendations."));
-        }
-        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-          return const Center(child: Text("No recommendations for you."));
-        }
-
-        final topics =
-            snapshot.data!.docs.map((d) => (d.data() as Map<String, dynamic>?)?['title'] as String? ?? 'Topic').toList();
-
-        return Column(
-          children: topics
-              .map((t) => Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    elevation: 1,
-                    child: ListTile(
-                      leading: const Icon(Icons.school, color: Colors.green),
-                      title: Text(t),
-                      trailing: const Icon(Icons.arrow_forward_ios),
-                    ),
-                  ))
-              .toList(),
+  final svc = LearningRecommendationsService();
+  return StreamBuilder<List<LearningReco>>(
+    stream: svc.subscribeTop(3),
+    builder: (context, snap) {
+      if (snap.connectionState == ConnectionState.waiting) {
+        return const Center(child: LinearProgressIndicator());
+      }
+      if (snap.hasError) {
+        return Card(
+          color: const Color(0xFFFFEDEE),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text('Error loading learning recommendations: ${snap.error}',
+                style: const TextStyle(color: Colors.red)),
+          ),
         );
-      },
-    );
-  }
+      }
+      final list = snap.data ?? const <LearningReco>[];
+      if (list.isEmpty) {
+        return const Card(
+          child: ListTile(
+            leading: Icon(Icons.menu_book_outlined),
+            title: Text('No learning recommendations yet.'),
+            subtitle: Text('Check back soon!'),
+          ),
+        );
+      }
+
+      return Column(
+        children: list.map((r) {
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: const Icon(Icons.lightbulb, color: Colors.deepPurple),
+              title: Text(r.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(
+                r.description,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                // open the link if present; otherwise go to See All page
+                if (r.url != null && r.url!.trim().isNotEmpty) {
+                  final uri = Uri.tryParse(r.url!) ?? Uri.parse('https://${r.url!}');
+                  launchUrl(uri, mode: LaunchMode.externalApplication);
+                } else {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const LearningResourcesPageRT()));
+                }
+              },
+            ),
+          );
+        }).toList(),
+      );
+    },
+  );
+}
+
+    /// -------- Activities (preview)
+Widget _buildActivitiesPreviewSection() {
+  return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+    stream: FirebaseFirestore.instance.collection('Activities').snapshots(),
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.waiting) {
+        return const Center(child: LinearProgressIndicator());
+      }
+      if (snapshot.hasError) {
+        return Card(
+          color: const Color(0xFFFFEDEE),
+          child: Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Text('Error loading activities: ${snapshot.error}',
+                style: const TextStyle(color: Colors.red)),
+          ),
+        );
+      }
+
+      final docs = snapshot.data?.docs ?? const [];
+      if (docs.isEmpty) {
+        return const Card(
+          child: ListTile(
+            leading: Icon(Icons.local_activity_outlined),
+            title: Text('No activities available yet.'),
+            subtitle: Text('Check back later for new recommendations.'),
+          ),
+        );
+      }
+
+      // show top 3
+      return Column(
+        children: docs.take(3).map((d) {
+          final m = d.data();
+          final title = (m['title'] ?? '').toString();
+          final difficulty = (m['difficulty'] ?? '').toString();
+          final duration = (m['duration'] ?? '').toString(); // if present
+          final subtitleBits = [
+            if (difficulty.isNotEmpty) 'Difficulty: $difficulty',
+            if (duration.isNotEmpty) 'Duration: $duration'
+          ];
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            elevation: 2,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            child: ListTile(
+              leading: const Icon(Icons.fitness_center, color: Colors.deepPurple),
+              title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+              subtitle: Text(subtitleBits.join(' • ')),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ViewActivitiesPage()),
+                );
+              },
+            ),
+          );
+        }).toList(),
+      );
+    },
+  );
+}
 
   /// -------- Community CTA
   Widget _buildCommunityButton(BuildContext context) {
@@ -944,9 +1320,10 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
                       ),
                     ),
                     onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage())),
+
                   ),
                 );
-              },
+              }
             );
           },
         );
@@ -954,3 +1331,4 @@ class _ElderlyHomePageState extends State<ElderlyHomePage> {
     );
   }
 }
+

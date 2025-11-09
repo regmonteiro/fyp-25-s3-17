@@ -1,23 +1,27 @@
 import 'package:flutter/foundation.dart';
-import '../../services/cart_repository.dart';
+import '../../services/cart_services.dart';
 
 class CartController extends ChangeNotifier {
   final List<Map<String, dynamic>> _items = [];
-  CartRepository? _repo;
+  CartServiceFs? _svc;
 
-  void attachRepository(CartRepository repo) {
-    _repo = repo;
+  void attachService(CartServiceFs svc) {
+    _svc = svc;
   }
+
+  set service(CartServiceFs svc) {
+  _svc = svc;
+}
 
   List<Map<String, dynamic>> get items => List.unmodifiable(_items);
   int get count => _items.length;
+
   int get totalCount =>
       _items.fold<int>(0, (sum, it) => sum + ((it['quantity'] ?? 1) as int));
+
   double get subtotal => _items.fold<double>(
         0.0,
-        (sum, it) =>
-            sum +
-            (_asDouble(it['price']) * ((it['quantity'] ?? 1) as int)),
+        (sum, it) => sum + (_asDouble(it['price']) * ((it['quantity'] ?? 1) as int)),
       );
 
   double _asDouble(dynamic v) {
@@ -27,31 +31,33 @@ class CartController extends ChangeNotifier {
       return double.tryParse(cleaned) ?? 0.0;
     }
     return 0.0;
-    }
+  }
+
 
   Future<void> loadFromFirestore() async {
-    if (_repo == null) return;
+    if (_svc == null) return;
     try {
-      final list = await _repo!.fetchItems();
+      final list = await _svc!.getCart();
       _items
         ..clear()
         ..addAll(list.map((e) => {
               'id': e['id'],
               'name': e['name'],
               'price': _asDouble(e['price']),
-              'imageUrl': (e['imageUrl'] ?? '').toString(),
+              'image': (e['image'] ?? '').toString(),
               'quantity': (e['quantity'] ?? 1) as int,
+              if (e['productData'] != null) 'productData': e['productData'],
             }));
     } catch (_) {
-      // keep UI usable if permission denied / offline
     }
     notifyListeners();
   }
 
-  Future<void> addOrIncrement(Map<String, dynamic> product) async {
+  Future<void> addOrIncrement(Map<String, dynamic> product,
+      {Map<String, dynamic>? productData}) async {
     final id = product['id'].toString();
     final price = _asDouble(product['price']);
-    final imageUrl = (product['imageUrl'] ?? '').toString();
+    final imageUrl = (product['imageUrl'] ?? product['image'] ?? '').toString();
     final idx = _items.indexWhere((e) => e['id'] == id);
 
     if (idx >= 0) {
@@ -61,22 +67,22 @@ class CartController extends ChangeNotifier {
         'id': id,
         'name': product['name'],
         'price': price,
-        'imageUrl': imageUrl,
+        'image': imageUrl,
         'quantity': 1,
+        if (productData != null) 'productData': productData,
       });
     }
     notifyListeners();
 
-    if (_repo != null) {
-      await _repo!.upsertItem(
+    if (_svc != null) {
+      await _svc!.upsertItem(
         productId: id,
         name: product['name'],
         price: price,
         imageUrl: imageUrl,
         deltaQty: 1,
+        productData: productData,
       );
-      // optional strict sync:
-      // await loadFromFirestore();
     }
   }
 
@@ -88,22 +94,20 @@ class CartController extends ChangeNotifier {
     if (q <= 0) {
       _items.removeAt(idx);
       notifyListeners();
-      if (_repo != null) await _repo!.removeItem(id);
+      if (_svc != null) await _svc!.removeItem(id);
     } else {
       _items[idx]['quantity'] = q;
       notifyListeners();
-      if (_repo != null) {
-        await _repo!.upsertItem(
+      if (_svc != null) {
+        await _svc!.upsertItem(
           productId: id,
           name: _items[idx]['name'],
           price: _asDouble(_items[idx]['price']),
-          imageUrl: (_items[idx]['imageUrl'] ?? '').toString(),
+          imageUrl: (_items[idx]['image'] ?? '').toString(),
           deltaQty: -1,
         );
       }
     }
-    // optional strict sync:
-    // if (_repo != null) await loadFromFirestore();
   }
 
   Future<void> removeAt(int index) async {
@@ -111,13 +115,13 @@ class CartController extends ChangeNotifier {
     final id = _items[index]['id'].toString();
     _items.removeAt(index);
     notifyListeners();
-    if (_repo != null) await _repo!.removeItem(id);
-    // optional: await loadFromFirestore();
+    if (_svc != null) await _svc!.removeItem(id);
   }
+
 
   Future<void> clear() async {
     _items.clear();
     notifyListeners();
-    if (_repo != null) await _repo!.clear(); // alias to clearCart()
+    if (_svc != null) await _svc!.clearCart();
   }
 }

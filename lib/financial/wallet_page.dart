@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/user_profile.dart';
 import 'wallet_controller.dart';
 import 'top_up_page.dart';
+import '../medical/shop_page.dart';
 
 
 class WalletPage extends StatelessWidget {
@@ -14,7 +15,10 @@ class WalletPage extends StatelessWidget {
   Widget build(BuildContext context) {
 
     return ChangeNotifierProvider(
-      create: (_) => WalletController(userId: userProfile.uid),
+      create: (_) => WalletController(
+    userEmail: (userProfile.email ?? '').toLowerCase().trim(),
+    userId: userProfile.uid,
+  ),
       child: Scaffold(
         appBar: AppBar(
           title: const Text("My Wallet"),
@@ -172,7 +176,10 @@ class _DiscoverButton extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
       child: ElevatedButton(
         onPressed: () {
-          // Navigate to your shop/GP booking etc.
+          Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const ShopPage()),
+  );
         },
         style: ElevatedButton.styleFrom(
           backgroundColor: Colors.blue.shade800,

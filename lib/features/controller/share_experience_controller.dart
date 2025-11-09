@@ -1,359 +1,252 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
-/// Firestore collections used:
-/// - Account/{uid}
-/// - SharedExperiences/{autoId}
-/// - Comments/{autoId}
-/// - Notifications/{autoId}
-///
-/// SharedExperiences fields:
-///   user (String uid), title (String), description (String),
-///   sharedAt (Timestamp), likes (int), comments (int)
-///
-/// Comments fields:
-///   experienceId (String), userId (String uid),
-///   content (String), timestamp (Timestamp), userName (String?)
-///
-/// Notifications fields:
-///   toUser (String uid), fromUser (String uid), type (String),
-///   title (String), message (String), relatedId (String?),
-///   timestamp (Timestamp), read (bool), imageUrl (String?)
+String normalizeEmail(String? email) =>
+    (email ?? '').trim().toLowerCase().replaceAll('.', '_');
 
-class ShareExperienceController extends ChangeNotifier {
-  ShareExperienceController({FirebaseFirestore? db})
-      : _db = db ?? FirebaseFirestore.instance;
+int _asInt(dynamic v) => v is int ? v : (v is num ? v.toInt() : 0);
 
-  final FirebaseFirestore _db;
-
-  /// ------------- Helpers -------------
-  Future<String> resolveDisplayName(String uid) async {
-    try {
-      final snap = await _db.collection('Account').doc(uid).get();
-      if (!snap.exists) return 'Anonymous';
-      final data = snap.data() ?? {};
-      final first = (data['firstname'] as String?)?.trim() ?? '';
-      final last  = (data['lastname']  as String?)?.trim() ?? '';
-      final full  = '$first $last'.trim();
-      if (full.isNotEmpty) return full;
-      return (data['email'] as String?)?.split('@').first ?? 'Anonymous';
-    } catch (_) {
-      return 'Anonymous';
-    }
-  }
-
-  /// ------------- Stories -------------
-  Stream<List<ExperienceView>> experiencesStream({String? onlyUid}) {
-    Query<Map<String, dynamic>> q = _db
-        .collection('SharedExperiences')
-        .orderBy('sharedAt', descending: true);
-
-    if (onlyUid != null && onlyUid.isNotEmpty) {
-      q = _db
-          .collection('SharedExperiences')
-          .where('user', isEqualTo: onlyUid)
-          .orderBy('sharedAt', descending: true);
-    }
-
-    return q.snapshots().asyncMap((snap) async {
-      final items = <ExperienceView>[];
-      for (final d in snap.docs) {
-        final m = d.data();
-        final uid = (m['user'] as String?) ?? '';
-        final name = await resolveDisplayName(uid);
-        items.add(
-          ExperienceView(
-            id: d.id,
-            user: uid,
-            userName: name,
-            title: (m['title'] as String?) ?? '',
-            description: (m['description'] as String?) ?? '',
-            sharedAt: (m['sharedAt'] as Timestamp?)?.toDate() ??
-                DateTime.fromMillisecondsSinceEpoch(0),
-            likes: (m['likes'] as num?)?.toInt() ?? 0,
-            comments: (m['comments'] as num?)?.toInt() ?? 0,
-          ),
-        );
-      }
-      return items;
-    });
-  }
-
-  Future<void> addExperience({
-    required String uid,
-    required String title,
-    required String description,
-  }) async {
-    final data = {
-      'user': uid,
-      'title': title.trim(),
-      'description': description.trim(),
-      'sharedAt': FieldValue.serverTimestamp(),
-      'likes': 0,
-      'comments': 0,
-    };
-    await _db.collection('SharedExperiences').add(data);
-  }
-
-  Future<void> updateExperience({
-    required String experienceId,
-    required String uid,
-    required String title,
-    required String description,
-    required DateTime sharedAt,
-    int likes = 0,
-    int comments = 0,
-  }) async {
-    await _db.collection('SharedExperiences').doc(experienceId).set({
-      'user': uid,
-      'title': title.trim(),
-      'description': description.trim(),
-      'sharedAt': Timestamp.fromDate(sharedAt),
-      'likes': likes,
-      'comments': comments,
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> deleteExperience(String id) async {
-    await _db.collection('SharedExperiences').doc(id).delete();
-    // Optionally remove related comments
-    final cmts = await _db
-        .collection('Comments')
-        .where('experienceId', isEqualTo: id)
-        .get();
-    for (final c in cmts.docs) {
-      await c.reference.delete();
-    }
-  }
-
-  /// ------------- Likes (counter-only) -------------
-  /// Mirrors your web logic: just increments/decrements a count;
-  /// it does not store per-user like documents.
-  Future<ToggleLikeResult> toggleLike({
-    required String experienceId,
-    required bool isCurrentlyLiked,
-    String? experienceOwnerUid, // pass to optionally notify
-    required String currentUid,
-  }) async {
-    final ref = _db.collection('SharedExperiences').doc(experienceId);
-    return _db.runTransaction((tx) async {
-      final snap = await tx.get(ref);
-      if (!snap.exists) throw StateError('Experience not found');
-      final m = snap.data() as Map<String, dynamic>;
-      final current = (m['likes'] as num?)?.toInt() ?? 0;
-      final newLikes = isCurrentlyLiked
-          ? (current > 0 ? current - 1 : 0)
-          : current + 1;
-
-      tx.update(ref, {'likes': newLikes});
-
-      // Send notification only when liking and not liking own post
-      if (!isCurrentlyLiked &&
-          experienceOwnerUid != null &&
-          experienceOwnerUid.isNotEmpty &&
-          experienceOwnerUid != currentUid) {
-        await _sendNotification(
-          toUser: experienceOwnerUid,
-          fromUser: currentUid,
-          type: 'like',
-          title: 'New Like',
-          message:
-              '${await resolveDisplayName(currentUid)} liked your story',
-          relatedId: experienceId,
-        );
-      }
-
-      return ToggleLikeResult(liked: !isCurrentlyLiked, newLikes: newLikes);
-    });
-  }
-
-  /// ------------- Comments -------------
-  Stream<List<CommentView>> commentsStream(String experienceId) {
-    return _db
-        .collection('Comments')
-        .where('experienceId', isEqualTo: experienceId)
-        .orderBy('timestamp')
-        .snapshots()
-        .asyncMap((snap) async {
-      final items = <CommentView>[];
-      for (final d in snap.docs) {
-        final m = d.data() as Map<String, dynamic>;
-        final uid = (m['userId'] as String?) ?? '';
-        final name =
-            (m['userName'] as String?)?.trim().isNotEmpty == true
-                ? m['userName'] as String
-                : await resolveDisplayName(uid);
-        items.add(CommentView(
-          id: d.id,
-          userId: uid,
-          displayName: name,
-          content: (m['content'] as String?) ?? '',
-          timestamp: (m['timestamp'] as Timestamp?)?.toDate() ??
-              DateTime.fromMillisecondsSinceEpoch(0),
-        ));
-      }
-      return items;
-    });
-  }
-
-  Future<void> addComment({
-    required String experienceId,
-    required String userId,
-    required String content,
-  }) async {
-    final batch = _db.batch();
-
-    // 1) add the comment
-    final cRef = _db.collection('Comments').doc();
-    batch.set(cRef, {
-      'experienceId': experienceId,
-      'userId': userId,
-      'content': content.trim(),
-      'timestamp': FieldValue.serverTimestamp(),
-      'userName': null, // let UI resolve name or set one if you wish
-    });
-
-    // 2) increment comments count on the experience
-    final eRef = _db.collection('SharedExperiences').doc(experienceId);
-    batch.update(eRef, {'comments': FieldValue.increment(1)});
-
-    await batch.commit();
-  }
-
-  /// ------------- Notifications (basic) -------------
-  Stream<List<AppNotification>> notificationsStream(String uid) {
-    return _db
-        .collection('Notifications')
-        .where('toUser', isEqualTo: uid)
-        .orderBy('timestamp', descending: true)
-        .snapshots()
-        .map((snap) => snap.docs.map((d) {
-              final m = d.data();
-              return AppNotification(
-                id: d.id,
-                toUser: (m['toUser'] as String?) ?? '',
-                fromUser: (m['fromUser'] as String?) ?? '',
-                type: (m['type'] as String?) ?? 'general',
-                title: (m['title'] as String?) ?? '',
-                message: (m['message'] as String?) ?? '',
-                relatedId: (m['relatedId'] as String?),
-                timestamp: (m['timestamp'] as Timestamp?)?.toDate() ??
-                    DateTime.fromMillisecondsSinceEpoch(0),
-                read: (m['read'] as bool?) ?? false,
-                imageUrl: (m['imageUrl'] as String?),
-              );
-            }).toList());
-  }
-
-  Future<void> markAllNotificationsRead(String uid) async {
-    final q = await _db
-        .collection('Notifications')
-        .where('toUser', isEqualTo: uid)
-        .where('read', isEqualTo: false)
-        .get();
-
-    final batch = _db.batch();
-    for (final d in q.docs) {
-      batch.update(d.reference, {'read': true});
-    }
-    await batch.commit();
-  }
-
-  Future<void> deleteNotification(String id) async {
-    await _db.collection('Notifications').doc(id).delete();
-  }
-
-  Future<void> _sendNotification({
-    required String toUser,
-    required String fromUser,
-    required String type,
-    required String title,
-    required String message,
-    String? relatedId,
-    String? imageUrl,
-  }) async {
-    await _db.collection('Notifications').add({
-      'toUser': toUser,
-      'fromUser': fromUser,
-      'type': type,
-      'title': title,
-      'message': message,
-      'relatedId': relatedId,
-      'timestamp': FieldValue.serverTimestamp(),
-      'read': false,
-      'imageUrl': imageUrl,
-    });
-  }
-}
-
-/// ----------- View Models (simple) -----------
-class ExperienceView {
+class Experience {
   final String id;
-  final String user;
-  final String userName;
   final String title;
   final String description;
+  final String user;
   final DateTime sharedAt;
   final int likes;
   final int comments;
+  final bool liked;
+  final String userName;
 
-  ExperienceView({
+  Experience({
     required this.id,
-    required this.user,
-    required this.userName,
     required this.title,
     required this.description,
+    required this.user,
     required this.sharedAt,
     required this.likes,
     required this.comments,
+    required this.liked,
+    required this.userName,
   });
+
+  static Experience fromDoc(
+    DocumentSnapshot<Map<String, dynamic>> doc, {
+    required String currentUserKey,
+    required String Function(String emailKey) nameOf,
+  }) {
+    final d = doc.data() ?? {};
+    final likedBy = (d['likedBy'] as Map<String, dynamic>?) ?? const {};
+    final userKey = (d['user'] as String?) ?? '';
+    final sharedAtStr =
+        (d['sharedAt'] as String?) ?? DateTime.now().toUtc().toIso8601String();
+    final parsed =
+        DateTime.tryParse(sharedAtStr)?.toUtc() ?? DateTime.now().toUtc();
+
+    return Experience(
+      id: doc.id,
+      title: (d['title'] as String?) ?? '',
+      description: (d['description'] as String?) ?? '',
+      user: userKey,
+      sharedAt: parsed,
+      likes: _asInt(d['likes']),
+      comments: _asInt(d['comments']),
+      liked: likedBy[currentUserKey] == true,
+      userName: nameOf(userKey),
+    );
+  }
+
+  Map<String, dynamic> toCreateMap() {
+    return {
+      'title': title,
+      'description': description,
+      'user': user,
+      'sharedAt': sharedAt.toUtc().toIso8601String(),
+      'likes': likes,
+      'comments': comments,
+      // likedBy created separately
+    };
+  }
 }
 
-class ToggleLikeResult {
-  final bool liked;
-  final int newLikes;
-  ToggleLikeResult({required this.liked, required this.newLikes});
-}
-
-class CommentView {
+class CommentModel {
   final String id;
-  final String userId;
-  final String displayName;
+  final String user;      // normalized email key
+  final String userName;  // denormalized for faster UI
   final String content;
   final DateTime timestamp;
 
-  CommentView({
+  CommentModel({
     required this.id,
-    required this.userId,
-    required this.displayName,
+    required this.user,
+    required this.userName,
     required this.content,
     required this.timestamp,
   });
+
+  Map<String, dynamic> toMap() => {
+        'user': user,
+        'userName': userName,
+        'content': content,
+        'timestamp': timestamp.toUtc().toIso8601String(),
+      };
+
+  static CommentModel fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
+    final d = doc.data() ?? {};
+    return CommentModel(
+      id: doc.id,
+      user: (d['user'] as String?) ?? '',
+      userName: (d['userName'] as String?) ?? '',
+      content: (d['content'] as String?) ?? '',
+      timestamp: DateTime.tryParse((d['timestamp'] as String?) ?? '')?.toUtc() ??
+          DateTime.now().toUtc(),
+    );
+  }
 }
 
-class AppNotification {
-  final String id;
-  final String toUser;
-  final String fromUser;
-  final String type;
-  final String title;
-  final String message;
-  final String? relatedId;
-  final DateTime timestamp;
-  final bool read;
-  final String? imageUrl;
+class ShareExperienceController with ChangeNotifier {
+  ShareExperienceController();
 
-  AppNotification({
-    required this.id,
-    required this.toUser,
-    required this.fromUser,
-    required this.type,
-    required this.title,
-    required this.message,
-    required this.relatedId,
-    required this.timestamp,
-    required this.read,
-    required this.imageUrl,
-  });
+  final FirebaseAuth _auth = FirebaseAuth.instance;
+  final FirebaseFirestore _fs = FirebaseFirestore.instance;
+
+  String get currentEmail =>
+      _auth.currentUser?.email?.trim().toLowerCase() ?? 'anonymous@example.com';
+  String get currentUserKey => normalizeEmail(currentEmail);
+
+  CollectionReference<Map<String, dynamic>> get _col =>
+      _fs.collection('SharedExperiences');
+
+  // ---------- CRUD posts ----------
+  Future<String> addExperience({
+    required String title,
+    required String description,
+  }) async {
+    final doc = await _col.add(
+      Experience(
+        id: '',
+        title: title.trim(),
+        description: description.trim(),
+        user: currentUserKey,
+        sharedAt: DateTime.now().toUtc(),
+        likes: 0,
+        comments: 0,
+        liked: false,
+        userName: '',
+      ).toCreateMap(),
+    );
+    await doc.update({'likedBy': {}});
+    return doc.id;
+  }
+
+  Future<void> updateExperience({
+    required String id,
+    required String title,
+    required String description,
+  }) async {
+    await _col.doc(id).update({
+      'title': title.trim(),
+      'description': description.trim(),
+    });
+  }
+
+  Future<void> deleteExperience(String id) async {
+    final comments = await _col.doc(id).collection('comments').get();
+    for (final c in comments.docs) {
+      await c.reference.delete();
+    }
+    await _col.doc(id).delete();
+  }
+
+  // ---------- Queries ----------
+  Stream<List<Experience>> feed$({
+    required String Function(String emailKey) nameOf,
+  }) {
+    return _col
+        .orderBy('sharedAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => Experience.fromDoc(
+                  d,
+                  currentUserKey: currentUserKey,
+                  nameOf: nameOf,
+                ))
+            .toList());
+  }
+
+  Stream<List<Experience>> myPosts$({
+    required String Function(String emailKey) nameOf,
+  }) {
+    return _col
+        .where('user', isEqualTo: currentUserKey)
+        .orderBy('sharedAt', descending: true)
+        .snapshots()
+        .map((snap) => snap.docs
+            .map((d) => Experience.fromDoc(
+                  d,
+                  currentUserKey: currentUserKey,
+                  nameOf: nameOf,
+                ))
+            .toList());
+  }
+
+  // ---------- Likes ----------
+  Future<void> toggleLike(String id, bool currentlyLiked) async {
+    final ref = _col.doc(id);
+    await _fs.runTransaction((tx) async {
+      final snap = await tx.get(ref);
+      if (!snap.exists) return;
+      final data = (snap.data() as Map<String, dynamic>);
+      final likedBy = Map<String, dynamic>.from(data['likedBy'] ?? {});
+      int likes = _asInt(data['likes']);
+
+      if (currentlyLiked) {
+        likedBy.remove(currentUserKey);
+        likes = likes > 0 ? likes - 1 : 0;
+      } else {
+        likedBy[currentUserKey] = true;
+        likes = likes + 1;
+      }
+      tx.update(ref, {'likedBy': likedBy, 'likes': likes});
+    });
+  }
+
+  // ---------- Comments ----------
+  Stream<List<CommentModel>> comments$(String postId) {
+    return _col
+        .doc(postId)
+        .collection('comments')
+        .orderBy('timestamp', descending: false)
+        .snapshots()
+        .map((snap) => snap.docs.map(CommentModel.fromDoc).toList());
+  }
+
+  Future<void> addComment({
+    required String postId,
+    required String content,
+    required String displayName,
+  }) async {
+    final ref = _col.doc(postId);
+    await _fs.runTransaction((tx) async {
+      final post = await tx.get(ref);
+      if (!post.exists) return;
+
+      final commentRef = ref.collection('comments').doc();
+      tx.set(
+        commentRef,
+        CommentModel(
+          id: commentRef.id,
+          user: currentUserKey,
+          userName: displayName,
+          content: content.trim(),
+          timestamp: DateTime.now().toUtc(),
+        ).toMap(),
+      );
+
+      final current = (post.data() as Map<String, dynamic>);
+      final comments = _asInt(current['comments']);
+      tx.update(ref, {'comments': comments + 1});
+    });
+  }
 }

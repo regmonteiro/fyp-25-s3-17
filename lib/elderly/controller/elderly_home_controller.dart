@@ -1,31 +1,50 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
-class UpcomingEvent {
-  final String id;
+// ---------------- Reminders model (field-based)
+class EventReminder {
+  final String id;        // field name under reminders/{userKey}
   final String title;
-  final DateTime start;
-  final DateTime end;
+  final String startTime; // ISO-8601 string
+  final int duration;     // minutes
+  final String createdAt; // ISO-8601 string
 
-  UpcomingEvent({
+  EventReminder({
     required this.id,
     required this.title,
-    required this.start,
-    required this.end,
+    required this.startTime,
+    required this.duration,
+    required this.createdAt,
   });
 
-  factory UpcomingEvent.fromDoc(DocumentSnapshot<Map<String, dynamic>> doc) {
-    final d = doc.data() ?? {};
-    final tsStart = d['start'] as Timestamp?;
-    final tsEnd = d['end'] as Timestamp?;
-    return UpcomingEvent(
-      id: doc.id,
-      title: (d['title'] as String?) ?? 'Untitled',
-      start: tsStart?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0),
-      end: tsEnd?.toDate() ?? DateTime.fromMillisecondsSinceEpoch(0),
+  factory EventReminder.fromMap(String id, Map<String, dynamic> m) {
+    int _toInt(Object? v) {
+      if (v is int) return v;
+      if (v is double) return v.toInt();
+      return int.tryParse(v?.toString() ?? '') ?? 0;
+    }
+
+    return EventReminder(
+      id: id,
+      title: (m['title'] ?? '').toString(),
+      startTime: (m['startTime'] ?? '').toString(),
+      duration: _toInt(m['duration']),
+      createdAt: (m['createdAt'] ?? '').toString(),
     );
   }
+
+  Map<String, dynamic> toMap() => {
+        'title': title,
+        'startTime': startTime,
+        'duration': duration,
+        'createdAt': createdAt,
+      };
+
+  bool isValid() =>
+      title.trim().isNotEmpty && startTime.trim().isNotEmpty && duration > 0;
 }
 
 class ElderlyHomeController {
@@ -33,6 +52,136 @@ class ElderlyHomeController {
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   ElderlyHomeController({required this.uid});
+
+  // -----------------------------------------------------------
+  // Reminders: direct Firestore access (no service file needed)
+  // /reminders/{userKey} where userKey is email with '.' and '@' replaced by '_'
+  // Each reminder is stored as a FIELD named by a random id.
+  // -----------------------------------------------------------
+
+  String _emailToKey(String email) {
+  final lower = email.trim().toLowerCase();
+  final at = lower.indexOf('@');
+  if (at < 0) return lower.replaceAll('.', '_');
+  final local  = lower.substring(0, at);
+  final domain = lower.substring(at + 1).replaceAll('.', '_');
+  return '$local@$domain'; // e.g. elderly@gmail_com
+}
+
+Future<String?> _resolveUserKeyFromAccount() async {
+  final fs = FirebaseFirestore.instance;
+  final u = FirebaseAuth.instance.currentUser;
+  if (u == null) return null;
+
+  // Try /AccountByUid first
+  final snap = await fs.collection('AccountByUid').doc(u.uid).get();
+  final key = (snap.data()?['emailKey'] as String?)?.trim();
+  if (key != null && key.isNotEmpty) return key;
+
+  // Fallback to auth email
+  final mail = u.email?.trim().toLowerCase();
+  if (mail != null && mail.isNotEmpty) {
+    return _emailToKey(mail);
+  }
+
+  return null;
+}
+
+
+  Future<DocumentReference<Map<String, dynamic>>?> _remindersDocRef() async {
+    final key = await _resolveUserKeyFromAccount();
+    if (key == null) return null;
+    return _db.collection('reminders').doc(key);
+  }
+
+  /// Stream: list reminders sorted by startTime (ISO string)
+  Stream<List<EventReminder>> reminders$() {
+    return Stream.fromFuture(_remindersDocRef()).switchMap((doc) {
+      if (doc == null) return Stream.value(const <EventReminder>[]);
+      return doc.snapshots().map((snap) {
+        if (!snap.exists) return <EventReminder>[];
+        final data = snap.data() ?? {};
+        final out = <EventReminder>[];
+        for (final e in data.entries) {
+          final id = e.key;
+          final v = e.value;
+          if (v is Map<String, dynamic>) {
+            out.add(EventReminder.fromMap(id, v));
+          } else if (v is Map) {
+            out.add(EventReminder.fromMap(id, Map<String, dynamic>.from(v)));
+          }
+        }
+        out.sort((a, b) {
+          final ax = DateTime.tryParse(a.startTime) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final bx = DateTime.tryParse(b.startTime) ?? DateTime.fromMillisecondsSinceEpoch(0);
+          return ax.compareTo(bx);
+        });
+        return out;
+      });
+    });
+  }
+
+  Future<void> createReminder({
+    required String title,
+    required DateTime start,
+    required int durationMinutes,
+  }) async {
+    final doc = await _remindersDocRef();
+    if (doc == null) throw Exception('No Account/email key found.');
+    final id = _db.collection('_ids').doc().id;
+    final reminder = EventReminder(
+      id: id,
+      title: title.trim(),
+      startTime: start.toIso8601String(),
+      duration: durationMinutes,
+      createdAt: DateTime.now().toIso8601String(),
+    );
+    if (!reminder.isValid()) {
+      throw Exception('Invalid reminder data');
+    }
+    await doc.set({id: reminder.toMap()}, SetOptions(merge: true));
+  }
+
+  Future<void> updateReminder({
+  required String reminderId,
+  String? title,
+  DateTime? start,
+  int? durationMinutes,
+}) async {
+  final doc = await _remindersDocRef();
+  if (doc == null) throw Exception('No Account/email key found.');
+
+  final update = <String, dynamic>{
+    if (title != null) 'title': title.trim(),
+    if (start != null) 'startTime': DateFormat("yyyy-MM-ddTHH:mm").format(start),
+    if (durationMinutes != null) 'duration': durationMinutes is int ? durationMinutes : int.tryParse('$durationMinutes'),
+    'createdAt': DateTime.now().toIso8601String(),
+  };
+
+  if (update.containsKey('duration')) {
+    final d = update['duration'] as int? ?? 0;
+    if (d <= 0) throw Exception('Invalid duration');
+  }
+
+  await doc.set({ reminderId: update }, SetOptions(merge: true));
+}
+
+Future<void> deleteReminder(String reminderId) async {
+  final doc = await _remindersDocRef();
+  if (doc == null) throw Exception('No Account/email key found.');
+  try {
+    await doc.update({ reminderId: FieldValue.delete() });
+  } on FirebaseException catch (e) {
+    if (e.code == 'not-found') {
+      // Create the parent doc empty so we can delete the field safely next time.
+      await doc.set(const <String, dynamic>{}, SetOptions(merge: true));
+      // No field present to delete; treat as already gone.
+      return;
+    }
+    rethrow;
+  }
+}
+
 
   Stream<List<Map<String, dynamic>>> caregiversForElder$(String elderlyId) {
   final db = FirebaseFirestore.instance;
@@ -53,6 +202,7 @@ class ElderlyHomeController {
     if (caregiverIds.isEmpty) {
       return Stream.value(<QueryDocumentSnapshot<Map<String, dynamic>>>[]);
     }
+
 
     // Firestore whereIn max 10 → chunk
     Iterable<List<String>> chunks(List<String> xs, int size) sync* {
@@ -157,7 +307,7 @@ class ElderlyHomeController {
     }
   }
 
-  /// Query all caregiver-created event batches in parallel (`caregiverId IN` chunks of 10).
+  /// Query all caregiver-created appointments batches in parallel (`caregiverId IN` chunks of 10).
   Stream<List<QueryDocumentSnapshot<Map<String, dynamic>>>> _caregiverEventBatches(
     String elderlyId,
     List<String> caregiverUids,
@@ -168,7 +318,7 @@ class ElderlyHomeController {
 
     final streams = _chunks(caregiverUids, 10).map((chunk) {
       return _db
-          .collection('events')
+          .collection('Appointments')
           .where('elderlyId', isEqualTo: elderlyId)
           .where('caregiverId', whereIn: chunk)
           .where('start', isGreaterThanOrEqualTo: Timestamp.now())
@@ -183,7 +333,7 @@ class ElderlyHomeController {
     );
   }
 
-  Stream<List<DocumentSnapshot<Map<String, dynamic>>>> getEventsStream({int limit = 5}) {
+  Stream<List<DocumentSnapshot<Map<String, dynamic>>>> getAppointmentsStream({int limit = 5}) {
     final account$ = _db.collection('Account').doc(uid).snapshots();
 
     // use _elderId$ (not _elderlyId$), and pass the resolved elderlyId forward
@@ -197,9 +347,9 @@ class ElderlyHomeController {
 
       final linkedCaregivers = _extractCaregiverUids(accountSnap.data()?['linkedCaregivers']);
 
-      // A: elder's own events (use elderlyId )
+      // A: elder's own appointments (use elderlyId )
       final a$ = _db
-          .collection('events')
+          .collection('Appointments')
           .where('elderlyId', isEqualTo: elderlyId)
           .where('start', isGreaterThanOrEqualTo: Timestamp.now())
           .orderBy('start')
@@ -208,14 +358,14 @@ class ElderlyHomeController {
 
       // B: optional legacy path
       final b$ = _db
-          .collection('events')
+          .collection('Appointments')
           .where('uid', isEqualTo: elderlyId)
           .where('start', isGreaterThanOrEqualTo: Timestamp.now())
           .orderBy('start')
           .snapshots()
           .map((s) => s.docs);
 
-      // C: caregiver-created events (batched)
+      // C: caregiver-created appointments (batched)
       final c$ = _caregiverEventBatches(elderlyId, linkedCaregivers);
 
       return Rx.combineLatest3(a$, b$, c$, (a, b, c) {
@@ -248,19 +398,10 @@ Future<void> debugLogCaregiversForCurrentUser() async {
       .where('elderlyIds', arrayContains: currentUid)
       .get();
 
-  // These print to your Flutter/Xcode console
-  // (Look for lines starting with "DEBUG:")
-  // ignore: avoid_print
   print('DEBUG: caregivers for $currentUid = ${result.docs.length}');
   for (var doc in result.docs) {
     // ignore: avoid_print
     print('DEBUG: caregiver -> ${doc.id}');
   }
 }
-
-
-  Stream<List<UpcomingEvent>> getUpcomingEventsStream({int limit = 5}) {
-    return getEventsStream(limit: limit)
-        .map((docs) => docs.map((d) => UpcomingEvent.fromDoc(d)).toList(growable: false));
-  }
 }

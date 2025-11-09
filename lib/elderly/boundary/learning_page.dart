@@ -1,13 +1,16 @@
-// lib/learning/learning_resources_page_rt.dart
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
 import '../controller/learning_page_controller.dart';
+import '../../assistant_chat.dart';
 
 /// -------- Models --------
-
 class LearningResource {
   final String id;
   final String title;
@@ -49,6 +52,42 @@ class LearningResource {
   }
 }
 
+class Voucher {
+  final String id;
+  final int amount; // e.g. 5 dollars
+  final String code;
+  final String issueDate; // UI string (for parity)
+  final String redeemedAt; // ISO
+  final int pointsRedeemed; // points per voucher
+
+  Voucher({
+    required this.id,
+    required this.amount,
+    required this.code,
+    required this.issueDate,
+    required this.redeemedAt,
+    required this.pointsRedeemed,
+  });
+
+  Map<String, dynamic> toMap() => {
+        'id': id,
+        'amount': amount,
+        'code': code,
+        'issueDate': issueDate,
+        'redeemedAt': redeemedAt,
+        'pointsRedeemed': pointsRedeemed,
+      };
+
+  factory Voucher.fromMap(Map m) => Voucher(
+        id: (m['id'] ?? '').toString(),
+        amount: (m['amount'] ?? 5) as int,
+        code: (m['code'] ?? '').toString(),
+        issueDate: (m['issueDate'] ?? '').toString(),
+        redeemedAt: (m['redeemedAt'] ?? '').toString(),
+        pointsRedeemed: (m['pointsRedeemed'] ?? 50) as int,
+      );
+}
+
 class PointsData {
   final int currentPoints;
   final int totalEarned;
@@ -61,8 +100,9 @@ class PointsData {
   final int totalResources;
   final int completedResources;
   final int averageTimePerSession;
+  final List<Voucher> redemptionHistory;
 
-  PointsData({
+  const PointsData({
     this.currentPoints = 0,
     this.totalEarned = 0,
     this.pointHistory = const [],
@@ -74,6 +114,7 @@ class PointsData {
     this.totalResources = 0,
     this.completedResources = 0,
     this.averageTimePerSession = 0,
+    this.redemptionHistory = const [],
   });
 
   PointsData copyWith({
@@ -88,6 +129,7 @@ class PointsData {
     int? totalResources,
     int? completedResources,
     int? averageTimePerSession,
+    List<Voucher>? redemptionHistory,
   }) {
     return PointsData(
       currentPoints: currentPoints ?? this.currentPoints,
@@ -101,6 +143,7 @@ class PointsData {
       totalResources: totalResources ?? this.totalResources,
       completedResources: completedResources ?? this.completedResources,
       averageTimePerSession: averageTimePerSession ?? this.averageTimePerSession,
+      redemptionHistory: redemptionHistory ?? this.redemptionHistory,
     );
   }
 
@@ -116,16 +159,16 @@ class PointsData {
         'totalResources': totalResources,
         'completedResources': completedResources,
         'averageTimePerSession': averageTimePerSession,
+        'redemptionHistory': redemptionHistory.map((v) => v.toMap()).toList(),
       };
 
   factory PointsData.fromMap(Map? m) {
-    if (m == null) return PointsData();
+    if (m == null) return const PointsData();
 
     List<Map<String, dynamic>> _asListMap(dynamic v) {
       if (v is List) {
         return v.cast<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
       } else if (v is Map) {
-        // in case it was stored as keyed map
         return Map<String, dynamic>.from(v)
             .values
             .map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e))
@@ -137,6 +180,18 @@ class PointsData {
     List<String> _asStringList(dynamic v) {
       if (v is List) return v.map((e) => e.toString()).toList();
       if (v is Map) return Map<String, dynamic>.from(v).values.map((e) => e.toString()).toList();
+      return [];
+    }
+
+    List<Voucher> _asVoucherList(dynamic v) {
+      if (v is List) {
+        return v.cast<Map>().map((e) => Voucher.fromMap(Map<String, dynamic>.from(e))).toList();
+      } else if (v is Map) {
+        return Map<String, dynamic>.from(v)
+            .values
+            .map((e) => Voucher.fromMap(Map<String, dynamic>.from(e)))
+            .toList();
+      }
       return [];
     }
 
@@ -152,6 +207,7 @@ class PointsData {
       totalResources: (m['totalResources'] ?? 0) as int,
       completedResources: (m['completedResources'] ?? 0) as int,
       averageTimePerSession: (m['averageTimePerSession'] ?? 0) as int,
+      redemptionHistory: _asVoucherList(m['redemptionHistory']),
     );
   }
 }
@@ -167,7 +223,7 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
   final _auth = FirebaseAuth.instance;
   final _rtdb = FirebaseDatabase.instance;
 
-  // Controller for selection/error (matches your JS controller semantics)
+  // Controller for selection/error (parity with your codebase)
   late final ViewLearningResourceController _ctrl;
 
   // data
@@ -176,19 +232,24 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
   String? _error;
 
   // user points/state
-  PointsData _points = PointsData();
+  PointsData _points = const PointsData();
   bool _pointsLoading = true;
 
   // ui state
   String _search = '';
   String _selectedCategory = 'All';
-  String? _hoveredId;
+  String? _hoveredId; // for desktop/web
+  final ScrollController _scroll = ScrollController();
+  final GlobalKey _historyKey = GlobalKey();
 
   // time tracking
   final Map<String, int> _startTimes = {}; // resourceId -> epoch ms
   bool _showPointsPopup = false;
   int _popupPoints = 0;
   String _popupMsg = '';
+
+  // voucher modal
+  List<Voucher> _modalVouchers = const [];
 
   static const categories = [
     'All',
@@ -236,7 +297,6 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
           return LearningResource.fromRtdb(e.key, data);
         }).toList();
 
-        // Feed controller for selection/error API
         _ctrl.setResources(list
             .map((r) => LearningResourceMini(
                   id: r.id,
@@ -261,7 +321,7 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
     } catch (e) {
       _ctrl.setResources(const []);
       setState(() {
-        _error = 'Failed to load resources.'; // optional
+        _error = 'Failed to load resources.';
         _loading = false;
       });
     }
@@ -286,7 +346,7 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
         final uid = _auth.currentUser!.uid;
         _points = PointsData(totalResources: _allResources.length);
         await _accountRef!.set({
-          'ownerUid': uid,                        // ← NEW (enables secure rules)
+          'ownerUid': uid, // enable secure rules
           'email': _auth.currentUser?.email ?? '',
           'pointsData': _points.toMap(),
           'lastUpdated': DateTime.now().toIso8601String(),
@@ -464,6 +524,7 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scroll.dispose();
     _stopAll(); // best-effort
     super.dispose();
   }
@@ -512,32 +573,46 @@ class _LearningResourcesPageRTState extends State<LearningResourcesPageRT>
   // -------- Actions --------
 
   Future<void> _openResource(LearningResource r) async {
+    if (r.url == null) return;
     final raw = r.url!;
-      final uri = Uri.tryParse(raw);
-      if (uri == null) return;
-      final fixed = uri.hasScheme ? uri : Uri.parse('https://$raw');
-      await _startTracking(r);
-      final ok = await launchUrl(fixed, mode: LaunchMode.externalApplication);
-if (!ok) _snack('Could not open: ${fixed.toString()}');
+    final uri = Uri.tryParse(raw);
+    if (uri == null) return;
+    final fixed = uri.hasScheme ? uri : Uri.parse('https://$raw');
 
-    _ctrl.selectResource(r.id);  // highlight in grid
-    setState(() {});             // repaint
+    await _startTracking(r);
+    final ok = await launchUrl(fixed, mode: LaunchMode.externalApplication);
+    if (!ok) _snack('Could not open: ${fixed.toString()}');
+
+    _ctrl.selectResource(r.id); // highlight in grid
+    setState(() {});
+  }
+
+  // ------- Voucher helpers -------
+  String _genVoucherCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    final rnd = Random.secure();
+    return List.generate(8, (_) => chars[rnd.nextInt(chars.length)]).join();
   }
 
   Future<void> _redeem() async {
     final current = _points.currentPoints;
-    if (current < 50) {
-      _snack('You need ${50 - current} more points to redeem a voucher.');
+    const pointsPerVoucher = 50;
+    const voucherAmount = 5; // $5 each
+
+    final maxVouchers = current ~/ pointsPerVoucher;
+    if (maxVouchers == 0) {
+      _snack('You need ${pointsPerVoucher - (current % pointsPerVoucher)} more points to redeem a voucher.');
       return;
     }
-    final voucherValue = (current ~/ 50) * 5;
-    final redeemPoints = (current ~/ 50) * 50;
+
+    final redeemPoints = maxVouchers * pointsPerVoucher;
+    final totalValue = maxVouchers * voucherAmount;
 
     final ok = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Redeem points'),
-        content: Text('Redeem $redeemPoints points for a \$$voucherValue voucher?'),
+        content: Text('Redeem $redeemPoints points for $maxVouchers x \$$voucherAmount voucher(s) (total: \$$totalValue)?'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
           ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Redeem')),
@@ -545,10 +620,151 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
       ),
     );
 
-    if (ok == true) {
-      await _addPoints(-redeemPoints,
-          reason: 'Redeemed $redeemPoints for \$$voucherValue voucher');
-      _snack('🎉 Redeemed \$$voucherValue voucher!');
+    if (ok != true) return;
+
+    // Create vouchers
+    final now = DateTime.now();
+    final isoNow = now.toIso8601String();
+    final issueDateStr = '${now.day}/${now.month}/${now.year}';
+
+    final vouchers = <Voucher>[];
+    for (int i = 0; i < maxVouchers; i++) {
+      vouchers.add(Voucher(
+        id: 'voucher_${DateTime.now().millisecondsSinceEpoch}_$i',
+        amount: voucherAmount,
+        code: _genVoucherCode(),
+        issueDate: issueDateStr,
+        redeemedAt: isoNow,
+        pointsRedeemed: pointsPerVoucher,
+      ));
+    }
+
+    // Deduct points and save history
+    await _addPoints(-redeemPoints,
+        reason: 'Redeemed $redeemPoints points for $maxVouchers voucher(s)');
+
+    final updatedHistory = List<Voucher>.from(_points.redemptionHistory)..addAll(vouchers);
+    await _mergeIntoPoints({'redemptionHistory': updatedHistory.map((e) => e.toMap()).toList()});
+
+    // Show modal
+    setState(() => _modalVouchers = vouchers);
+    _showVoucherModal(vouchers);
+  }
+
+  Future<void> _saveVoucherImageToDownloads(String assetPath, String filename) async {
+    try {
+      final bytes = await rootBundle.load(assetPath);
+      final data = bytes.buffer.asUint8List();
+      final dir = await getApplicationDocumentsDirectory(); // portable fallback
+      final file = File('${dir.path}/$filename');
+      await file.writeAsBytes(data);
+      _snack('Saved voucher to ${file.path}');
+    } catch (e) {
+      _snack('Failed to save voucher: $e');
+    }
+  }
+
+  void _showVoucherModal(List<Voucher> vouchers) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => Dialog(
+        insetPadding: const EdgeInsets.all(16),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 520),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Expanded(
+                    child: Text('🎉 Voucher Redemption Successful!',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.pop(context),
+                  )
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text('You redeemed ${_modalVouchers.fold<int>(0, (s, v) => s + v.pointsRedeemed)} points for ${vouchers.length} voucher${vouchers.length > 1 ? 's' : ''}'),
+              const SizedBox(height: 12),
+              Flexible(
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: [
+                      for (int i = 0; i < vouchers.length; i++) ...[
+                        _voucherCard(vouchers[i], index: i),
+                        if (i < vouchers.length - 1) const Divider(height: 24),
+                      ]
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'),
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _voucherCard(Voucher v, {required int index}) {
+    // NOTE: Ensure you add the asset in pubspec.yaml: assets: - assets/voucher.png
+    const voucherAsset = 'assets/voucher.png';
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.asset(
+            voucherAsset,
+            fit: BoxFit.cover,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: Colors.black87,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: SelectableText(
+            'Voucher Code: ${v.code}',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            ElevatedButton.icon(
+              onPressed: () => _saveVoucherImageToDownloads(
+                  voucherAsset, 'voucher-${v.code}.png'),
+              icon: const Icon(Icons.download),
+              label: Text('Download Voucher ${_modalVouchers.length > 1 ? index + 1 : ''}'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  void _viewHistory() {
+    final ctx = _historyKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx, duration: const Duration(milliseconds: 450), curve: Curves.easeInOut);
+    } else {
+      _snack('Scroll target not found');
     }
   }
 
@@ -556,7 +772,6 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 
   // -------- Build --------
-
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -564,10 +779,26 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
     }
 
     return Scaffold(
+      
       appBar: AppBar(title: const Text('Learning Resource Hub')),
+      floatingActionButton: FloatingActionButton(
+  backgroundColor: Colors.deepPurple,
+  onPressed: () {
+    final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AssistantChat(userEmail: email),
+      ),
+    );
+  },
+  child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+),
+
       body: Stack(
         children: [
           ListView(
+            controller: _scroll,
             padding: const EdgeInsets.all(16),
             children: [
               _hero(),
@@ -578,12 +809,10 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
               const SizedBox(height: 8),
               _categoryChips(),
 
-              // Show controller error (preferred)
               if (_ctrl.errorMessage.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 _errorBox(_ctrl.errorMessage),
               ],
-              // Optional: show data-loading error (from _loadUserPoints etc.)
               if (_error != null) ...[
                 const SizedBox(height: 8),
                 _errorBox(_error!),
@@ -591,6 +820,8 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
 
               const SizedBox(height: 8),
               _grid(),
+              const SizedBox(height: 24),
+              _redemptionHistorySection(),
               const SizedBox(height: 100),
             ],
           ),
@@ -757,7 +988,7 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
               _badge(Icons.local_fire_department, 'Streak: ${_points.dailyStreak}'),
               const Spacer(),
               OutlinedButton.icon(
-                onPressed: () => _snack('Redemption history coming soon'),
+                onPressed: _viewHistory,
                 icon: const Icon(Icons.history, size: 16),
                 label: const Text('View History'),
               ),
@@ -976,6 +1207,101 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
     });
   }
 
+  Widget _redemptionHistorySection() {
+    // NOTE: Ensure you add the asset in pubspec.yaml: assets: - assets/voucher.png
+    const voucherAsset = 'assets/voucher.png';
+
+    return Container(
+      key: _historyKey,
+      padding: const EdgeInsets.all(16),
+      decoration: _cardDeco(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: const [
+              Icon(Icons.history),
+              SizedBox(width: 8),
+              Text('Redemption History',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_points.redemptionHistory.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                'No redemption history yet. Start learning and redeem your points for vouchers!',
+                style: TextStyle(color: Colors.black87),
+              ),
+            )
+          else
+            LayoutBuilder(builder: (context, c) {
+              final cross = c.maxWidth >= 1000 ? 3 : c.maxWidth >= 700 ? 2 : 1;
+              return GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _points.redemptionHistory.length,
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: cross,
+                  crossAxisSpacing: 14,
+                  mainAxisSpacing: 14,
+                  childAspectRatio: 1.1,
+                ),
+                itemBuilder: (_, i) {
+                  final v = _points.redemptionHistory[i];
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8F9FA),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFFF0F0F0), width: 2),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.asset(voucherAsset, height: 120, fit: BoxFit.cover),
+                        ),
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: SelectableText('Code: ${v.code}',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 1,
+                                  fontSize: 12)),
+                        ),
+                        const SizedBox(height: 6),
+                        Text('Redeemed: ${DateTime.tryParse(v.redeemedAt) != null ?
+                                '${DateTime.parse(v.redeemedAt).day}/${DateTime.parse(v.redeemedAt).month}/${DateTime.parse(v.redeemedAt).year}' : v.redeemedAt}',
+                            style: const TextStyle(fontSize: 12, color: Colors.black87)),
+                        Text('Points Used: ${v.pointsRedeemed}',
+                            style: const TextStyle(fontSize: 12, color: Colors.black87)),
+                        const Spacer(),
+                        ElevatedButton.icon(
+                          onPressed: () => _saveVoucherImageToDownloads(
+                              voucherAsset, 'voucher-${v.code}.png'),
+                          icon: const Icon(Icons.download, size: 16),
+                          label: const Text('Download'),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
   Widget _pointsToast() {
     return Positioned(
       right: 16,
@@ -991,7 +1317,6 @@ if (!ok) _snack('Could not open: ${fixed.toString()}');
             children: [
               const Icon(Icons.auto_awesome, color: Colors.white),
               const SizedBox(width: 8),
-              // ✅ fixed interpolation
               Text('+$_popupPoints points! $_popupMsg',
                   style: const TextStyle(color: Colors.white)),
             ],

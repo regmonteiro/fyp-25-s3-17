@@ -1,71 +1,30 @@
-import * as functions from "firebase-functions";
+// functions/src/index.ts
+import { onCall } from "firebase-functions/v2/https";
 import * as admin from "firebase-admin";
+import dialogflow = require("@google-cloud/dialogflow");
 
-admin.initializeApp();
-const db = admin.firestore();
+if (admin.apps.length === 0) admin.initializeApp();
 
-export const linkUsers = functions.https.onCall(async (data, context) => {
-  if (!context.auth?.uid) {
-    throw new functions.https.HttpsError(
-      "unauthenticated",
-      "You must be logged in."
-    );
-  }
+export const dialogflowGateway = onCall({ region: "asia-southeast1" }, async (request) => {
+  const { userId, message, languageCode = "en" } = (request.data as any) ?? {};
+  if (!message || typeof message !== "string") return { reply: "Empty message." };
 
-  const callerUid = context.auth.uid;
-  const otherCode = (data?.code ?? "").toString().trim();
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT!;
+  const sessionId = (userId?.toString() || "anonymous").replace(/[^a-zA-Z0-9_-]/g, "_");
 
-  if (!otherCode) {
-    throw new functions.https.HttpsError(
-      "invalid-argument",
-      "Missing code."
-    );
-  }
+  const client = new dialogflow.SessionsClient();
+  const sessionPath = client.projectAgentSessionPath(projectId, sessionId);
 
-  try {
-    const snap = await db
-      .collection("users")
-      .where("shortCode", "==", otherCode)
-      .limit(1)
-      .get();
+  const [resp] = await client.detectIntent({
+    session: sessionPath,
+    queryInput: { text: { text: message, languageCode } },
+  });
 
-    if (snap.empty) {
-      throw new functions.https.HttpsError(
-        "not-found",
-        "No user with this code found."
-      );
-    }
+  const qr: any = resp.queryResult || {};
+  const reply =
+    qr.fulfillmentText ||
+    (qr.fulfillmentMessages?.map((m: any) => m.text?.text?.[0]).find(Boolean)) ||
+    "Sorry, I didn't understand.";
 
-    const otherRef = snap.docs[0].ref;
-    const otherUid = otherRef.id;
-
-    if (callerUid === otherUid) {
-      throw new functions.https.HttpsError(
-        "invalid-argument",
-        "You cannot link yourself."
-      );
-    }
-
-    const batch = db.batch();
-    batch.update(
-      db.collection("users").doc(callerUid),
-      {
-        linkedUsers: admin.firestore.FieldValue.arrayUnion(otherUid),
-      }
-    );
-    batch.update(otherRef, {
-      linkedUsers: admin.firestore.FieldValue.arrayUnion(callerUid),
-    });
-
-    await batch.commit();
-
-    return {status: "success", message: "Link successful!"};
-  } catch (err) {
-    console.error("Linking error:", err);
-    throw new functions.https.HttpsError(
-      "internal",
-      "Failed to link user"
-    );
-  }
+  return { reply };
 });
-

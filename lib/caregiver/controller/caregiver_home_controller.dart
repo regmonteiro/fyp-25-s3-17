@@ -70,14 +70,12 @@ class CaregiverHomeController {
 
   void _emitEmpty() => _emit(CaregiverHomeViewModel.empty());
 
-  // Put this near your other public methods
+
 void setActiveElder(String uid) {
   final v = uid.trim();
   _activeElder = v.isEmpty ? null : v;
 
-  // Optional: if you want an immediate UI refresh using the last VM,
-  // re-emit without changing data. Otherwise the next snapshot tick
-  // will naturally rebuild with the new _activeElder.
+
   if (_latestVm != null) {
     _vmCtrl.add(_latestVm!);
   }
@@ -95,13 +93,13 @@ void setActiveElder(String uid) {
     final caregiverRef = await _accountDocRefEither();
     final caregiverUid = caregiverRef.id;
 
-    // Normalize caregiver doc to ensure elderlyIds exists/merged
+    
     await normalizeCaregiverDoc(caregiverUid);
 
     final caregiver$    = caregiverRef.snapshots();
     final announcements$ = _fs.collection('announcements').orderBy('createdAt', descending: true).limit(25).snapshots();
     final recs$          = _fs.collection('learningRecommendations').orderBy('createdAt', descending: true).limit(25).snapshots();
-    // Notifications: use toUid (in your rules)
+    
     final notifs$        = _fs.collection('notifications')
                               .where('toUid', isEqualTo: caregiverUid)
                               .orderBy('timestamp', descending: true)
@@ -229,7 +227,7 @@ void setActiveElder(String uid) {
     try { return await fut; } catch (_) { return fallback; }
   }
 
-  /// Extract links from new fields (with legacy fallback).
+
   List<String> _extractLinkedElders(Map<String, dynamic> cg) {
     final out = <String>{};
     final many = cg['elderlyIds'];
@@ -246,27 +244,27 @@ void setActiveElder(String uid) {
   }
 
   bool _looksLikeEmailKey(String id) {
-    // e.g. local@domain_tld (domain dots replaced by underscores)
+
     return id.contains('@') && id.split('@').last.contains('_');
   }
 
-  /// Fetch elder names by resolving email-keyed doc **or** UID doc.
+
   Future<Map<String, String>> _fetchElderNames(List<String> ids) async {
     final out = <String, String>{};
     for (final id in ids) {
       try {
         DocumentSnapshot<Map<String, dynamic>>? snap;
 
-        // 1) If the id itself is an email-key (most of your DB), read it directly
+
         if (_looksLikeEmailKey(id)) {
           snap = await _fs.collection('Account').doc(id).get();
         } else {
-          // 2) Try direct UID doc
+          
           final direct = await _fs.collection('Account').doc(id).get();
           if (direct.exists) {
             snap = direct;
           } else {
-            // 3) Fallback: query by uid field (handles email-keyed docs)
+
             final qs = await _fs.collection('Account').where('uid', isEqualTo: id).limit(1).get();
             snap = qs.docs.isNotEmpty ? qs.docs.first : null;
           }

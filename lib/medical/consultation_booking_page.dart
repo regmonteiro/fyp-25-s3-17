@@ -3,16 +3,16 @@ import 'package:intl/intl.dart';
 import '../models/user_profile.dart';
 import 'controller/gp_appointment_controller.dart';
 
-class AppointmentBookingPage extends StatefulWidget {
+class ConsultationBookingPage extends StatefulWidget {
   final UserProfile userProfile;
 
-  const AppointmentBookingPage({super.key, required this.userProfile});
+  const ConsultationBookingPage({super.key, required this.userProfile});
 
   @override
-  State<AppointmentBookingPage> createState() => _AppointmentBookingPageState();
+  State<ConsultationBookingPage> createState() => _ConsultationBookingPageState();
 }
 
-class _AppointmentBookingPageState extends State<AppointmentBookingPage> {
+class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
   final _formKey = GlobalKey<FormState>();
   late final GpAppointmentController _ctrl;
 

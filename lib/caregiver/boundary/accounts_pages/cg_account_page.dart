@@ -11,6 +11,7 @@ import 'password_settings_page.dart';
 import 'feedback_support_page.dart';
 import 'settings_page.dart';
 import '../../../models/user_profile.dart';
+import '../../../assistant_chat.dart';
 
 
 
@@ -23,6 +24,20 @@ class CgAccountPage extends StatelessWidget {
     final ctrl = CgAccountController();
 
     return Scaffold(
+      floatingActionButton: FloatingActionButton(
+  backgroundColor: Colors.deepPurple,
+  onPressed: () {
+    final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => AssistantChat(userEmail: email),
+      ),
+    );
+  },
+  child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+),
+
       appBar: AppBar(title: const Text("Account Details")),
       body: ListView(
         padding: const EdgeInsets.all(16),

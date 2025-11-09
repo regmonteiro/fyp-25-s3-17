@@ -3,8 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/user_profile.dart';
 import 'caregiver_home_page.dart';
-import 'create_events_page.dart';
-import 'cg_ai_assistant_page.dart';
+import 'create_appointments_page.dart';
 import 'report_page.dart';
 import '../boundary/accounts_pages/cg_account_page.dart';
 import '../controller/caregiver_dashboard_controller.dart';
@@ -54,25 +53,13 @@ class _DashboardScaffold extends StatelessWidget {
               final page = ctx.findAncestorWidgetOfExactType<CaregiverDashboardPage>()!;
               final userProfile = page.userProfile;
 
-              return CreateEventsPage(
+              return CreateAppointmentsPage(
                 userProfile: userProfile,
                 elderlyId: dashboard.selectedElderId,
               );
             },
           ),
         ),
-      _TabSpec(
-            title: 'AI Assistant',
-            icon: Icons.smart_toy_outlined,
-            content: Builder(
-              builder: (ctx) {
-                final page = ctx.findAncestorWidgetOfExactType<CaregiverDashboardPage>()!;
-                final userProfile = page.userProfile;
-
-                return CgAIAssistant(userProfile: userProfile);
-              },
-            ),
-          ),
 
           _TabSpec(
             title: 'Reports',
@@ -137,7 +124,7 @@ class _DashboardScaffold extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CreateEventsPage(
+                    builder: (_) => CreateAppointmentsPage(
                       userProfile: page.userProfile,
                       elderlyId: d.selectedElderId!,
                     ),
