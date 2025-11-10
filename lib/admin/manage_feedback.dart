@@ -1,39 +1,36 @@
+
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-class AdminFeedback extends StatefulWidget {
-  final String? userEmail;
-  final String? userFirstName;
-  final String? userLastName;
-  final int? userCreatedAt;
+import 'admin_shell.dart';
+import '../models/user_profile.dart';
 
-  const AdminFeedback({
+class AdminFeedbackPage extends StatefulWidget {
+  final UserProfile userProfile;
+
+  const AdminFeedbackPage({
     Key? key,
-    this.userEmail,
-    this.userFirstName,
-    this.userLastName,
-    this.userCreatedAt,
+    required this.userProfile,
   }) : super(key: key);
 
   @override
   _AdminFeedbackState createState() => _AdminFeedbackState();
 }
 
-class _AdminFeedbackState extends State<AdminFeedback> {
+class _AdminFeedbackState extends State<AdminFeedbackPage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
   // State variables
   bool _isLoading = true;
   bool _showAll = false;
-  List<Feedback> _allFeedbacks = [];
-  List<Feedback> _displayedFeedbacks = [];
+  List<AppFeedback> _allFeedbacks = [];
+  List<AppFeedback> _displayedFeedbacks = [];
 
   // Colors
   final Color _purpleColor = Colors.purple.shade500;
   final Color _whiteColor = Colors.white;
-  final Color _redColor = Colors.red;
   final Color _blackColor = Colors.black;
 
   static const String _TAG = "AdminFeedback";
@@ -46,181 +43,87 @@ class _AdminFeedbackState extends State<AdminFeedback> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _whiteColor,
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          // AD Navigation Toolbar
-          ADNavigation(
-            onNavigationChanged: _handleNavigationChanged,
-          ),
-
-          // Main Content
-          Expanded(
-            child: _buildMainContent(),
-          ),
-        ],
-      ),
+    return AdminShell(
+      profile: widget.userProfile,
+      currentKey: 'adminFeedback',   // highlights Feedback in the top nav row
+      title: 'Feedback',             // title in the app bar
+      body: _buildMainContent(),     // your page content
     );
   }
 
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: _purpleColor,
-      elevation: 4,
-      title: Text(
-        "Feedback",
-        style: TextStyle(
-          color: _whiteColor,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      actions: [
-        IconButton(
-          icon: Icon(Icons.menu, color: _whiteColor),
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Menu clicked")),
-            );
-          },
-        ),
-        IconButton(
-          icon: Icon(Icons.notifications, color: _whiteColor),
-          onPressed: () {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text("Notifications clicked")),
-            );
-          },
-        ),
-        ElevatedButton(
-          onPressed: _logoutUser,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _redColor,
-            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-          ),
-          child: Text(
-            "Logout",
-            style: TextStyle(color: _whiteColor),
-          ),
-        ),
-        SizedBox(width: 8),
-      ],
-    );
-  }
-
+  // ───────────────────── Content (no local Scaffold/AppBar/ADNavigation) ─────────────────────
   Widget _buildMainContent() {
     return Padding(
-      padding: EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           // Title
           Text(
             "User Feedback",
-            style: TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-              color: _blackColor,
-            ),
+            style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: _blackColor),
           ),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
 
-          // Loading State
           if (_isLoading) _buildLoadingState(),
-
-          // Empty State
           if (!_isLoading && _allFeedbacks.isEmpty) _buildEmptyState(),
-
-          // Feedback List
           if (!_isLoading && _allFeedbacks.isNotEmpty) _buildFeedbackList(),
 
-          // Toggle Button
           if (!_isLoading && _allFeedbacks.length > 5) _buildToggleButton(),
         ],
       ),
     );
   }
 
-  Widget _buildLoadingState() {
-    return Expanded(
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text(
-              "Loading feedback...",
-              style: TextStyle(fontSize: 16, color: Colors.grey),
-            ),
-          ],
+  Widget _buildLoadingState() => const Expanded(
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text("Loading feedback...", style: TextStyle(fontSize: 16, color: Colors.grey)),
+            ],
+          ),
         ),
-      ),
-    );
-  }
+      );
 
-  Widget _buildEmptyState() {
-    return Expanded(
-      child: Center(
-        child: Text(
-          "No feedback available",
-          style: TextStyle(fontSize: 18, color: Colors.grey),
+  Widget _buildEmptyState() => const Expanded(
+        child: Center(
+          child: Text("No feedback available", style: TextStyle(fontSize: 18, color: Colors.grey)),
         ),
-      ),
-    );
-  }
+      );
 
-  Widget _buildFeedbackList() {
-    return Expanded(
-      child: ListView.builder(
-        itemCount: _displayedFeedbacks.length,
-        itemBuilder: (context, index) {
-          return FeedbackItem(feedback: _displayedFeedbacks[index]);
-        },
-      ),
-    );
-  }
-
-  Widget _buildToggleButton() {
-    return Container(
-      width: double.infinity,
-      child: ElevatedButton(
-        onPressed: _toggleShowMore,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _purpleColor,
+  Widget _buildFeedbackList() => Expanded(
+        child: ListView.builder(
+          itemCount: _displayedFeedbacks.length,
+          itemBuilder: (context, index) => FeedbackItem(feedback: _displayedFeedbacks[index]),
         ),
-        child: Text(
-          _showAll ? "Show Less" : "Show More",
-          style: TextStyle(color: _whiteColor),
+      );
+
+  Widget _buildToggleButton() => SizedBox(
+        width: double.infinity,
+        child: ElevatedButton(
+          onPressed: _toggleShowMore,
+          style: ElevatedButton.styleFrom(backgroundColor: _purpleColor),
+          child: Text(_showAll ? "Show Less" : "Show More", style: TextStyle(color: _whiteColor)),
         ),
-      ),
-    );
-  }
+      );
 
-  // Navigation Handler
-  void _handleNavigationChanged(String activityKey) {
-    print("$_TAG: Navigation changed to: $activityKey");
-  }
-
-  // Data Loading Methods
+  // ───────────────────── Data Loading ─────────────────────
   void _loadFeedbackData() {
     _setLoading(true);
 
-    // Check if user is authenticated first
     if (_auth.currentUser == null) {
       print("$_TAG: User not authenticated");
       _setLoading(false);
       return;
     }
 
-    // Load from Firestore
-    _db.collection("feedback")
+    _db
+        .collection("feedback")
         .get()
-        .then((querySnapshot) {
-      _processFeedbackData(querySnapshot);
-    })
+        .then(_processFeedbackData)
         .catchError((error) {
       print("$_TAG: Firestore access failed: $error");
       _setLoading(false);
@@ -233,10 +136,9 @@ class _AdminFeedbackState extends State<AdminFeedback> {
     if (querySnapshot.docs.isNotEmpty) {
       for (var document in querySnapshot.docs) {
         try {
-          Feedback? feedback = _parseFeedbackDocument(document);
-          if (feedback != null) {
-            feedback.id = document.id;
-            _allFeedbacks.add(feedback);
+          final f = _parseFeedbackDocument(document);
+          if (f != null) {
+            _allFeedbacks.add(f);
           }
         } catch (e) {
           print("$_TAG: Error parsing feedback document: $e");
@@ -249,39 +151,40 @@ class _AdminFeedbackState extends State<AdminFeedback> {
 
       _setLoading(false);
 
-      // Show success message
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Feedback data loaded successfully")),
+        const SnackBar(content: Text("Feedback data loaded successfully")),
       );
     } else {
-      // If no data in Firestore, show empty state
       print("$_TAG: No data in Firestore");
       _setLoading(false);
     }
   }
 
-  Feedback? _parseFeedbackDocument(DocumentSnapshot document) {
+  AppFeedback? _parseFeedbackDocument(DocumentSnapshot document) {
     try {
-      String comment = document.get("comment") ?? "";
-      String dateString = document.get("date") ?? "";
-      int rating = document.get("rating") ?? 0;
-      String userEmail = document.get("userEmail") ?? "";
-      String userId = document.get("userId") ?? "";
+      final data = document.data() as Map<String, dynamic>?;
 
-      // Validate required fields
-      if (comment.isEmpty || dateString.isEmpty || userEmail.isEmpty) {
-        print("$_TAG: Missing required fields in feedback document: ${document.id}");
+      if (data == null) return null;
+
+      final comment   = (data["comment"] ?? "") as String;
+      final dateStr   = (data["date"] ?? "") as String;
+      final rating    = (data["rating"] ?? 0) as int;
+      final userEmail = (data["userEmail"] ?? "") as String;
+      final userId    = (data["userId"] ?? "") as String;
+
+      if (comment.isEmpty || dateStr.isEmpty || userEmail.isEmpty) {
+        print("$_TAG: Missing fields in feedback doc: ${document.id}");
         return null;
       }
 
-      // Parse the date from ISO format
-      DateTime date = _parseISODate(dateString);
-      if (date == DateTime(1970)) { // Default fallback
-        print("$_TAG: Invalid date format in feedback document: $dateString");
-        date = DateTime.now(); // Fallback to current date
+      DateTime date;
+      try {
+        date = DateTime.parse(dateStr);
+      } catch (_) {
+        date = DateTime.now();
       }
 
-      return Feedback(
+      return AppFeedback(
         id: document.id,
         userId: userId,
         userEmail: userEmail,
@@ -289,20 +192,9 @@ class _AdminFeedbackState extends State<AdminFeedback> {
         rating: rating,
         date: date,
       );
-
     } catch (e) {
-      print("$_TAG: Error parsing feedback document: $e");
+      print("$_TAG: parse error: $e");
       return null;
-    }
-  }
-
-  DateTime _parseISODate(String dateString) {
-    try {
-      // Try parsing directly
-      return DateTime.parse(dateString);
-    } catch (e) {
-      print("$_TAG: Failed to parse date: $dateString");
-      return DateTime(1970); // Return epoch as fallback
     }
   }
 
@@ -311,28 +203,26 @@ class _AdminFeedbackState extends State<AdminFeedback> {
       if (_showAll) {
         _displayedFeedbacks = List.from(_allFeedbacks);
       } else {
-        _displayedFeedbacks = _pickRandomFeedbacks(_allFeedbacks, 5);
+        _displayedFeedbacks = _pickPseudoRandom(_allFeedbacks, 5);
       }
     });
   }
 
-  List<Feedback> _pickRandomFeedbacks(List<Feedback> feedbacks, int count) {
-    if (feedbacks.length <= count) {
-      return List.from(feedbacks);
-    }
+  List<AppFeedback> _pickPseudoRandom(List<AppFeedback> list, int count) {
+    if (list.length <= count) return List.from(list);
 
-    List<Feedback> randomFeedbacks = [];
-    List<int> takenIndices = [];
+    final out = <AppFeedback>[];
+    final used = <int>{};
+    final base = DateTime.now().millisecondsSinceEpoch;
 
-    while (randomFeedbacks.length < count && takenIndices.length < feedbacks.length) {
-      int index = DateTime.now().millisecondsSinceEpoch % feedbacks.length; // Simple pseudo-random
-      if (!takenIndices.contains(index)) {
-        takenIndices.add(index);
-        randomFeedbacks.add(feedbacks[index]);
+    while (out.length < count && used.length < list.length) {
+      final i = base % list.length ^ out.length; // cheap deterministic-ish
+      if (!used.contains(i)) {
+        used.add(i);
+        out.add(list[i]);
       }
     }
-
-    return randomFeedbacks;
+    return out;
   }
 
   void _toggleShowMore() {
@@ -340,65 +230,25 @@ class _AdminFeedbackState extends State<AdminFeedback> {
       _showAll = !_showAll;
       _updateDisplayedFeedbacks();
     });
-
-    // Scroll to top when showing all
-    if (_showAll) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // This would scroll the list to top, but we don't have a ScrollController in this simple implementation
-        // In a real app, you might want to add a ScrollController to the ListView
-      });
-    }
   }
 
-  void _setLoading(bool loading) {
-    setState(() {
-      _isLoading = loading;
-    });
-  }
-
-  void _logoutUser() {
-    _auth.signOut();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Logged out successfully")),
-    );
-    _redirectToLogin();
-  }
-
-  void _redirectToLogin() {
-    print("$_TAG: Redirecting to login page");
-    // Navigator.pushAndRemoveUntil(
-    //   context,
-    //   MaterialPageRoute(builder: (context) => LoginPage()),
-    //   (route) => false,
-    // );
-  }
-
-  @override
-  void dispose() {
-    super.dispose();
-  }
+  void _setLoading(bool v) => setState(() => _isLoading = v);
 }
 
-// Feedback Item Widget
+// ───────────────────── Item widget ─────────────────────
 class FeedbackItem extends StatelessWidget {
-  final Feedback feedback;
+  final AppFeedback feedback;
 
   const FeedbackItem({Key? key, required this.feedback}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: EdgeInsets.only(bottom: 8),
+      margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black12,
-            blurRadius: 2,
-            offset: Offset(0, 1),
-          ),
-        ],
+        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 2, offset: Offset(0, 1))],
       ),
       child: Material(
         color: Colors.transparent,
@@ -406,15 +256,12 @@ class FeedbackItem extends StatelessWidget {
           onTap: () {},
           borderRadius: BorderRadius.circular(8),
           child: Padding(
-            padding: EdgeInsets.all(22),
+            padding: const EdgeInsets.all(22),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Avatar
                 _buildAvatar(),
-                SizedBox(width: 20),
-
-                // Content
+                const SizedBox(width: 20),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -425,7 +272,7 @@ class FeedbackItem extends StatelessWidget {
                           Expanded(
                             child: Text(
                               feedback.userEmail,
-                              style: TextStyle(
+                              style: const TextStyle(
                                 fontWeight: FontWeight.bold,
                                 fontSize: 16,
                                 color: Color(0xFF333333),
@@ -434,30 +281,23 @@ class FeedbackItem extends StatelessWidget {
                           ),
                           Text(
                             _formatDate(feedback.date),
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF888888),
-                            ),
+                            style: const TextStyle(fontSize: 14, color: Color(0xFF888888)),
                           ),
                         ],
                       ),
-                      SizedBox(height: 10),
+                      const SizedBox(height: 10),
 
                       // Comment
                       Text(
                         feedback.comment,
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Color(0xFF555555),
-                          height: 1.4,
-                        ),
+                        style: const TextStyle(fontSize: 16, color: Color(0xFF555555), height: 1.4),
                       ),
-                      SizedBox(height: 12),
+                      const SizedBox(height: 12),
 
                       // Rating
                       Text(
                         "⭐ ${feedback.rating} / 5",
-                        style: TextStyle(
+                        style: const TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
                           color: Color(0xFF2691f5),
@@ -479,52 +319,39 @@ class FeedbackItem extends StatelessWidget {
       width: 55,
       height: 55,
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF667eea),
-            Color(0xFF764ba2),
-          ],
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: [Color(0xFF667eea), Color(0xFF764ba2)],
         ),
         borderRadius: BorderRadius.circular(27.5),
       ),
       child: Center(
         child: Text(
-          _getInitials(feedback.userEmail),
-          style: TextStyle(
-            color: Colors.white,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
+          _initials(feedback.userEmail),
+          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
         ),
       ),
     );
   }
 
-  String _getInitials(String email) {
+  String _initials(String email) {
     if (email.isEmpty) return "?";
-
-    String namePart = email.split("@")[0];
-    List<String> parts = namePart.split(RegExp(r'[.\-_]'));
-
-    if (parts.isEmpty) {
-      return email[0].toUpperCase();
-    } else if (parts.length == 1) {
-      return parts[0][0].toUpperCase();
-    } else {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
+    final namePart = email.split("@").first;
+    final parts = namePart.split(RegExp(r'[.\-_]')).where((s) => s.isNotEmpty).toList();
+    if (parts.isEmpty) return email[0].toUpperCase();
+    if (parts.length == 1) return parts[0][0].toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
   }
 
-  String _formatDate(DateTime date) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  String _formatDate(DateTime d) {
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${months[d.month - 1]} ${d.day}, ${d.year}';
   }
 }
 
-// Feedback Entity Class
-class Feedback {
+// ───────────────────── Entity ─────────────────────
+// NOTE: Renamed from `Feedback` → `AppFeedback` to avoid clashing with Flutter's `Feedback` class.
+class AppFeedback {
   String id;
   String userId;
   String userEmail;
@@ -532,7 +359,7 @@ class Feedback {
   int rating;
   DateTime date;
 
-  Feedback({
+  AppFeedback({
     required this.id,
     required this.userId,
     required this.userEmail,
@@ -541,171 +368,8 @@ class Feedback {
     required this.date,
   });
 
-  // Helper method to check if feedback is positive (rating >= 4)
-  bool isPositive() {
-    return rating >= 4;
-  }
+  bool isPositive() => rating >= 4;
 
   @override
-  String toString() {
-    return 'Feedback{id: $id, userEmail: $userEmail, rating: $rating, date: $date}';
-  }
-}
-
-// ADNavigation Widget (included in same file)
-class ADNavigation extends StatefulWidget {
-  final Function(String) onNavigationChanged;
-
-  const ADNavigation({Key? key, required this.onNavigationChanged}) : super(key: key);
-
-  @override
-  _ADNavigationState createState() => _ADNavigationState();
-}
-
-class _ADNavigationState extends State<ADNavigation> {
-  static const String _TAG = "ADNavigation";
-
-  final Color _purpleColor = Colors.purple.shade500;
-  final Color _whiteColor = Colors.white;
-
-  String _currentActivity = "adminFeedback";
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _whiteColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 8.0,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildNavItem("ad_dashboardNav", "Dashboard", "adminDashboard"),
-            _buildNavItem("ad_profileNav", "Profile", "adminProfile"),
-            _buildNavItem("ad_reportsNav", "Reports", "adminReports"),
-            _buildNavItem("ad_feedbackNav", "Feedback", "adminFeedback"),
-            _buildNavItem("ad_rolesNav", "Roles", "adminRoles"),
-            _buildNavItem("ad_safetyMeasuresNav", "Safety Measures", "adminSafetyMeasures"),
-            _buildNavItem("ad_announcementNav", "Announcement", "adminAnnouncement"),
-            _buildNavItem("ad_manageNav", "Manage", "adminManage", isLast: true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(String id, String text, String activityKey, {bool isLast = false}) {
-    bool isSelected = _currentActivity == activityKey;
-
-    return Container(
-      margin: EdgeInsets.only(right: isLast ? 16 : 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _handleNavigation(activityKey),
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: EdgeInsets.all(12),
-            decoration: isSelected
-                ? BoxDecoration(
-              color: _purpleColor,
-              borderRadius: BorderRadius.circular(20),
-            )
-                : null,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: isSelected ? _whiteColor : _purpleColor,
-                    shape: BoxShape.rectangle,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? _whiteColor : _purpleColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _handleNavigation(String activityKey) {
-    print("$_TAG: Navigating to $activityKey");
-
-    try {
-      if (_currentActivity != activityKey) {
-        setState(() {
-          _currentActivity = activityKey;
-        });
-
-        widget.onNavigationChanged(activityKey);
-      } else {
-        print("$_TAG: Already on $activityKey");
-        _highlightCurrentItem(activityKey);
-      }
-    } catch (e) {
-      print("$_TAG: Error navigating to $activityKey: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cannot open ${_getScreenName(activityKey)}")),
-      );
-    }
-  }
-
-  String _getScreenName(String activityKey) {
-    String screenName = activityKey.replaceAll('admin', '');
-    if (screenName.isEmpty) return "Screen";
-
-    String result = screenName[0].toUpperCase() + screenName.substring(1);
-    result = result.replaceAllMapped(RegExp(r'[A-Z]'), (match) => ' ${match.group(0)}');
-
-    return result.trim();
-  }
-
-  void _highlightCurrentItem(String currentActivity) {
-    print("$_TAG: AD Highlighting: $currentActivity");
-
-    try {
-      setState(() {
-        _currentActivity = currentActivity;
-      });
-    } catch (e) {
-      print("$_TAG: Error highlighting current item: $currentActivity, $e");
-    }
-  }
-
-  // Public methods to mimic the Java class functionality
-  void highlightCurrentItem(String currentActivity) {
-    _highlightCurrentItem(currentActivity);
-  }
-
-  void refreshNavigation() {
-    print("$_TAG: Refreshing navigation...");
-    setState(() {});
-  }
-
-  bool isNavigationInitialized() {
-    return true;
-  }
+  String toString() => 'AppFeedback{id: $id, userEmail: $userEmail, rating: $rating, date: $date}';
 }

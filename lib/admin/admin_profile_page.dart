@@ -1,50 +1,47 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'admin_shell.dart';
+import 'admin_routes.dart';
+import '../models/user_profile.dart';
 
-class AdminProfile extends StatefulWidget {
-  final String? userEmail;
-  final String? userFirstName;
-  final String? userLastName;
-  final int? userCreatedAt;
+class AdminProfilePage extends StatefulWidget {
+  /// Pass the signed-in admin's profile here from your shell/router.
+  final UserProfile userProfile;
 
-  const AdminProfile({
+  const AdminProfilePage({
     Key? key,
-    this.userEmail,
-    this.userFirstName,
-    this.userLastName,
-    this.userCreatedAt,
+    required this.userProfile,
   }) : super(key: key);
 
   @override
   _AdminProfileState createState() => _AdminProfileState();
 }
 
-class _AdminProfileState extends State<AdminProfile> {
+class _AdminProfileState extends State<AdminProfilePage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
   User? _currentUser;
 
   // Text Editing Controllers
   final TextEditingController _firstNameController = TextEditingController();
-  final TextEditingController _lastNameController = TextEditingController();
+  final TextEditingController _lastNameController  = TextEditingController();
   final TextEditingController _birthDateController = TextEditingController();
-  final TextEditingController _phoneController = TextEditingController();
+  final TextEditingController _phoneController     = TextEditingController();
 
   // State variables
   bool _isEditMode = false;
   String _originalFirstName = '';
-  String _originalLastName = '';
+  String _originalLastName  = '';
   String _originalBirthDate = '';
   String _originalPhoneNumber = '';
 
   // Colors
   final Color _purpleColor = Colors.purple.shade500;
-  final Color _whiteColor = Colors.white;
-  final Color _purpleLightColor = Colors.purple.shade200;
-  final Color _blackColor = Colors.black;
-  final Color _grayColor = Colors.grey;
-  final Color _redColor = Colors.red;
+  final Color _whiteColor  = Colors.white;
+  final Color _blackColor  = Colors.black;
+  final Color _grayColor   = Colors.grey;
+  final Color _redColor    = Colors.red;
 
   static const String _TAG = "AdminProfile";
 
@@ -58,78 +55,33 @@ class _AdminProfileState extends State<AdminProfile> {
   }
 
   void _initializeFirebase() {
+    // Any one-time setup you need
     print("$_TAG: Firebase initialized");
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _whiteColor,
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          // AD Navigation Toolbar
-          ADNavigation(
-            onNavigationChanged: _handleNavigationChanged,
-          ),
-
-          // Main Content
-          Expanded(
-            child: _buildMainContent(),
-          ),
-        ],
-      ),
+    return AdminShell(
+      profile: widget.userProfile,
+      currentKey: 'adminProfile',
+      title: 'Profile',
+      body: _buildMainContent(),
     );
   }
 
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: _purpleColor,
-      elevation: 4,
-      title: Text(
-        "Profile",
-        style: TextStyle(
-          color: _whiteColor,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-      actions: [
-        ElevatedButton(
-          onPressed: _logoutUser,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: _redColor,
-            padding: EdgeInsets.symmetric(horizontal: 16),
-          ),
-          child: Text(
-            "Logout",
-            style: TextStyle(color: _whiteColor, fontSize: 14),
-          ),
-        ),
-        SizedBox(width: 8),
-      ],
-    );
-  }
-
+  // ---------- MAIN CONTENT (unchanged, just not inside its own Scaffold) ----------
   Widget _buildMainContent() {
     return SingleChildScrollView(
-      padding: EdgeInsets.all(16),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Header
           _buildHeader(),
-          SizedBox(height: 20),
-
-          // Profile Details Card
+          const SizedBox(height: 20),
           _buildProfileDetailsCard(),
-          SizedBox(height: 30),
-
-          // Action Buttons Card
+          const SizedBox(height: 30),
           _buildActionButtonsCard(),
-          SizedBox(height: 30),
-
-          // Danger Zone Card
+          const SizedBox(height: 30),
           _buildDangerZoneCard(),
         ],
       ),
@@ -152,92 +104,75 @@ class _AdminProfileState extends State<AdminProfile> {
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // First Name
             _buildLabel("First Name"),
             _buildEditableField(_firstNameController, "First Name"),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // Last Name
             _buildLabel("Last Name"),
             _buildEditableField(_lastNameController, "Last Name"),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // Email (Non-editable)
             _buildLabel("Email Address"),
             _buildNonEditableField(_currentUser?.email ?? "Loading..."),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // Birth Date
             _buildLabel("Birth Date"),
             _buildEditableField(_birthDateController, "Birth Date"),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // Phone Number
             _buildLabel("Phone Number"),
             _buildEditableField(_phoneController, "Phone Number", isPhone: true),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // User Type (Non-editable)
             _buildLabel("User Type"),
             _buildNonEditableField("Admin"),
-            SizedBox(height: 16),
+            const SizedBox(height: 16),
 
-            // Account Created Time (Non-editable)
             _buildLabel("Account Created"),
-            _buildNonEditableField("Loading...", isSmall: true),
-            SizedBox(height: 16),
+            _buildNonEditableField("Loading...", isSmall: true), // (You can wire a live label if you want)
+            const SizedBox(height: 16),
 
-            // Last Login Time (Non-editable)
             _buildLabel("Last Login"),
-            _buildNonEditableField("Loading...", isSmall: true),
+            _buildNonEditableField("Loading...", isSmall: true), // (You can wire a live label if you want)
           ],
         ),
       ),
     );
   }
 
-  Widget _buildLabel(String text) {
-    return Text(
-      text,
-      style: TextStyle(
-        fontSize: 16,
-        fontWeight: FontWeight.bold,
-        color: _blackColor,
-      ),
-    );
-  }
+  Widget _buildLabel(String text) => Text(
+    text,
+    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _blackColor),
+  );
 
   Widget _buildEditableField(TextEditingController controller, String hint, {bool isPhone = false}) {
     return TextField(
       controller: controller,
       enabled: _isEditMode,
-      decoration: InputDecoration(
+      decoration: const InputDecoration(
         contentPadding: EdgeInsets.all(12),
         border: OutlineInputBorder(),
-        hintText: hint,
       ),
       keyboardType: isPhone ? TextInputType.phone : TextInputType.text,
     );
+    // (Optional) Hook up date pickers etc.
   }
 
   Widget _buildNonEditableField(String text, {bool isSmall = false}) {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         border: Border.all(color: Colors.grey.shade300),
         borderRadius: BorderRadius.circular(4),
       ),
       child: Text(
         text,
-        style: TextStyle(
-          fontSize: isSmall ? 14 : 18,
-          color: _blackColor,
-        ),
+        style: TextStyle(fontSize: isSmall ? 14 : 18, color: _blackColor),
       ),
     );
   }
@@ -247,49 +182,41 @@ class _AdminProfileState extends State<AdminProfile> {
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           children: [
-            // Edit/Save Changes Button
             ElevatedButton(
               onPressed: _isEditMode ? _saveChanges : _enterEditMode,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _isEditMode ? Colors.green : _purpleColor,
-                minimumSize: Size(double.infinity, 50),
+                minimumSize: const Size(double.infinity, 50),
               ),
               child: Text(
                 _isEditMode ? "Save Changes" : "Edit Profile",
                 style: TextStyle(color: _whiteColor, fontSize: 16),
               ),
             ),
-            SizedBox(height: 12),
+            const SizedBox(height: 12),
 
-            // Cancel Edit Button
             if (_isEditMode)
               ElevatedButton(
                 onPressed: _cancelEditMode,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: _grayColor,
-                  minimumSize: Size(double.infinity, 50),
+                  minimumSize: const Size(double.infinity, 50),
                 ),
-                child: Text(
-                  "Cancel",
-                  style: TextStyle(color: _whiteColor, fontSize: 16),
-                ),
+                child: Text("Cancel", style: TextStyle(color: _whiteColor, fontSize: 16)),
               ),
-            if (_isEditMode) SizedBox(height: 12),
 
-            // View Login History Button
+            if (_isEditMode) const SizedBox(height: 12),
+
             ElevatedButton(
               onPressed: _viewLoginHistory,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _purpleColor,
-                minimumSize: Size(double.infinity, 50),
+                minimumSize: const Size(double.infinity, 50),
               ),
-              child: Text(
-                "View Login History",
-                style: TextStyle(color: _whiteColor, fontSize: 16),
-              ),
+              child: Text("View Login History", style: TextStyle(color: _whiteColor, fontSize: 16)),
             ),
           ],
         ),
@@ -302,31 +229,21 @@ class _AdminProfileState extends State<AdminProfile> {
       elevation: 4,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              "Danger Zone",
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: _redColor,
-              ),
+            Text("Danger Zone",
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: _redColor),
             ),
-            SizedBox(height: 12),
-
-            // Delete Account Button
+            const SizedBox(height: 12),
             ElevatedButton(
               onPressed: _showDeleteAccountConfirmation,
               style: ElevatedButton.styleFrom(
                 backgroundColor: _redColor,
-                minimumSize: Size(double.infinity, 50),
+                minimumSize: const Size(double.infinity, 50),
               ),
-              child: Text(
-                "Delete Account",
-                style: TextStyle(color: _whiteColor, fontSize: 16),
-              ),
+              child: Text("Delete Account", style: TextStyle(color: _whiteColor, fontSize: 16)),
             ),
           ],
         ),
@@ -334,314 +251,187 @@ class _AdminProfileState extends State<AdminProfile> {
     );
   }
 
-  // Navigation Handler
-  void _handleNavigationChanged(String activityKey) {
-    print("$_TAG: Navigation changed to: $activityKey");
-  }
-
-  // Edit Mode Methods
+  // ---------- EDIT MODE ----------
   void _enterEditMode() {
     setState(() {
       _isEditMode = true;
-      // Store original values for cancel functionality
-      _originalFirstName = _firstNameController.text;
-      _originalLastName = _lastNameController.text;
-      _originalBirthDate = _birthDateController.text;
-      _originalPhoneNumber = _phoneController.text;
+      _originalFirstName  = _firstNameController.text;
+      _originalLastName   = _lastNameController.text;
+      _originalBirthDate  = _birthDateController.text;
+      _originalPhoneNumber= _phoneController.text;
     });
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("You can now edit your profile information")),
+      const SnackBar(content: Text("You can now edit your profile information")),
     );
   }
 
-  void _exitEditMode() {
-    setState(() {
-      _isEditMode = false;
-    });
-  }
+  void _exitEditMode() => setState(() => _isEditMode = false);
 
   void _cancelEditMode() {
     setState(() {
-      // Restore original values
       _firstNameController.text = _originalFirstName;
-      _lastNameController.text = _originalLastName;
+      _lastNameController.text  = _originalLastName;
       _birthDateController.text = _originalBirthDate;
-      _phoneController.text = _originalPhoneNumber;
-      _isEditMode = false;
+      _phoneController.text     = _originalPhoneNumber;
+      _isEditMode               = false;
     });
-
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Changes cancelled")),
+      const SnackBar(content: Text("Changes cancelled")),
     );
   }
 
   void _saveChanges() {
-    String newFirstName = _firstNameController.text.trim();
-    String newLastName = _lastNameController.text.trim();
-    String newBirthDate = _birthDateController.text.trim();
-    String newPhoneNumber = _phoneController.text.trim();
+    final newFirstName = _firstNameController.text.trim();
+    final newLastName  = _lastNameController.text.trim();
+    final newBirthDate = _birthDateController.text.trim();
+    final newPhone     = _phoneController.text.trim();
 
-    if (_validateInputs(newFirstName, newLastName, newBirthDate, newPhoneNumber)) {
-      _updateUserProfileInFirebase(newFirstName, newLastName, newBirthDate, newPhoneNumber);
+    if (_validateInputs(newFirstName, newLastName, newBirthDate, newPhone)) {
+      _updateUserProfileInFirebase(newFirstName, newLastName, newBirthDate, newPhone);
     }
   }
 
   bool _validateInputs(String firstName, String lastName, String birthDate, String phoneNumber) {
-    if (firstName.isEmpty) {
-      _showError("First name cannot be empty");
-      return false;
-    }
-
-    if (lastName.isEmpty) {
-      _showError("Last name cannot be empty");
-      return false;
-    }
-
-    if (birthDate.isEmpty) {
-      _showError("Birth date cannot be empty");
-      return false;
-    }
-
-    if (phoneNumber.isEmpty) {
-      _showError("Phone number cannot be empty");
-      return false;
-    }
-
-    // Enhanced phone number validation for 8 digits starting with 6, 8, or 9
+    if (firstName.isEmpty) { _showError("First name cannot be empty"); return false; }
+    if (lastName.isEmpty)  { _showError("Last name cannot be empty");  return false; }
+    if (birthDate.isEmpty) { _showError("Birth date cannot be empty"); return false; }
+    if (phoneNumber.isEmpty) { _showError("Phone number cannot be empty"); return false; }
     if (!_isValidPhoneNumber(phoneNumber)) {
       _showError("Phone number must be 8 digits starting with 6, 8, or 9");
       return false;
     }
-
     return true;
   }
 
   bool _isValidPhoneNumber(String phoneNumber) {
-    // Check if it's exactly 8 digits
-    if (phoneNumber.length != 8) {
-      return false;
-    }
-
-    // Check if it contains only digits using RegExp
-    if (!RegExp(r'^\d+$').hasMatch(phoneNumber)) {
-      return false;
-    }
-
-    // Check if it starts with 6, 8, or 9
-    String firstDigit = phoneNumber[0];
-    return firstDigit == '6' || firstDigit == '8' || firstDigit == '9';
+    if (phoneNumber.length != 8) return false;
+    if (!RegExp(r'^\d+$').hasMatch(phoneNumber)) return false;
+    final first = phoneNumber[0];
+    return first == '6' || first == '8' || first == '9';
   }
 
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+  void _showError(String msg) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   void _updateUserProfileInFirebase(String firstName, String lastName, String birthDate, String phoneNumber) {
-    if (_currentUser != null) {
-      Map<String, Object> updates = {
-        "firstname": firstName,
-        "lastname": lastName,
-        "dob": birthDate,
-        "phoneNum": phoneNumber,
-      };
+    if (_currentUser == null) return;
 
-      _db.collection("Account").doc(_currentUser!.uid)
-          .update(updates)
-          .then((_) {
-        print("$_TAG: Profile updated successfully for user: ${_currentUser!.uid}");
+    final updates = <String, Object>{
+      "firstname": firstName,
+      "lastname":  lastName,
+      "dob":       birthDate,
+      "phoneNum":  phoneNumber,
+    };
+
+    _db.collection("Account").doc(_currentUser!.uid)
+      .update(updates)
+      .then((_) {
+        print("$_TAG: Profile updated for ${_currentUser!.uid}");
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Profile updated successfully!")),
+          const SnackBar(content: Text("Profile updated successfully!")),
         );
-
         _exitEditMode();
-        _loadUserData(); // Reload data to ensure consistency
-      }).catchError((error) {
-        print("$_TAG: Failed to update profile: $error");
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to update profile: $error")),
-        );
+        _loadUserData();
+      })
+      .catchError((e) {
+        _showError("Failed to update profile: $e");
       });
-    }
   }
 
-  // Firebase Methods
+  // ---------- FIREBASE LOAD / HISTORY ----------
   void _loadUserData() {
-    if (_currentUser != null) {
-      print("$_TAG: Loading user data for: ${_currentUser!.uid}");
-
-      // Fetch additional user data from Firestore
-      DocumentReference userRef = _db.collection("Account").doc(_currentUser!.uid);
-      userRef.get().then((DocumentSnapshot document) {
-        if (document.exists) {
-          print("$_TAG: User document found, loading data...");
-
-          Map<String, dynamic> data = document.data() as Map<String, dynamic>? ?? {};
-
-          // Retrieve all user data from Firestore with correct field names
-          String firstName = data["firstname"] ?? "Not provided";
-          String lastName = data["lastname"] ?? "Not provided";
-          String birthDate = data["dob"] ?? "Not provided";
-          String phoneNumber = data["phoneNum"] ?? "Not provided";
-          String userType = data["userType"] ?? "Admin";
-
-          // Handle timestamps
-          DateTime? createdAt = _getDateFromDocument(data, "createdAt");
-          DateTime? lastLogin = _getDateFromDocument(data, "lastLoginDate");
-
-          setState(() {
-            _firstNameController.text = firstName;
-            _lastNameController.text = lastName;
-            _birthDateController.text = birthDate.isNotEmpty ? birthDate : "Not provided";
-            _phoneController.text = phoneNumber.isNotEmpty ? phoneNumber : "Not provided";
-          });
-
-          // Update timestamps display
-          _setTimestampsFromFirestore(createdAt, lastLogin);
-
-        } else {
-          // Document doesn't exist in Firestore
-          print("$_TAG: User document not found in Firestore");
-          _setDefaultValues();
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("User profile not found in database")),
-          );
-        }
-      }).catchError((error) {
-        // Firestore query failed
-        print("$_TAG: Error loading user data: $error");
-        _setDefaultValues();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to load user data: $error")),
-        );
-      });
-    } else {
-      // No user is logged in
-      print("$_TAG: No user logged in");
+    if (_currentUser == null) {
       _setDefaultValues();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("No user logged in")),
-      );
+      _showError("No user logged in");
       _redirectToLogin();
+      return;
     }
+
+    _db.collection("Account").doc(_currentUser!.uid).get().then((doc) {
+      if (!doc.exists) {
+        _setDefaultValues();
+        _showError("User profile not found in database");
+        return;
+      }
+
+      final data = (doc.data() as Map<String, dynamic>? ) ?? {};
+      final firstName  = data["firstname"] ?? "Not provided";
+      final lastName   = data["lastname"]  ?? "Not provided";
+      final birthDate  = data["dob"]       ?? "Not provided";
+      final phone      = data["phoneNum"]  ?? "Not provided";
+      final createdAt  = _getDateFromDocument(data, "createdAt");
+      final lastLogin  = _getDateFromDocument(data, "lastLoginDate");
+
+      setState(() {
+        _firstNameController.text = firstName;
+        _lastNameController.text  = lastName;
+        _birthDateController.text = birthDate.isNotEmpty ? birthDate : "Not provided";
+        _phoneController.text     = phone.isNotEmpty ? phone : "Not provided";
+      });
+
+      _setTimestampsFromFirestore(createdAt, lastLogin);
+    }).catchError((e) {
+      _setDefaultValues();
+      _showError("Failed to load user data: $e");
+    });
   }
 
-  DateTime? _getDateFromDocument(Map<String, dynamic> data, String fieldName) {
+  DateTime? _getDateFromDocument(Map<String, dynamic> data, String field) {
     try {
-      // Try to get as Timestamp (Firestore native type)
-      if (data[fieldName] is Timestamp) {
-        Timestamp timestamp = data[fieldName] as Timestamp;
-        print("$_TAG: Got $fieldName as Timestamp: ${timestamp.toDate()}");
-        return timestamp.toDate();
+      if (data[field] is Timestamp) return (data[field] as Timestamp).toDate();
+      if (data[field] is String && (data[field] as String).isNotEmpty) {
+        return DateTime.parse(data[field] as String);
       }
-
-      // If not found as Timestamp, try as String
-      if (data[fieldName] is String) {
-        String dateString = data[fieldName] as String;
-        if (dateString.isNotEmpty) {
-          print("$_TAG: Got $fieldName as String: $dateString");
-          return _parseDateString(dateString);
-        }
-      }
-
-      print("$_TAG: $fieldName not found or null in document");
       return null;
-
-    } catch (e) {
-      print("$_TAG: Error getting $fieldName from document: $e");
-      return null;
-    }
+    } catch (_) { return null; }
   }
 
   void _setTimestampsFromFirestore(DateTime? createdAt, DateTime? lastLogin) {
-    try {
-      // These would be displayed in the UI if we had the text widgets for them
-      print("$_TAG: Created At: $createdAt");
-      print("$_TAG: Last Login: $lastLogin");
-
-      // In a real implementation, you would update Text widgets here
-      String formattedCreatedAt = createdAt != null ? _formatDate(createdAt) : "Unknown";
-      String formattedLastLogin = lastLogin != null ? _formatDate(lastLogin) : "Never logged in";
-
-      print("$_TAG: Formatted Created At: $formattedCreatedAt");
-      print("$_TAG: Formatted Last Login: $formattedLastLogin");
-
-    } catch (e) {
-      print("$_TAG: Error setting timestamps: $e");
-    }
-  }
-
-  DateTime? _parseDateString(String dateString) {
-    if (dateString.isEmpty) return null;
-
-    try {
-      // Try parsing ISO format
-      return DateTime.parse(dateString);
-    } catch (e) {
-      print("$_TAG: Error parsing date string: $dateString, $e");
-      return null;
-    }
-  }
-
-  String _formatDate(DateTime date) {
-    return "${date.day} ${_getMonthName(date.month)} ${date.year}, ${date.hour.toString().padLeft(2, '0')}:${date.minute.toString().padLeft(2, '0')}";
-  }
-
-  String _getMonthName(int month) {
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return months[month - 1];
+    // Wire to visible labels if you add them to the UI
+    print("$_TAG: Created At: $createdAt, Last Login: $lastLogin");
   }
 
   void _setDefaultValues() {
     setState(() {
       _firstNameController.text = "Name not available";
-      _lastNameController.text = "";
+      _lastNameController.text  = "";
       _birthDateController.text = "Not provided";
-      _phoneController.text = "Not provided";
+      _phoneController.text     = "Not provided";
     });
   }
 
   void _recordLogin() {
-    if (_currentUser != null) {
-      Map<String, Object> loginRecord = {
-        "date": DateTime.now(),
-        "device": "Flutter App",
-        "action": "login",
-        "timestamp": DateTime.now().millisecondsSinceEpoch,
-      };
+    if (_currentUser == null) return;
 
-      Map<String, Object> updates = {
-        "lastLoginDate": DateTime.now(),
-        "loginHistory": FieldValue.arrayUnion([loginRecord]),
-      };
+    final loginRecord = {
+      "date": DateTime.now(),
+      "device": "Flutter App",
+      "action": "login",
+      "timestamp": DateTime.now().millisecondsSinceEpoch,
+    };
 
-      _db.collection("Account").doc(_currentUser!.uid)
-          .update(updates)
-          .then((_) {
-        print("$_TAG: Login recorded successfully in main document");
-      }).catchError((error) {
-        print("$_TAG: Failed to record login: $error");
-      });
-    }
+    _db.collection("Account").doc(_currentUser!.uid).update({
+      "lastLoginDate": DateTime.now(),
+      "loginHistory": FieldValue.arrayUnion([loginRecord]),
+    }).catchError((e) {
+      print("$_TAG: Failed to record login: $e");
+    });
   }
 
   void _viewLoginHistory() {
     if (_currentUser == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Please log in to view login history")),
-      );
+      _showError("Please log in to view login history");
       return;
     }
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Loading Login History"),
+      builder: (_) => AlertDialog(
+        title: const Text("Loading Login History"),
         content: Column(
           mainAxisSize: MainAxisSize.min,
-          children: [
+          children: const [
             CircularProgressIndicator(),
             SizedBox(height: 16),
             Text("Please wait while we retrieve your login history..."),
@@ -650,114 +440,76 @@ class _AdminProfileState extends State<AdminProfile> {
       ),
     );
 
-    // Get login history from main document
-    _db.collection("Account").doc(_currentUser!.uid)
-        .get()
-        .then((DocumentSnapshot document) {
-      Navigator.of(context).pop(); // Close loading dialog
+    _db.collection("Account").doc(_currentUser!.uid).get().then((doc) {
+      Navigator.of(context).pop(); // close loading
 
-      if (document.exists) {
-        Map<String, dynamic> data = document.data() as Map<String, dynamic>? ?? {};
-        List<dynamic> loginHistory = data["loginHistory"] ?? [];
+      final data = (doc.data() as Map<String, dynamic>? ) ?? {};
+      final history = (data["loginHistory"] as List<dynamic>? ?? [])
+          .map((e) => (e as Map).cast<String, dynamic>())
+          .toList();
 
-        if (loginHistory.isNotEmpty) {
-          _showEnhancedLoginHistoryDialog(loginHistory.cast<Map<String, dynamic>>());
-        } else {
-          _showNoLoginHistoryDialog();
-        }
-      } else {
+      if (history.isEmpty) {
         _showNoLoginHistoryDialog();
+      } else {
+        _showEnhancedLoginHistoryDialog(history);
       }
-    }).catchError((error) {
-      Navigator.of(context).pop(); // Close loading dialog
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to load login history: $error")),
-      );
-      print("$_TAG: Error loading login history: $error");
+    }).catchError((e) {
+      Navigator.of(context).pop();
+      _showError("Failed to load login history: $e");
     });
   }
 
   void _showEnhancedLoginHistoryDialog(List<Map<String, dynamic>> loginHistory) {
-    // Sort by timestamp descending (newest first)
-    loginHistory.sort((a, b) {
-      int timestampA = a["timestamp"] ?? 0;
-      int timestampB = b["timestamp"] ?? 0;
-      return timestampB.compareTo(timestampA);
-    });
+    loginHistory.sort((a, b) => (b["timestamp"] ?? 0).compareTo(a["timestamp"] ?? 0));
 
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
+      builder: (_) => AlertDialog(
         title: Text("Login History (${loginHistory.length} records)"),
-        content: Container(
+        content: SizedBox(
           width: double.maxFinite,
-          child: ListView.builder(
+          child: ListView.separated(
             shrinkWrap: true,
             itemCount: loginHistory.length,
-            itemBuilder: (context, index) {
-              Map<String, dynamic> loginRecord = loginHistory[index];
-              DateTime? timestamp = _getTimestampFromRecord(loginRecord);
-              String deviceInfo = loginRecord["device"] ?? "Unknown device";
-              String action = loginRecord["action"] ?? "login";
-
+            separatorBuilder: (_, __) => const Divider(),
+            itemBuilder: (_, i) {
+              final rec = loginHistory[i];
+              final ts  = _getTimestampFromRecord(rec);
+              final dev = rec["device"] ?? "Unknown device";
+              final act = rec["action"] ?? "login";
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (index > 0) Divider(),
-                  Text(
-                    "${index + 1}. ${timestamp != null ? _formatDate(timestamp) : 'Unknown date'}",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  Text("Device: $deviceInfo | Action: $action"),
-                  SizedBox(height: 8),
+                  Text("${i + 1}. ${ts != null ? _formatDate(ts) : 'Unknown date'}",
+                      style: const TextStyle(fontWeight: FontWeight.bold)),
+                  Text("Device: $dev | Action: $act"),
                 ],
               );
             },
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text("Close"),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _viewLoginHistory(); // Refresh
-            },
-            child: Text("Refresh"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Close")),
+          TextButton(onPressed: () { Navigator.pop(context); _viewLoginHistory(); }, child: const Text("Refresh")),
         ],
       ),
     );
   }
 
-  DateTime? _getTimestampFromRecord(Map<String, dynamic> loginRecord) {
-    // Handle timestamp
-    if (loginRecord["timestamp"] is int) {
-      return DateTime.fromMillisecondsSinceEpoch(loginRecord["timestamp"]);
-    }
-
-    // Try to get date object directly
-    if (loginRecord["date"] is Timestamp) {
-      return (loginRecord["date"] as Timestamp).toDate();
-    }
-
+  DateTime? _getTimestampFromRecord(Map<String, dynamic> rec) {
+    if (rec["timestamp"] is int) return DateTime.fromMillisecondsSinceEpoch(rec["timestamp"] as int);
+    if (rec["date"] is Timestamp)  return (rec["date"] as Timestamp).toDate();
     return null;
   }
 
   void _showNoLoginHistoryDialog() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Login History"),
-        content: Text("No login history found.\n\nYour login activities will be recorded here when you:\n• Log into the app\n• Access your profile\n• Perform authentication-related activities"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text("OK"),
-          ),
-        ],
+      builder: (_) => AlertDialog(
+        title: const Text("Login History"),
+        content: const Text(
+            "No login history found.\n\nWe’ll record:\n• App logins\n• Profile access\n• Other auth actions"),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text("OK"))],
       ),
     );
   }
@@ -765,19 +517,14 @@ class _AdminProfileState extends State<AdminProfile> {
   void _showDeleteAccountConfirmation() {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Delete Account"),
-        content: Text("Are you sure you want to delete your account? This action cannot be undone and all your data will be permanently lost."),
+      builder: (_) => AlertDialog(
+        title: const Text("Delete Account"),
+        content: const Text(
+          "Are you sure you want to delete your account? This action cannot be undone."),
         actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel")),
           TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text("Cancel", style: TextStyle(color: Colors.grey)),
-          ),
-          TextButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              _deleteUserAccount();
-            },
+            onPressed: () { Navigator.pop(context); _deleteUserAccount(); },
             child: Text("Delete", style: TextStyle(color: _redColor)),
           ),
         ],
@@ -786,45 +533,22 @@ class _AdminProfileState extends State<AdminProfile> {
   }
 
   void _deleteUserAccount() {
-    if (_currentUser != null) {
-      _db.collection("Account").doc(_currentUser!.uid)
-          .delete()
-          .then((_) {
-        _currentUser!.delete().then((_) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Account deleted successfully")),
-          );
-          _redirectToLogin();
-        }).catchError((error) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text("Failed to delete account: $error")),
-          );
-        });
-      }).catchError((error) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to delete user data: $error")),
-        );
-      });
-    }
-  }
+    if (_currentUser == null) return;
 
-  void _logoutUser() {
-    _auth.signOut();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Logged out successfully")),
-    );
-    _redirectToLogin();
+    _db.collection("Account").doc(_currentUser!.uid).delete().then((_) {
+      _currentUser!.delete().then((_) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Account deleted successfully")),
+        );
+        _redirectToLogin();
+      }).catchError((e) => _showError("Failed to delete account: $e"));
+    }).catchError((e) => _showError("Failed to delete user data: $e"));
   }
 
   void _redirectToLogin() {
-    // This would navigate to your login page (Main.dart)
-    // For now, we'll just print a message
+    // Replace with your login route
     print("$_TAG: Redirecting to login page");
-    // Navigator.pushAndRemoveUntil(
-    //   context,
-    //   MaterialPageRoute(builder: (context) => Main()),
-    //   (route) => false,
-    // );
+    // Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => LoginPage()), (_) => false);
   }
 
   @override
@@ -835,162 +559,10 @@ class _AdminProfileState extends State<AdminProfile> {
     _phoneController.dispose();
     super.dispose();
   }
-}
 
-// ADNavigation Widget (included in same file)
-class ADNavigation extends StatefulWidget {
-  final Function(String) onNavigationChanged;
+  // -------- Helpers --------
+  String _formatDate(DateTime d) =>
+      "${d.day.toString().padLeft(2, '0')} ${_month(d.month)} ${d.year}, ${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}";
 
-  const ADNavigation({Key? key, required this.onNavigationChanged}) : super(key: key);
-
-  @override
-  _ADNavigationState createState() => _ADNavigationState();
-}
-
-class _ADNavigationState extends State<ADNavigation> {
-  static const String _TAG = "ADNavigation";
-
-  final Color _purpleColor = Colors.purple.shade500;
-  final Color _whiteColor = Colors.white;
-
-  String _currentActivity = "adminProfile";
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _whiteColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 8.0,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildNavItem("ad_dashboardNav", "Dashboard", "adminDashboard"),
-            _buildNavItem("ad_profileNav", "Profile", "adminProfile"),
-            _buildNavItem("ad_reportsNav", "Reports", "adminReports"),
-            _buildNavItem("ad_feedbackNav", "Feedback", "adminFeedback"),
-            _buildNavItem("ad_rolesNav", "Roles", "adminRoles"),
-            _buildNavItem("ad_safetyMeasuresNav", "Safety Measures", "adminSafetyMeasures"),
-            _buildNavItem("ad_announcementNav", "Announcement", "adminAnnouncement"),
-            _buildNavItem("ad_manageNav", "Manage", "adminManage", isLast: true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(String id, String text, String activityKey, {bool isLast = false}) {
-    bool isSelected = _currentActivity == activityKey;
-
-    return Container(
-      margin: EdgeInsets.only(right: isLast ? 16 : 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _handleNavigation(activityKey),
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: EdgeInsets.all(12),
-            decoration: isSelected
-                ? BoxDecoration(
-              color: _purpleColor,
-              borderRadius: BorderRadius.circular(20),
-            )
-                : null,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: isSelected ? _whiteColor : _purpleColor,
-                    shape: BoxShape.rectangle,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? _whiteColor : _purpleColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _handleNavigation(String activityKey) {
-    print("$_TAG: Navigating to $activityKey");
-
-    try {
-      if (_currentActivity != activityKey) {
-        setState(() {
-          _currentActivity = activityKey;
-        });
-
-        widget.onNavigationChanged(activityKey);
-      } else {
-        print("$_TAG: Already on $activityKey");
-        _highlightCurrentItem(activityKey);
-      }
-    } catch (e) {
-      print("$_TAG: Error navigating to $activityKey: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cannot open ${_getScreenName(activityKey)}")),
-      );
-    }
-  }
-
-  String _getScreenName(String activityKey) {
-    String screenName = activityKey.replaceAll('admin', '');
-    if (screenName.isEmpty) return "Screen";
-
-    String result = screenName[0].toUpperCase() + screenName.substring(1);
-    result = result.replaceAllMapped(RegExp(r'[A-Z]'), (match) => ' ${match.group(0)}');
-
-    return result.trim();
-  }
-
-  void _highlightCurrentItem(String currentActivity) {
-    print("$_TAG: AD Highlighting: $currentActivity");
-
-    try {
-      setState(() {
-        _currentActivity = currentActivity;
-      });
-    } catch (e) {
-      print("$_TAG: Error highlighting current item: $currentActivity, $e");
-    }
-  }
-
-  // Public methods to mimic the Java class functionality
-  void highlightCurrentItem(String currentActivity) {
-    _highlightCurrentItem(currentActivity);
-  }
-
-  void refreshNavigation() {
-    print("$_TAG: Refreshing navigation...");
-    setState(() {});
-  }
-
-  bool isNavigationInitialized() {
-    return true;
-  }
+  String _month(int m) => const ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m - 1];
 }

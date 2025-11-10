@@ -43,6 +43,13 @@ class UserProfile {
     this.createdAt,
   });
 
+  factory UserProfile.empty() => UserProfile(
+    uid: '',
+    email: '',
+    firstname: '',
+    lastname: '',
+  );
+
   // ------------------ Computed Properties ------------------
   String get safeDisplayName {
     if ((displayName ?? '').isNotEmpty) return displayName!;

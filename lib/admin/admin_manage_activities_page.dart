@@ -1,26 +1,20 @@
+// lib/admin/admin_manage_activities_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-class AdminManageActivities extends StatefulWidget {
-  final String? userEmail;
-  final String? userFirstName;
-  final String? userLastName;
-  final int? userCreatedAt;
+import 'admin_shell.dart';
+import '../models/user_profile.dart';
 
-  const AdminManageActivities({
-    Key? key,
-    this.userEmail,
-    this.userFirstName,
-    this.userLastName,
-    this.userCreatedAt,
-  }) : super(key: key);
+class AdminManageActivitiesPage extends StatefulWidget {
+  final UserProfile userProfile;
+  const AdminManageActivitiesPage({Key? key, required this.userProfile}) : super(key: key);
 
   @override
   _AdminManageActivitiesState createState() => _AdminManageActivitiesState();
 }
 
-class _AdminManageActivitiesState extends State<AdminManageActivities> {
+class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -40,16 +34,15 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
   final List<String> _durations = ["15 mins", "30 mins", "45 mins", "1 hour", "1.5 hours", "2 hours", "2+ hours"];
 
   // Colors
-  final Color _backgroundColor = Color(0xFFf5f5f5);
+  final Color _backgroundColor = const Color(0xFFf5f5f5);
   final Color _whiteColor = Colors.white;
-  final Color _blackColor = Colors.black;
-  final Color _darkGrayColor = Color(0xFF666666);
+  final Color _darkGrayColor = const Color(0xFF666666);
   final Color _purpleColor = Colors.purple.shade500;
   final Color _redColor = Colors.red;
   final Color _blueColor = Colors.blue;
   final Color _greenColor = Colors.green;
   final Color _orangeColor = Colors.orange;
-  final Color _lightGrayColor = Color(0xFFE0E0E0);
+  final Color _lightGrayColor = const Color(0xFFE0E0E0);
 
   static const String _TAG = "AdminManageActivities";
   static const String _COLLECTION_ACTIVITIES = "Activities";
@@ -62,75 +55,31 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _backgroundColor,
-      appBar: _buildAppBar(),
+    return AdminShell(
+      profile: widget.userProfile,
+      currentKey: 'adminManage',
+      title: 'Activities',
       body: _buildBody(),
       floatingActionButton: _buildAddButton(),
-    );
-  }
-
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: _purpleColor,
-      elevation: 4,
-      title: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          IconButton(
-            icon: Icon(Icons.arrow_back, color: _whiteColor),
-            onPressed: () {
-              Navigator.pop(context);
-            },
-          ),
-          Text(
-            "Activities",
-            style: TextStyle(
-              color: _whiteColor,
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          Row(
-            children: [
-              IconButton(
-                icon: Icon(Icons.notifications, color: _whiteColor),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Notifications clicked")),
-                  );
-                },
-              ),
-              IconButton(
-                icon: Icon(Icons.menu, color: _whiteColor),
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text("Menu clicked")),
-                  );
-                },
-              ),
-            ],
-          ),
-        ],
-      ),
     );
   }
 
   Widget _buildBody() {
     return Column(
       children: [
-        // Header Section
+        // Header Section (search)
         _buildHeaderSection(),
 
         // Loading State
-        if (_isLoading) _buildLoadingState(),
-
-        // Empty State or Activities Grid
-        Expanded(
-          child: _filteredActivities.isEmpty && !_isLoading
-              ? _buildEmptyState()
-              : _buildActivitiesGrid(),
-        ),
+        if (_isLoading)
+          Expanded(child: _buildLoadingState())
+        else
+          // Empty or Activities Grid
+          Expanded(
+            child: _filteredActivities.isEmpty
+                ? _buildEmptyState()
+                : _buildActivitiesGrid(),
+          ),
       ],
     );
   }
@@ -138,7 +87,7 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
   Widget _buildHeaderSection() {
     return Container(
       width: double.infinity,
-      padding: EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
       color: _whiteColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -150,16 +99,15 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
               fontSize: 14,
             ),
           ),
-          SizedBox(height: 16),
-          // Search and Add Button Container
+          const SizedBox(height: 16),
           Row(
             children: [
               Expanded(
-                child: Container(
+                child: SizedBox(
                   height: 48,
                   child: TextField(
                     controller: _searchController,
-                    decoration: InputDecoration(
+                    decoration: const InputDecoration(
                       hintText: "Search activities...",
                       border: OutlineInputBorder(),
                       contentPadding: EdgeInsets.symmetric(horizontal: 16),
@@ -173,7 +121,6 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
                   ),
                 ),
               ),
-              SizedBox(width: 16),
             ],
           ),
         ],
@@ -182,22 +129,14 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
   }
 
   Widget _buildLoadingState() {
-    return Expanded(
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text(
-              "Loading activities...",
-              style: TextStyle(
-                fontSize: 16,
-                color: _darkGrayColor,
-              ),
-            ),
-          ],
-        ),
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: const [
+          CircularProgressIndicator(),
+          SizedBox(height: 16),
+          Text("Loading activities..."),
+        ],
       ),
     );
   }
@@ -205,15 +144,12 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
-        padding: EdgeInsets.all(32),
+        padding: const EdgeInsets.all(32),
         child: Text(
           _searchQuery.isEmpty
               ? "No activities found. Create your first activity to get started."
               : 'No activities found matching "$_searchQuery"',
-          style: TextStyle(
-            fontSize: 16,
-            color: _darkGrayColor,
-          ),
+          style: TextStyle(fontSize: 16, color: _darkGrayColor),
           textAlign: TextAlign.center,
         ),
       ),
@@ -222,103 +158,63 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
 
   Widget _buildActivitiesGrid() {
     return GridView.builder(
-      padding: EdgeInsets.all(12),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        childAspectRatio: 0.8,
+      padding: const EdgeInsets.all(12),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.8,
       ),
       itemCount: _filteredActivities.length,
-      itemBuilder: (context, index) {
-        return _buildActivityCard(_filteredActivities[index]);
-      },
+      itemBuilder: (_, i) => _buildActivityCard(_filteredActivities[i]),
     );
   }
 
   Widget _buildActivityCard(Activity activity) {
     return Card(
       elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(8),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: Padding(
-        padding: EdgeInsets.all(20),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Activity Title
+            // Title
             Text(
               activity.title,
-              style: TextStyle(
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF333333),
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF333333)),
+              maxLines: 1, overflow: TextOverflow.ellipsis,
             ),
-            SizedBox(height: 8),
-
-            // Activity Summary
+            const SizedBox(height: 8),
+            // Summary
             Text(
               activity.summary,
-              style: TextStyle(
-                fontSize: 16,
-                color: _darkGrayColor,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 16, color: _darkGrayColor),
+              maxLines: 2, overflow: TextOverflow.ellipsis,
             ),
-            SizedBox(height: 16),
-
-            // Primary Tags (Category, Difficulty, Duration)
+            const SizedBox(height: 16),
+            // Primary tags
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 8, runSpacing: 8,
               children: [
-                if (activity.category != null && activity.category!.isNotEmpty)
-                  _buildTag(activity.category!, _blueColor),
-                if (activity.difficulty != null && activity.difficulty!.isNotEmpty)
-                  _buildTag(activity.difficulty!, _greenColor),
-                if (activity.duration != null && activity.duration!.isNotEmpty)
-                  _buildTag(activity.duration!, _orangeColor),
+                if ((activity.category ?? '').isNotEmpty) _chip(activity.category!, _blueColor),
+                if ((activity.difficulty ?? '').isNotEmpty) _chip(activity.difficulty!, _greenColor),
+                if ((activity.duration ?? '').isNotEmpty) _chip(activity.duration!, _orangeColor),
               ],
             ),
-
-            // Custom Tags
             if (activity.tags.isNotEmpty) ...[
-              SizedBox(height: 8),
+              const SizedBox(height: 8),
               Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: activity.tags.map((tag) => _buildTag(tag, _purpleColor)).toList(),
+                spacing: 8, runSpacing: 8,
+                children: activity.tags.map((t) => _chip(t, _purpleColor)).toList(),
               ),
             ],
-
-            // Divider
-            Container(
-              height: 1,
-              color: _lightGrayColor,
-              margin: EdgeInsets.symmetric(vertical: 16),
-            ),
-
-            // Full Description
-            if (activity.description != null && activity.description!.isNotEmpty) ...[
+            Container(height: 1, color: _lightGrayColor, margin: const EdgeInsets.symmetric(vertical: 16)),
+            if ((activity.description ?? '').isNotEmpty) ...[
               Text(
                 activity.description!,
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF444444),
-                  height: 1.4,
-                ),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontSize: 14, color: Color(0xFF444444), height: 1.4),
+                maxLines: 3, overflow: TextOverflow.ellipsis,
               ),
-              SizedBox(height: 16),
+              const SizedBox(height: 16),
             ],
-
-            // Action Buttons
             Expanded(
               child: Row(
                 children: [
@@ -326,21 +222,19 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
                     child: ElevatedButton(
                       onPressed: () => _editActivity(activity),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _purpleColor,
-                        foregroundColor: _whiteColor,
+                        backgroundColor: _purpleColor, foregroundColor: _whiteColor,
                       ),
-                      child: Text("Edit"),
+                      child: const Text("Edit"),
                     ),
                   ),
-                  SizedBox(width: 8),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: ElevatedButton(
                       onPressed: () => _deleteActivity(activity),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: _redColor,
-                        foregroundColor: _whiteColor,
+                        backgroundColor: _redColor, foregroundColor: _whiteColor,
                       ),
-                      child: Text("Delete"),
+                      child: const Text("Delete"),
                     ),
                   ),
                 ],
@@ -352,88 +246,60 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
     );
   }
 
-  Widget _buildTag(String text, Color color) {
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: _whiteColor,
-          fontSize: 12,
-          fontWeight: FontWeight.bold,
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAddButton() {
-    return FloatingActionButton(
-      onPressed: _createActivity,
-      backgroundColor: _purpleColor,
-      foregroundColor: _whiteColor,
-      child: Icon(Icons.add),
-    );
-  }
-
-  // Activity Management Methods
-  void _loadActivities() {
-    setState(() {
-      _isLoading = true;
-    });
-
-    print("$_TAG: Loading activities from Firebase...");
-
-    _db.collection(_COLLECTION_ACTIVITIES)
-        .get()
-        .then((querySnapshot) {
-      setState(() {
-        _isLoading = false;
-        _allActivities.clear();
-
-        for (var document in querySnapshot.docs) {
-          try {
-            Activity activity = Activity.fromDocument(document);
-            _allActivities.add(activity);
-            print("$_TAG: Loaded activity: ${activity.title}");
-          } catch (e) {
-            print("$_TAG: Error parsing activity document: $e");
-          }
-        }
-
-        _filterActivities();
-      });
-    })
-        .catchError((error) {
-      setState(() {
-        _isLoading = false;
-      });
-      print("$_TAG: Error loading activities: $error");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to load activities: $error")),
+  Widget _chip(String text, Color color) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
+        child: Text(text,
+            style: TextStyle(color: _whiteColor, fontSize: 12, fontWeight: FontWeight.bold)),
       );
-    });
+
+  Widget _buildAddButton() => FloatingActionButton(
+        onPressed: _createActivity,
+        backgroundColor: _purpleColor,
+        foregroundColor: _whiteColor,
+        child: const Icon(Icons.add),
+      );
+
+  // ───────── Data methods ─────────
+  void _loadActivities() async {
+    setState(() => _isLoading = true);
+    try {
+      final snap = await _db.collection(_COLLECTION_ACTIVITIES).get();
+      final list = <Activity>[];
+      for (final d in snap.docs) {
+        try {
+          list.add(Activity.fromDocument(d));
+        } catch (e) {
+          // ignore malformed docs
+        }
+      }
+      setState(() {
+        _allActivities = list;
+        _filterActivities();
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load activities: $e')),
+      );
+    }
   }
 
   void _filterActivities() {
-    if (_searchQuery.isEmpty) {
-      _filteredActivities = List.from(_allActivities);
-    } else {
-      String query = _searchQuery.toLowerCase();
-      _filteredActivities = _allActivities.where((activity) {
-        return activity.title.toLowerCase().contains(query) ||
-            (activity.summary.toLowerCase().contains(query)) ||
-            (activity.category != null && activity.category!.toLowerCase().contains(query)) ||
-            (activity.description != null && activity.description!.toLowerCase().contains(query)) ||
-            activity.tags.any((tag) => tag.toLowerCase().contains(query));
-      }).toList();
-    }
-
-    // Sort by title
+    final q = _searchQuery.toLowerCase().trim();
+    _filteredActivities = q.isEmpty
+        ? List.of(_allActivities)
+        : _allActivities.where((a) {
+            bool contains(String? s) => (s ?? '').toLowerCase().contains(q);
+            return contains(a.title) ||
+                contains(a.summary) ||
+                contains(a.category) ||
+                contains(a.description) ||
+                a.tags.any((t) => t.toLowerCase().contains(q));
+          }).toList();
     _filteredActivities.sort((a, b) => a.title.compareTo(b.title));
+    setState(() {});
   }
 
   void _createActivity() {
@@ -441,15 +307,15 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
     _showActivityForm();
   }
 
-  void _editActivity(Activity activity) {
-    _editingActivity = activity;
+  void _editActivity(Activity a) {
+    _editingActivity = a;
     _showActivityForm();
   }
 
   void _showActivityForm() {
     showDialog(
       context: context,
-      builder: (context) => ActivityFormDialog(
+      builder: (_) => ActivityFormDialog(
         activity: _editingActivity,
         categories: _categories,
         difficulties: _difficulties,
@@ -460,21 +326,19 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
   }
 
   void _submitActivityForm(
-      String title,
-      String summary,
-      String category,
-      String difficulty,
-      String duration,
-      String image,
-      String description,
-      bool requiresAuth,
-      List<String> tags,
-      ) {
-    setState(() {
-      _isLoading = true;
-    });
+    String title,
+    String summary,
+    String category,
+    String difficulty,
+    String duration,
+    String image,
+    String description,
+    bool requiresAuth,
+    List<String> tags,
+  ) async {
+    setState(() => _isLoading = true);
 
-    Map<String, dynamic> activityData = {
+    final data = {
       'title': title,
       'summary': summary,
       'category': category,
@@ -488,107 +352,72 @@ class _AdminManageActivitiesState extends State<AdminManageActivities> {
       'createdBy': _auth.currentUser?.email ?? 'admin',
     };
 
-    if (_editingActivity != null) {
-      // Update existing activity
-      _db.collection(_COLLECTION_ACTIVITIES)
-          .doc(_editingActivity!.id)
-          .set(activityData)
-          .then((_) {
-        setState(() {
-          _isLoading = false;
-        });
+    try {
+      if (_editingActivity != null) {
+        await _db.collection(_COLLECTION_ACTIVITIES).doc(_editingActivity!.id).set(data);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Activity updated successfully")),
+          const SnackBar(content: Text('Activity updated successfully')),
         );
-        _loadActivities();
-      })
-          .catchError((error) {
-        setState(() {
-          _isLoading = false;
-        });
+      } else {
+        await _db.collection(_COLLECTION_ACTIVITIES).add(data);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to update activity: $error")),
+          const SnackBar(content: Text('Activity created successfully')),
         );
-      });
-    } else {
-      // Create new activity
-      _db.collection(_COLLECTION_ACTIVITIES)
-          .add(activityData)
-          .then((_) {
-        setState(() {
-          _isLoading = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Activity created successfully")),
-        );
-        _loadActivities();
-      })
-          .catchError((error) {
-        setState(() {
-          _isLoading = false;
-        });
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("Failed to create activity: $error")),
-        );
-      });
+      }
+      _loadActivities();
+    } catch (e) {
+      setState(() => _isLoading = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to save activity: $e')),
+      );
     }
   }
 
-  void _deleteActivity(Activity activity) {
+  void _deleteActivity(Activity a) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Delete Activity"),
-        content: Text("Are you sure you want to delete this activity? This action cannot be undone."),
+      builder: (_) => AlertDialog(
+        title: const Text('Delete Activity'),
+        content: const Text('Are you sure you want to delete this activity? This action cannot be undone.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text("Cancel"),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _performDeleteActivity(activity.id);
+              _performDeleteActivity(a.id);
             },
-            child: Text(
-              "Delete",
-              style: TextStyle(color: _redColor),
-            ),
+            child: Text('Delete', style: TextStyle(color: _redColor)),
           ),
         ],
       ),
     );
   }
 
-  void _performDeleteActivity(String activityId) {
-    setState(() {
-      _isLoading = true;
-    });
-
-    _db.collection(_COLLECTION_ACTIVITIES)
-        .doc(activityId)
-        .delete()
-        .then((_) {
-      setState(() {
-        _isLoading = false;
-      });
+  Future<void> _performDeleteActivity(String activityId) async {
+    setState(() => _isLoading = true);
+    try {
+      await _db.collection(_COLLECTION_ACTIVITIES).doc(activityId).delete();
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Activity deleted successfully")),
+        const SnackBar(content: Text('Activity deleted successfully')),
       );
       _loadActivities();
-    })
-        .catchError((error) {
-      setState(() {
-        _isLoading = false;
-      });
+    } catch (e) {
+      setState(() => _isLoading = false);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to delete activity: $error")),
+        SnackBar(content: Text('Failed to delete activity: $e')),
       );
-    });
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 }
 
-// Activity Model Class
+// ───────── Activity model & form dialog (unchanged from your version) ─────────
+
 class Activity {
   String id;
   String title;
@@ -615,17 +444,13 @@ class Activity {
   });
 
   factory Activity.fromDocument(DocumentSnapshot document) {
-    // Handle tags array
-    List<String> tags = [];
-    dynamic tagsObj = document.get('tags');
+    final tags = <String>[];
+    final tagsObj = document.get('tags');
     if (tagsObj is List) {
-      for (var tag in tagsObj) {
-        if (tag is String && tag.isNotEmpty) {
-          tags.add(tag);
-        }
+      for (final t in tagsObj) {
+        if (t is String && t.isNotEmpty) tags.add(t);
       }
     }
-
     return Activity(
       id: document.id,
       title: document.get('title') ?? 'No Title',
@@ -641,23 +466,22 @@ class Activity {
   }
 }
 
-// Activity Form Dialog
 class ActivityFormDialog extends StatefulWidget {
   final Activity? activity;
   final List<String> categories;
   final List<String> difficulties;
   final List<String> durations;
   final Function(
-      String title,
-      String summary,
-      String category,
-      String difficulty,
-      String duration,
-      String image,
-      String description,
-      bool requiresAuth,
-      List<String> tags,
-      ) onSubmit;
+    String title,
+    String summary,
+    String category,
+    String difficulty,
+    String duration,
+    String image,
+    String description,
+    bool requiresAuth,
+    List<String> tags,
+  ) onSubmit;
 
   const ActivityFormDialog({
     Key? key,
@@ -674,10 +498,10 @@ class ActivityFormDialog extends StatefulWidget {
 
 class _ActivityFormDialogState extends State<ActivityFormDialog> {
   final _formKey = GlobalKey<FormState>();
-  final TextEditingController _titleController = TextEditingController();
-  final TextEditingController _summaryController = TextEditingController();
-  final TextEditingController _imageController = TextEditingController();
-  final TextEditingController _descriptionController = TextEditingController();
+  final _titleController = TextEditingController();
+  final _summaryController = TextEditingController();
+  final _imageController = TextEditingController();
+  final _descriptionController = TextEditingController();
 
   String? _selectedCategory;
   String? _selectedDifficulty;
@@ -688,30 +512,22 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
   @override
   void initState() {
     super.initState();
-
-    // Populate form if editing
-    if (widget.activity != null) {
-      _titleController.text = widget.activity!.title;
-      _summaryController.text = widget.activity!.summary;
-      _imageController.text = widget.activity!.image ?? '';
-      _descriptionController.text = widget.activity!.description ?? '';
-      _selectedCategory = widget.activity!.category;
-      _selectedDifficulty = widget.activity!.difficulty;
-      _selectedDuration = widget.activity!.duration;
-      _requiresAuth = widget.activity!.requiresAuth;
-
-      // Populate tags
-      for (String tag in widget.activity!.tags) {
-        _tagControllers.add(TextEditingController(text: tag));
+    final a = widget.activity;
+    if (a != null) {
+      _titleController.text = a.title;
+      _summaryController.text = a.summary;
+      _imageController.text = a.image ?? '';
+      _descriptionController.text = a.description ?? '';
+      _selectedCategory = a.category;
+      _selectedDifficulty = a.difficulty;
+      _selectedDuration = a.duration;
+      _requiresAuth = a.requiresAuth;
+      for (final t in a.tags) {
+        _tagControllers.add(TextEditingController(text: t));
       }
     }
+    if (_tagControllers.isEmpty) _tagControllers.add(TextEditingController());
 
-    // Add one empty tag by default if no tags exist
-    if (_tagControllers.isEmpty) {
-      _tagControllers.add(TextEditingController());
-    }
-
-    // Set default values for dropdowns
     _selectedCategory ??= widget.categories.first;
     _selectedDifficulty ??= widget.difficulties.first;
     _selectedDuration ??= widget.durations.first;
@@ -723,210 +539,100 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
       child: Form(
         key: _formKey,
         child: Container(
-          padding: EdgeInsets.all(20),
+          padding: const EdgeInsets.all(20),
           width: double.maxFinite,
           child: SingleChildScrollView(
             child: Column(
-              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  widget.activity != null ? "Edit Activity" : "Create New Activity",
-                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                ),
-                SizedBox(height: 20),
+                Text(widget.activity != null ? "Edit Activity" : "Create New Activity",
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 20),
 
                 // Title
-                Text("Title *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
+                const Text("Title *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
                 TextFormField(
                   controller: _titleController,
-                  decoration: InputDecoration(
-                    hintText: "Activity Title *",
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Activity title is required';
-                    }
-                    return null;
-                  },
+                  decoration: const InputDecoration(hintText: "Activity Title *", border: OutlineInputBorder()),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Activity title is required' : null,
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
                 // Summary
-                Text("Summary *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
+                const Text("Summary *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
                 TextFormField(
                   controller: _summaryController,
                   maxLines: 3,
-                  decoration: InputDecoration(
-                    hintText: "Summary *",
-                    border: OutlineInputBorder(),
-                  ),
-                  validator: (value) {
-                    if (value == null || value.isEmpty) {
-                      return 'Summary is required';
-                    }
-                    return null;
-                  },
+                  decoration: const InputDecoration(hintText: "Summary *", border: OutlineInputBorder()),
+                  validator: (v) => (v == null || v.isEmpty) ? 'Summary is required' : null,
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
-                // Spinners Row
+                // Category / Difficulty / Duration
                 Row(
                   children: [
-                    // Category
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Category", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                          SizedBox(height: 8),
-                          DropdownButtonFormField<String>(
-                            value: _selectedCategory,
-                            items: widget.categories.map((String value) {
-                              return DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(value),
-                              );
-                            }).toList(),
-                            onChanged: (String? newValue) {
-                              setState(() {
-                                _selectedCategory = newValue;
-                              });
-                            },
-                            decoration: InputDecoration(
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    // Difficulty
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Difficulty", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                          SizedBox(height: 8),
-                          DropdownButtonFormField<String>(
-                            value: _selectedDifficulty,
-                            items: widget.difficulties.map((String value) {
-                              return DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(value),
-                              );
-                            }).toList(),
-                            onChanged: (String? newValue) {
-                              setState(() {
-                                _selectedDifficulty = newValue;
-                              });
-                            },
-                            decoration: InputDecoration(
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    SizedBox(width: 16),
-                    // Duration
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text("Duration", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                          SizedBox(height: 8),
-                          DropdownButtonFormField<String>(
-                            value: _selectedDuration,
-                            items: widget.durations.map((String value) {
-                              return DropdownMenuItem<String>(
-                                value: value,
-                                child: Text(value),
-                              );
-                            }).toList(),
-                            onChanged: (String? newValue) {
-                              setState(() {
-                                _selectedDuration = newValue;
-                              });
-                            },
-                            decoration: InputDecoration(
-                              border: OutlineInputBorder(),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
+                    Expanded(child: _dropdown("Category", widget.categories, _selectedCategory, (v) => setState(() => _selectedCategory = v))),
+                    const SizedBox(width: 16),
+                    Expanded(child: _dropdown("Difficulty", widget.difficulties, _selectedDifficulty, (v) => setState(() => _selectedDifficulty = v))),
+                    const SizedBox(width: 16),
+                    Expanded(child: _dropdown("Duration", widget.durations, _selectedDuration, (v) => setState(() => _selectedDuration = v))),
                   ],
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
                 // Image URL
-                Text("Image URL", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
+                const Text("Image URL", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
                 TextFormField(
                   controller: _imageController,
-                  decoration: InputDecoration(
-                    hintText: "Image URL",
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(hintText: "Image URL", border: OutlineInputBorder()),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
                 // Description
-                Text("Description", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
+                const Text("Description", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
                 TextFormField(
                   controller: _descriptionController,
                   maxLines: 4,
-                  decoration: InputDecoration(
-                    hintText: "Full Description",
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: const InputDecoration(hintText: "Full Description", border: OutlineInputBorder()),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
                 // Requires Auth Checkbox
                 CheckboxListTile(
-                  title: Text("Requires User Authentication"),
+                  title: const Text("Requires User Authentication"),
                   value: _requiresAuth,
-                  onChanged: (bool? value) {
-                    setState(() {
-                      _requiresAuth = value ?? false;
-                    });
-                  },
+                  onChanged: (v) => setState(() => _requiresAuth = v ?? false),
                 ),
-                SizedBox(height: 16),
+                const SizedBox(height: 16),
 
                 // Tags
-                Text("Additional Tags", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                SizedBox(height: 8),
-                ..._tagControllers.asMap().entries.map((entry) {
-                  int index = entry.key;
-                  TextEditingController controller = entry.value;
+                const Text("Additional Tags", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                ..._tagControllers.asMap().entries.map((e) {
+                  final i = e.key;
+                  final c = e.value;
                   return Padding(
-                    padding: EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.only(bottom: 8),
                     child: Row(
                       children: [
                         Expanded(
                           child: TextFormField(
-                            controller: controller,
-                            decoration: InputDecoration(
-                              hintText: "Enter tag",
-                              border: OutlineInputBorder(),
-                            ),
+                            controller: c,
+                            decoration: const InputDecoration(hintText: "Enter tag", border: OutlineInputBorder()),
                           ),
                         ),
                         IconButton(
-                          icon: Icon(Icons.remove),
+                          icon: const Icon(Icons.remove),
                           onPressed: () {
                             setState(() {
                               if (_tagControllers.length > 1) {
-                                _tagControllers.removeAt(index);
+                                _tagControllers.removeAt(i);
                               } else {
-                                controller.clear();
+                                c.clear();
                               }
                             });
                           },
@@ -935,28 +641,17 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
                     ),
                   );
                 }).toList(),
-
-                // Add Tag Button
                 ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _tagControllers.add(TextEditingController());
-                    });
-                  },
-                  child: Text("+ Add Tag"),
+                  onPressed: () => setState(() => _tagControllers.add(TextEditingController())),
+                  child: const Text("+ Add Tag"),
                 ),
-                SizedBox(height: 20),
+                const SizedBox(height: 20),
 
                 // Buttons
                 Row(
                   children: [
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: Text("Cancel"),
-                      ),
-                    ),
-                    SizedBox(width: 16),
+                    Expanded(child: TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel"))),
+                    const SizedBox(width: 16),
                     Expanded(
                       child: ElevatedButton(
                         onPressed: _submitForm,
@@ -973,17 +668,29 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
     );
   }
 
+  Widget _dropdown(String label, List<String> options, String? value, ValueChanged<String?> onChanged) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        DropdownButtonFormField<String>(
+          value: value ?? options.first,
+          items: options.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+          onChanged: onChanged,
+          decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+      ],
+    );
+  }
+
   void _submitForm() {
     if (_formKey.currentState!.validate()) {
-      // Collect tags
-      List<String> tags = [];
-      for (var controller in _tagControllers) {
-        String tag = controller.text.trim();
-        if (tag.isNotEmpty) {
-          tags.add(tag);
-        }
+      final tags = <String>[];
+      for (final c in _tagControllers) {
+        final t = c.text.trim();
+        if (t.isNotEmpty) tags.add(t);
       }
-
       widget.onSubmit(
         _titleController.text.trim(),
         _summaryController.text.trim(),
@@ -995,7 +702,6 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
         _requiresAuth,
         tags,
       );
-
       Navigator.pop(context);
     }
   }
@@ -1006,8 +712,8 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
     _summaryController.dispose();
     _imageController.dispose();
     _descriptionController.dispose();
-    for (var controller in _tagControllers) {
-      controller.dispose();
+    for (final c in _tagControllers) {
+      c.dispose();
     }
     super.dispose();
   }

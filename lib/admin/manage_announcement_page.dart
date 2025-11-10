@@ -1,26 +1,26 @@
+// lib/admin/admin_announcement_page.dart (replace the whole file with this)
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
-class AdminAnnouncement extends StatefulWidget {
-  final String? userEmail;
-  final String? userFirstName;
-  final String? userLastName;
-  final int? userCreatedAt;
+// ✅ shared shell + routes + model
+import 'admin_shell.dart';
+import 'admin_routes.dart';
+import '../models/user_profile.dart';
 
-  const AdminAnnouncement({
+class AdminAnnouncementPage extends StatefulWidget {
+  final UserProfile userProfile;
+
+  const AdminAnnouncementPage({
     Key? key,
-    this.userEmail,
-    this.userFirstName,
-    this.userLastName,
-    this.userCreatedAt,
+    required this.userProfile,
   }) : super(key: key);
 
   @override
   _AdminAnnouncementState createState() => _AdminAnnouncementState();
 }
 
-class _AdminAnnouncementState extends State<AdminAnnouncement> {
+class _AdminAnnouncementState extends State<AdminAnnouncementPage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
@@ -47,10 +47,10 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
   final Color _whiteColor = Colors.white;
   final Color _redColor = Colors.red;
   final Color _greenColor = Colors.green;
-  final Color _blueColor = Color(0xFF003366);
-  final Color _lightBlueColor = Color(0xFFe6f0fa);
-  final Color _buttonBlueColor = Color(0xFF4a90e2);
-  final Color _darkBlueColor = Color(0xFF004080);
+  final Color _blueColor = const Color(0xFF003366);
+  final Color _lightBlueColor = const Color(0xFFe6f0fa);
+  final Color _buttonBlueColor = const Color(0xFF4a90e2);
+  final Color _darkBlueColor = const Color(0xFF004080);
 
   static const String _TAG = "AdminAnnouncement";
 
@@ -62,114 +62,45 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: _lightBlueColor,
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          // AD Navigation Toolbar
-          ADNavigation(
-            onNavigationChanged: _handleNavigationChanged,
-          ),
-
-          // Main Content
-          Expanded(
-            child: _buildMainContent(),
-          ),
-        ],
-      ),
+    // ✅ Use the shared AdminShell: top bar, menu/drawer, nav row, logout handled globally
+    return AdminShell(
+      profile: widget.userProfile,
+      currentKey: 'adminAnnouncement',      // highlight the Announcement tab
+      title: 'System Announcements',        // title in top bar
+      body: _buildMainContent(),            // your content below the shell nav
     );
   }
 
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: _purpleColor,
-      elevation: 4,
-      title: Row(
-        children: [
-          IconButton(
-            icon: Icon(Icons.menu, color: _whiteColor),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Menu clicked")),
-              );
-            },
-          ),
-          Expanded(
-            child: Text(
-              "System Announcements",
-              style: TextStyle(
-                color: _whiteColor,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: Icon(Icons.notifications, color: _whiteColor),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Notifications clicked")),
-              );
-            },
-          ),
-          ElevatedButton(
-            onPressed: _logoutUser,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _redColor,
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            ),
-            child: Text(
-              "Logout",
-              style: TextStyle(color: _whiteColor),
-            ),
-          ),
-          SizedBox(width: 8),
-        ],
-      ),
-    );
-  }
-
+  // ───────────────────── Content (no local Scaffold/AppBar/ADNavigation) ─────────────────────
   Widget _buildMainContent() {
-    return SingleChildScrollView(
-      padding: EdgeInsets.all(16),
-      child: Container(
-        padding: EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: _whiteColor,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black12,
-              blurRadius: 8,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            // Title
-            _buildTitle(),
-            SizedBox(height: 24),
+    return Container(
+      color: _lightBlueColor,
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: _whiteColor,
+            boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 8, offset: Offset(0, 2))],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Column(
+            children: [
+              _buildTitle(),
+              const SizedBox(height: 24),
 
-            // New Announcement Button
-            _buildToggleFormButton(),
-            SizedBox(height: 20),
+              _buildToggleFormButton(),
+              const SizedBox(height: 20),
 
-            // Form Section
-            if (_isFormVisible) _buildFormSection(),
+              if (_isFormVisible) _buildFormSection(),
 
-            // Loading Progress
-            if (_isLoading) _buildLoadingIndicator(),
+              if (_isLoading) _buildLoadingIndicator(),
+              if (_successMessage.isNotEmpty) _buildSuccessMessage(),
+              if (_errorMessage.isNotEmpty) _buildErrorMessage(),
 
-            // Success Message
-            if (_successMessage.isNotEmpty) _buildSuccessMessage(),
-
-            // Error Message
-            if (_errorMessage.isNotEmpty) _buildErrorMessage(),
-
-            // Previous Announcements Section
-            _buildPreviousAnnouncementsSection(),
-          ],
+              _buildPreviousAnnouncementsSection(),
+            ],
+          ),
         ),
       ),
     );
@@ -178,11 +109,7 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
   Widget _buildTitle() {
     return Text(
       "System Announcements",
-      style: TextStyle(
-        fontSize: 24,
-        fontWeight: FontWeight.bold,
-        color: _blueColor,
-      ),
+      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: _blueColor),
       textAlign: TextAlign.center,
     );
   }
@@ -194,11 +121,8 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
         backgroundColor: _isFormVisible ? _redColor : _buttonBlueColor,
         foregroundColor: _whiteColor,
         elevation: 4,
-        padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
-        textStyle: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.bold,
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
       ),
       child: Text(_isFormVisible ? "Cancel" : "New Announcement"),
     );
@@ -206,22 +130,15 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
 
   Widget _buildFormSection() {
     return Container(
-      margin: EdgeInsets.only(bottom: 24),
+      margin: const EdgeInsets.only(bottom: 24),
       child: Column(
         children: [
-          // Title Input
           _buildTitleInput(),
-          SizedBox(height: 16),
-
-          // Description Input
+          const SizedBox(height: 16),
           _buildDescriptionInput(),
-          SizedBox(height: 16),
-
-          // User Groups Section
+          const SizedBox(height: 16),
           _buildUserGroupsSection(),
-          SizedBox(height: 16),
-
-          // Submit Button
+          const SizedBox(height: 16),
           _buildSubmitButton(),
         ],
       ),
@@ -231,54 +148,33 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
   Widget _buildTitleInput() {
     return TextField(
       controller: _titleController,
-      decoration: InputDecoration(
-        hintText: "Title",
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: _blueColor),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: _blueColor),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(color: _blueColor),
-        ),
-        hintStyle: TextStyle(color: _blueColor),
-        contentPadding: EdgeInsets.all(16),
-      ),
-      style: TextStyle(fontSize: 16),
+      decoration: _blueInputDecoration("Title"),
+      style: const TextStyle(fontSize: 16),
     );
   }
 
   Widget _buildDescriptionInput() {
-    return Container(
+    return SizedBox(
       height: 120,
       child: TextField(
         controller: _descriptionController,
         maxLines: null,
         expands: true,
         textAlignVertical: TextAlignVertical.top,
-        decoration: InputDecoration(
-          hintText: "Description",
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: _blueColor),
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: _blueColor),
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: BorderSide(color: _blueColor),
-          ),
-          hintStyle: TextStyle(color: _blueColor),
-          contentPadding: EdgeInsets.all(16),
-        ),
-        style: TextStyle(fontSize: 16),
+        decoration: _blueInputDecoration("Description"),
+        style: const TextStyle(fontSize: 16),
       ),
+    );
+  }
+
+  InputDecoration _blueInputDecoration(String hint) {
+    return InputDecoration(
+      hintText: hint,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _blueColor)),
+      focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _blueColor)),
+      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: _blueColor)),
+      hintStyle: TextStyle(color: _blueColor),
+      contentPadding: const EdgeInsets.all(16),
     );
   }
 
@@ -286,39 +182,18 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          "Send To User Groups",
-          style: TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.bold,
-            color: _darkBlueColor,
-          ),
-        ),
-        SizedBox(height: 8),
+        Text("Send To User Groups", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _darkBlueColor)),
+        const SizedBox(height: 8),
         Container(
-          padding: EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: Color(0xFFf7faff),
-          ),
+          padding: const EdgeInsets.all(12),
+          decoration: const BoxDecoration(color: Color(0xFFf7faff)),
           child: Column(
             children: [
-              _buildCheckbox(
-                value: _elderlyChecked,
-                onChanged: (value) => setState(() => _elderlyChecked = value!),
-                label: "Elderly",
-              ),
-              SizedBox(height: 8),
-              _buildCheckbox(
-                value: _caregiverChecked,
-                onChanged: (value) => setState(() => _caregiverChecked = value!),
-                label: "Caregiver",
-              ),
-              SizedBox(height: 8),
-              _buildCheckbox(
-                value: _adminChecked,
-                onChanged: (value) => setState(() => _adminChecked = value!),
-                label: "Admin",
-              ),
+              _buildCheckbox(value: _elderlyChecked,  onChanged: (v) => setState(() => _elderlyChecked = v!),  label: "Elderly"),
+              const SizedBox(height: 8),
+              _buildCheckbox(value: _caregiverChecked,onChanged: (v) => setState(() => _caregiverChecked = v!),label: "Caregiver"),
+              const SizedBox(height: 8),
+              _buildCheckbox(value: _adminChecked,    onChanged: (v) => setState(() => _adminChecked = v!),    label: "Admin"),
             ],
           ),
         ),
@@ -333,18 +208,8 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
   }) {
     return Row(
       children: [
-        Checkbox(
-          value: value,
-          onChanged: onChanged,
-          activeColor: _blueColor,
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            color: _blueColor,
-            fontSize: 16,
-          ),
-        ),
+        Checkbox(value: value, onChanged: onChanged, activeColor: _blueColor),
+        Text(label, style: TextStyle(color: _blueColor, fontSize: 16)),
       ],
     );
   }
@@ -353,46 +218,29 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
     return ElevatedButton(
       onPressed: _isLoading ? null : _handleSubmitAnnouncement,
       style: ElevatedButton.styleFrom(
-        backgroundColor: Color(0xFF007acc),
+        backgroundColor: const Color(0xFF007acc),
         foregroundColor: _whiteColor,
         elevation: 4,
-        minimumSize: Size(double.infinity, 50),
-        textStyle: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.bold,
-        ),
+        minimumSize: const Size(double.infinity, 50),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
       ),
       child: Text(_isLoading ? "Sending..." : "Send Announcement"),
     );
   }
 
-  Widget _buildLoadingIndicator() {
-    return Center(
-      child: CircularProgressIndicator(),
-    );
-  }
+  Widget _buildLoadingIndicator() => const Center(child: CircularProgressIndicator());
 
-  Widget _buildSuccessMessage() {
-    return Text(
-      _successMessage,
-      style: TextStyle(
-        color: _greenColor,
-        fontSize: 16,
-      ),
-      textAlign: TextAlign.center,
-    );
-  }
+  Widget _buildSuccessMessage() => Text(
+        _successMessage,
+        style: TextStyle(color: _greenColor, fontSize: 16),
+        textAlign: TextAlign.center,
+      );
 
-  Widget _buildErrorMessage() {
-    return Text(
-      _errorMessage,
-      style: TextStyle(
-        color: _redColor,
-        fontSize: 16,
-      ),
-      textAlign: TextAlign.center,
-    );
-  }
+  Widget _buildErrorMessage() => Text(
+        _errorMessage,
+        style: TextStyle(color: _redColor, fontSize: 16),
+        textAlign: TextAlign.center,
+      );
 
   Widget _buildPreviousAnnouncementsSection() {
     return Column(
@@ -402,155 +250,94 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
           _announcementsList.isEmpty
               ? "Previous Announcements"
               : "Previous Announcements (${_announcementsList.length})",
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: _darkBlueColor,
-          ),
+          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _darkBlueColor),
         ),
-        SizedBox(height: 16),
+        const SizedBox(height: 16),
 
-        // No Data Message
         if (_announcementsList.isEmpty)
           Text(
             "No announcements found. Create your first announcement above.",
-            style: TextStyle(
-              fontStyle: FontStyle.italic,
-              color: Colors.grey.shade600,
-            ),
+            style: TextStyle(fontStyle: FontStyle.italic, color: Colors.grey.shade600),
             textAlign: TextAlign.center,
           ),
 
-        // Announcements List
         if (_announcementsList.isNotEmpty)
           ListView.builder(
             shrinkWrap: true,
-            physics: NeverScrollableScrollPhysics(),
+            physics: const NeverScrollableScrollPhysics(),
             itemCount: _announcementsList.length,
-            itemBuilder: (context, index) {
-              return _buildAnnouncementItem(_announcementsList[index]);
-            },
+            itemBuilder: (_, i) => _buildAnnouncementItem(_announcementsList[i]),
           ),
       ],
     );
   }
 
-  Widget _buildAnnouncementItem(Announcement announcement) {
+  Widget _buildAnnouncementItem(Announcement a) {
     return Container(
-      margin: EdgeInsets.only(bottom: 16),
-      padding: EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Color(0xFFdbe9ff),
-        borderRadius: BorderRadius.circular(8),
-      ),
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(color: const Color(0xFFdbe9ff), borderRadius: BorderRadius.circular(8)),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header with title and time
+          // Header: title + date
           Row(
             children: [
               Expanded(
                 flex: 7,
-                child: Text(
-                  announcement.title,
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                    color: _darkBlueColor,
-                  ),
-                ),
+                child: Text(a.title, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: _darkBlueColor)),
               ),
               Expanded(
                 flex: 3,
                 child: Text(
-                  _formatDate(announcement.createdAt),
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Color(0xFF336699),
-                    fontStyle: FontStyle.italic,
-                  ),
+                  _formatDate(a.createdAt),
                   textAlign: TextAlign.end,
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF336699), fontStyle: FontStyle.italic),
                 ),
               ),
             ],
           ),
-          SizedBox(height: 10),
-
-          // Description
-          Text(
-            announcement.description,
-            style: TextStyle(
-              fontSize: 16,
-              color: _blueColor,
-            ),
-          ),
-          SizedBox(height: 10),
-
-          // Footer with user groups and created by
-          Text(
-            _buildFooterText(announcement),
-            style: TextStyle(
-              fontSize: 14,
-              color: _blueColor,
-            ),
-          ),
+          const SizedBox(height: 10),
+          Text(a.description, style: TextStyle(fontSize: 16, color: _blueColor)),
+          const SizedBox(height: 10),
+          Text(_buildFooterText(a), style: TextStyle(fontSize: 14, color: _blueColor)),
         ],
       ),
     );
   }
 
-  String _buildFooterText(Announcement announcement) {
-    StringBuffer footer = StringBuffer();
+  String _buildFooterText(Announcement a) {
+    final sb = StringBuffer();
 
-    // Add user groups
-    if (announcement.userGroups.isNotEmpty) {
-      footer.write("To: ");
-      for (int i = 0; i < announcement.userGroups.length; i++) {
-        if (i > 0) footer.write(", ");
-        footer.write(_capitalizeFirstLetter(announcement.userGroups[i]));
+    if (a.userGroups.isNotEmpty) {
+      sb.write("To: ");
+      for (var i = 0; i < a.userGroups.length; i++) {
+        if (i > 0) sb.write(", ");
+        sb.write(_capitalizeFirstLetter(a.userGroups[i]));
       }
     }
 
-    // Add created by
-    if (announcement.createdBy.isNotEmpty) {
-      if (footer.isNotEmpty) footer.write(" | ");
-      footer.write("By: ${announcement.createdBy.replaceAll('_', '.')}");
+    if (a.createdBy.isNotEmpty) {
+      if (sb.isNotEmpty) sb.write(" | ");
+      sb.write("By: ${a.createdBy.replaceAll('_', '.')}");
     }
 
-    // Add read count
-    if (footer.isNotEmpty) footer.write(" | ");
-    footer.write("Read by: ${announcement.readBy.length}");
+    if (sb.isNotEmpty) sb.write(" | ");
+    sb.write("Read by: ${a.readBy.length}");
 
-    return footer.toString();
-  }
+    return sb.toString();
+    }
 
-  String _capitalizeFirstLetter(String text) {
-    if (text.isEmpty) return text;
-    return text[0].toUpperCase() + text.substring(1);
-  }
+  String _capitalizeFirstLetter(String s) => s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
+  String _padZero(int n) => n.toString().padLeft(2, '0');
+  String _getMonthName(int m) => const [
+        'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+      ][m - 1];
+  String _formatDate(DateTime d) => "${_padZero(d.day)} ${_getMonthName(d.month)} ${d.year}, "
+      "${_padZero(d.hour)}:${_padZero(d.minute)}";
 
-  String _formatDate(DateTime date) {
-    return "${_padZero(date.day)} ${_getMonthName(date.month)} ${date.year}, ${_padZero(date.hour)}:${_padZero(date.minute)}";
-  }
+  // ───────────────────── Actions ─────────────────────
 
-  String _padZero(int number) {
-    return number.toString().padLeft(2, '0');
-  }
-
-  String _getMonthName(int month) {
-    const months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    return months[month - 1];
-  }
-
-  // Navigation Handler
-  void _handleNavigationChanged(String activityKey) {
-    print("$_TAG: Navigation changed to: $activityKey");
-  }
-
-  // Form Visibility Toggle
   void _toggleFormVisibility() {
     setState(() {
       _isFormVisible = !_isFormVisible;
@@ -561,84 +348,59 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
     });
   }
 
-  // Form Submission
   void _handleSubmitAnnouncement() {
-    String title = _titleController.text.trim();
-    String description = _descriptionController.text.trim();
-
-    // Clear previous messages
+    final title = _titleController.text.trim();
+    final desc  = _descriptionController.text.trim();
     _hideMessages();
 
-    // Validation
-    if (title.isEmpty) {
-      _showError("Please fill in the title.");
-      return;
-    }
+    if (title.isEmpty) { _showError("Please fill in the title."); return; }
+    if (desc.isEmpty)  { _showError("Please fill in the description."); return; }
 
-    if (description.isEmpty) {
-      _showError("Please fill in the description.");
-      return;
-    }
+    final groups = _getSelectedUserGroups();
+    if (groups.isEmpty) { _showError("Please select at least one user group."); return; }
 
-    // Get selected user groups
-    List<String> userGroups = _getSelectedUserGroups();
-    if (userGroups.isEmpty) {
-      _showError("Please select at least one user group.");
-      return;
-    }
-
-    // Create announcement
-    _createAnnouncement(title, description, userGroups);
+    _createAnnouncement(title, desc, groups);
   }
 
   List<String> _getSelectedUserGroups() {
-    List<String> selectedGroups = [];
-    if (_elderlyChecked) selectedGroups.add("elderly");
-    if (_caregiverChecked) selectedGroups.add("caregiver");
-    if (_adminChecked) selectedGroups.add("admin");
-    return selectedGroups;
+    final list = <String>[];
+    if (_elderlyChecked)  list.add("elderly");
+    if (_caregiverChecked)list.add("caregiver");
+    if (_adminChecked)    list.add("admin");
+    return list;
   }
 
   void _createAnnouncement(String title, String description, List<String> userGroups) {
     _setLoading(true);
 
-    // Get current user email for createdBy field
-    String currentUserEmail = "admin";
-    if (_auth.currentUser != null && _auth.currentUser!.email != null) {
-      currentUserEmail = _auth.currentUser!.email!.replaceAll(".", "_");
-    }
+    var createdBy = "admin";
+    final u = _auth.currentUser;
+    if (u?.email != null) createdBy = u!.email!.replaceAll(".", "_");
 
-    // Get current timestamp
-    DateTime currentTime = DateTime.now();
+    final now = DateTime.now();
 
-    // Create empty readBy map
-    Map<String, bool> readBy = {};
-
-    // Create announcement data
-    Map<String, dynamic> announcement = {
+    final data = {
       "title": title,
       "description": description,
       "userGroups": userGroups,
-      "createdBy": currentUserEmail,
-      "createdAt": currentTime.toIso8601String(),
-      "readBy": readBy,
+      "createdBy": createdBy,
+      // Note: ordering uses string ISO here to match your current codepath.
+      // If you want server ordering, store a Firestore Timestamp instead.
+      "createdAt": now.toIso8601String(),
+      "readBy": <String, bool>{},
     };
 
-    // Save to Firestore
-    _db.collection("Announcements")
-        .add(announcement)
-        .then((documentReference) {
+    _db.collection("Announcements").add(data).then((ref) {
       _setLoading(false);
       _showSuccess("Announcement sent successfully!");
       _clearForm();
       _toggleFormVisibility();
-      _loadAnnouncements(); // Reload the list
-      print("$_TAG: Announcement created with ID: ${documentReference.id}");
-    })
-        .catchError((error) {
+      _loadAnnouncements(); // refresh list
+      print("$_TAG: Announcement created id=${ref.id}");
+    }).catchError((e) {
       _setLoading(false);
-      _showError("Failed to send announcement: $error");
-      print("$_TAG: Error creating announcement: $error");
+      _showError("Failed to send announcement: $e");
+      print("$_TAG: Error creating announcement: $e");
     });
   }
 
@@ -646,142 +408,77 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
     _setLoading(true);
 
     _db.collection("Announcements")
-        .orderBy("createdAt", descending: true)
+        .orderBy("createdAt", descending: true)   // works with ISO strings; for best results use Timestamp
         .get()
-        .then((querySnapshot) {
-      _setLoading(false);
-      List<Announcement> loadedAnnouncements = [];
-
-      if (querySnapshot.docs.isNotEmpty) {
-        for (var document in querySnapshot.docs) {
-          try {
-            Announcement? announcement = _parseAnnouncementDocument(document);
-            if (announcement != null) {
-              announcement.id = document.id;
-              loadedAnnouncements.add(announcement);
-              print("$_TAG: Successfully loaded announcement: ${announcement.title}");
+        .then((qs) {
+          final list = <Announcement>[];
+          for (final d in qs.docs) {
+            final a = _parseAnnouncementDocument(d);
+            if (a != null) {
+              a.id = d.id;
+              list.add(a);
             }
-          } catch (e) {
-            print("$_TAG: Error parsing announcement document: $e");
           }
-        }
-      }
-
-      setState(() {
-        _announcementsList = loadedAnnouncements;
-      });
-
-      print("$_TAG: Loaded ${loadedAnnouncements.length} announcements");
-    })
-        .catchError((error) {
-      _setLoading(false);
-      _showError("Failed to load announcements: $error");
-      print("$_TAG: Error loading announcements: $error");
-
-      // Even if there's an error, update UI to show empty state
-      setState(() {
-        _announcementsList = [];
-      });
-    });
+          setState(() => _announcementsList = list);
+          _setLoading(false);
+          print("$_TAG: Loaded ${list.length} announcements");
+        })
+        .catchError((e) {
+          _setLoading(false);
+          _showError("Failed to load announcements: $e");
+          setState(() => _announcementsList = []);
+        });
   }
 
-  Announcement? _parseAnnouncementDocument(DocumentSnapshot document) {
+  Announcement? _parseAnnouncementDocument(DocumentSnapshot doc) {
     try {
-      final data = document.data() as Map<String, dynamic>?;
+      final data = doc.data() as Map<String, dynamic>?;
       if (data == null) return null;
 
-      String title = data["title"] ?? "";
-      String description = data["description"] ?? "";
-      String createdBy = data["createdBy"] ?? "admin";
-      String createdAt = data["createdAt"] ?? "";
+      final title       = data["title"] ?? "";
+      final description = data["description"] ?? "";
+      final createdBy   = data["createdBy"] ?? "admin";
+      final createdAt   = data["createdAt"] ?? "";
 
-      // Get userGroups array
-      List<String> userGroups = (data["userGroups"] as List<dynamic>?)?.cast<String>() ?? [];
-      // Get readBy map
-      Map<String, bool> readBy = (data["readBy"] as Map<String, dynamic>?)?.map((key, value) => MapEntry(key, value as bool)) ?? {};
+      final userGroups = (data["userGroups"] as List<dynamic>?)?.cast<String>() ?? <String>[];
+      final readBy     = (data["readBy"]     as Map<String, dynamic>?)
+                          ?.map((k, v) => MapEntry(k, v as bool)) ?? <String, bool>{};
 
-      // Validate required fields
-      if (title.isEmpty || description.isEmpty) {
-        print("$_TAG: Missing required fields in announcement document: ${document.id}");
-        return null;
-      }
+      if (title.isEmpty || description.isEmpty) return null;
 
-      // Parse date
-      DateTime createdAtDate;
+      DateTime createdDate;
       try {
-        createdAtDate = DateTime.parse(createdAt);
-      } catch (e) {
-        print("$_TAG: Failed to parse date: $createdAt, using current date");
-        createdAtDate = DateTime.now();
+        createdDate = DateTime.parse(createdAt);
+      } catch (_) {
+        createdDate = DateTime.now();
       }
 
       return Announcement(
         title: title,
         description: description,
         createdBy: createdBy,
-        createdAt: createdAtDate,
+        createdAt: createdDate,
         userGroups: userGroups,
         readBy: readBy,
       );
-
     } catch (e) {
-      print("$_TAG: Error parsing announcement document: $e");
+      print("$_TAG: parse error: $e");
       return null;
     }
   }
 
-  void _setLoading(bool loading) {
-    setState(() {
-      _isLoading = loading;
-    });
-  }
-
-  void _showSuccess(String message) {
-    setState(() {
-      _successMessage = message;
-      _errorMessage = '';
-    });
-  }
-
-  void _showError(String message) {
-    setState(() {
-      _errorMessage = message;
-      _successMessage = '';
-    });
-  }
-
-  void _hideMessages() {
-    setState(() {
-      _successMessage = '';
-      _errorMessage = '';
-    });
-  }
-
+  // ───────────────────── UI helpers ─────────────────────
+  void _setLoading(bool v) => setState(() => _isLoading = v);
+  void _showSuccess(String m) => setState(() { _successMessage = m; _errorMessage = ''; });
+  void _showError(String m)   => setState(() { _errorMessage = m; _successMessage = ''; });
+  void _hideMessages()        => setState(() { _successMessage = ''; _errorMessage = ''; });
   void _clearForm() {
-    setState(() {
-      _titleController.clear();
-      _descriptionController.clear();
-      _elderlyChecked = false;
-      _caregiverChecked = false;
-      _adminChecked = false;
-    });
-  }
-
-  void _logoutUser() {
-    _auth.signOut();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Logged out successfully")),
-    );
-    _redirectToLogin();
-  }
-
-  void _redirectToLogin() {
-    print("$_TAG: Redirecting to login page");
-    // Navigator.pushAndRemoveUntil(
-    //   context,
-    //   MaterialPageRoute(builder: (context) => LoginPage()),
-    //   (route) => false,
-    // );
+    _titleController.clear();
+    _descriptionController.clear();
+    _elderlyChecked = false;
+    _caregiverChecked = false;
+    _adminChecked = false;
+    setState(() {});
   }
 
   @override
@@ -792,7 +489,7 @@ class _AdminAnnouncementState extends State<AdminAnnouncement> {
   }
 }
 
-// Announcement Model Class
+// ───────────────────── Model ─────────────────────
 class Announcement {
   String id;
   String title;
@@ -811,162 +508,4 @@ class Announcement {
     required this.userGroups,
     required this.readBy,
   });
-}
-
-// ADNavigation Widget (same as previous implementation)
-class ADNavigation extends StatefulWidget {
-  final Function(String) onNavigationChanged;
-
-  const ADNavigation({Key? key, required this.onNavigationChanged}) : super(key: key);
-
-  @override
-  _ADNavigationState createState() => _ADNavigationState();
-}
-
-class _ADNavigationState extends State<ADNavigation> {
-  static const String _TAG = "ADNavigation";
-
-  final Color _purpleColor = Colors.purple.shade500;
-  final Color _whiteColor = Colors.white;
-
-  String _currentActivity = "adminAnnouncement";
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _whiteColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 8.0,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildNavItem("ad_dashboardNav", "Dashboard", "adminDashboard"),
-            _buildNavItem("ad_profileNav", "Profile", "adminProfile"),
-            _buildNavItem("ad_reportsNav", "Reports", "adminReports"),
-            _buildNavItem("ad_feedbackNav", "Feedback", "adminFeedback"),
-            _buildNavItem("ad_rolesNav", "Roles", "adminRoles"),
-            _buildNavItem("ad_safetyMeasuresNav", "Safety Measures", "adminSafetyMeasures"),
-            _buildNavItem("ad_announcementNav", "Announcement", "adminAnnouncement"),
-            _buildNavItem("ad_manageNav", "Manage", "adminManage", isLast: true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(String id, String text, String activityKey, {bool isLast = false}) {
-    bool isSelected = _currentActivity == activityKey;
-
-    return Container(
-      margin: EdgeInsets.only(right: isLast ? 16 : 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _handleNavigation(activityKey),
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: EdgeInsets.all(12),
-            decoration: isSelected
-                ? BoxDecoration(
-              color: _purpleColor,
-              borderRadius: BorderRadius.circular(20),
-            )
-                : null,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: isSelected ? _whiteColor : _purpleColor,
-                    shape: BoxShape.rectangle,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? _whiteColor : _purpleColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _handleNavigation(String activityKey) {
-    print("$_TAG: Navigating to $activityKey");
-
-    try {
-      if (_currentActivity != activityKey) {
-        setState(() {
-          _currentActivity = activityKey;
-        });
-
-        widget.onNavigationChanged(activityKey);
-      } else {
-        print("$_TAG: Already on $activityKey");
-        _highlightCurrentItem(activityKey);
-      }
-    } catch (e) {
-      print("$_TAG: Error navigating to $activityKey: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cannot open ${_getScreenName(activityKey)}")),
-      );
-    }
-  }
-
-  String _getScreenName(String activityKey) {
-    String screenName = activityKey.replaceAll('admin', '');
-    if (screenName.isEmpty) return "Screen";
-
-    String result = screenName[0].toUpperCase() + screenName.substring(1);
-    result = result.replaceAllMapped(RegExp(r'[A-Z]'), (match) => ' ${match.group(0)}');
-
-    return result.trim();
-  }
-
-  void _highlightCurrentItem(String currentActivity) {
-    print("$_TAG: AD Highlighting: $currentActivity");
-
-    try {
-      setState(() {
-        _currentActivity = currentActivity;
-      });
-    } catch (e) {
-      print("$_TAG: Error highlighting current item: $currentActivity, $e");
-    }
-  }
-
-  // Public methods to mimic the Java class functionality
-  void highlightCurrentItem(String currentActivity) {
-    _highlightCurrentItem(currentActivity);
-  }
-
-  void refreshNavigation() {
-    print("$_TAG: Refreshing navigation...");
-    setState(() {});
-  }
-
-  bool isNavigationInitialized() {
-    return true;
-  }
 }
