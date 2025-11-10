@@ -8,7 +8,6 @@ import 'cg_profile_details_page.dart';
 import 'payment_details_page.dart';
 import 'elderly_access_page.dart';
 import 'password_settings_page.dart';
-import 'feedback_support_page.dart';
 import 'settings_page.dart';
 import '../../../models/user_profile.dart';
 import '../../../assistant_chat.dart';
@@ -85,15 +84,6 @@ class CgAccountPage extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const PasswordSettingsPage()),
-            ),
-          ),
-          _tile(
-            icon: Icons.support_agent,
-            title: "Support / Feedback",
-            subtitle: "Rate us, write feedback, chat with bot",
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SupportFeedbackPage()),
             ),
           ),
           const SizedBox(height: 24),

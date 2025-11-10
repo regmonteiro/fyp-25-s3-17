@@ -22,9 +22,10 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
   final _reasonCtrl = TextEditingController();
   bool _invitePrimaryCaregiver = false;
 
-  // NEW: prevents double taps & helps avoid re-entrancy
+  // anti-double-tap
   bool _busy = false;
 
+  // quick-reasons
   final Set<String> _selectedReasons = {};
   final _fallbackReasons = const [
     'Fever / Flu-like',
@@ -36,13 +37,39 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
     'Follow-up consultation',
   ];
 
+  // caregiver-aware state
+  String? _userType;                       // 'elderly' | 'caregiver' | 'admin' | null
+  List<String> _linkedElderlyIds = <String>[];
+  String? _effectiveElderUid;              // which elder we’re booking for
+
   @override
   void initState() {
     super.initState();
     _ctrl = GpAppointmentController(mirrorToCaregivers: true);
+
+    // default date/time (tomorrow 9am)
     final now = DateTime.now();
     _date = DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
     _time = const TimeOfDay(hour: 9, minute: 0);
+
+    // detect userType & prepare caregiver flow
+    _ctrl.userTypeOf(widget.userProfile.uid).then((type) async {
+      if (!mounted) return;
+      setState(() => _userType = type);
+
+      if (type == 'caregiver') {
+        final ids = await _ctrl.fetchEldersForCaregiver(widget.userProfile.uid);
+        if (!mounted) return;
+        ids.sort();
+        setState(() {
+          _linkedElderlyIds = ids;
+          _effectiveElderUid = ids.isNotEmpty ? ids.first : null;
+        });
+      } else {
+        // elderly/self by default
+        setState(() => _effectiveElderUid = widget.userProfile.uid);
+      }
+    });
   }
 
   @override
@@ -88,31 +115,35 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
       return;
     }
 
+    // caregiver must pick a target elder
+    final targetElderUid = _effectiveElderUid ?? widget.userProfile.uid;
+    if (_userType == 'caregiver' && (targetElderUid.isEmpty || !_linkedElderlyIds.contains(targetElderUid))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Choose a linked elderly profile to book for.')),
+      );
+      return;
+    }
+
     setState(() => _busy = true);
     try {
-      // 1) Confirm (use dialog's ctx to pop the dialog, not the page)
+      // confirm
       final ok = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
           title: const Text('Confirm booking'),
-          content: Text(
-            'Book GP consultation on '
-            '${DateFormat('EEE, MMM d, h:mm a').format(start)}',
-          ),
+          content: Text('Book GP consultation on ${DateFormat('EEE, MMM d, h:mm a').format(start)}'),
           actions: [
             TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
             ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirm')),
           ],
         ),
       );
+      if (ok != true || !mounted) return;
 
-      if (ok != true) return; // cancelled
-      if (!mounted) return;    // page might have been closed while dialog open
-
-      // 2) Do the booking
+      // book
       final res = await _ctrl.bookFutureGpCall(
-        elderlyId: widget.userProfile.uid,
+        elderlyId: targetElderUid,
         elderlyName: widget.userProfile.safeDisplayName,
         start: start,
         duration: _duration,
@@ -121,10 +152,7 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
       );
 
       if (!mounted) return;
-
-      // 3) Feedback
-      final messenger = ScaffoldMessenger.maybeOf(context);
-      messenger?.showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(res.message),
           backgroundColor: res.ok ? Colors.green : Colors.red,
@@ -132,7 +160,6 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
         ),
       );
 
-      // 4) Leave page on success (schedule on microtask to avoid using context in same frame)
       if (res.ok) {
         Future.microtask(() {
           if (mounted) Navigator.of(context).maybePop();
@@ -145,7 +172,14 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
 
   @override
   Widget build(BuildContext context) {
-    final name = widget.userProfile.safeDisplayName;
+    // wait for userType detection once
+    if (_userType == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    final headerName = (_userType == 'caregiver' && _effectiveElderUid != null)
+        ? 'Booking for linked elder: ${_effectiveElderUid!.substring(0, (_effectiveElderUid!.length >= 8 ? 8 : _effectiveElderUid!.length))}…'
+        : widget.userProfile.safeDisplayName;
 
     return Scaffold(
       appBar: AppBar(
@@ -165,15 +199,53 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
                 padding: const EdgeInsets.all(16),
                 child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   const Text('Booking for:', style: TextStyle(color: Colors.black54)),
-                  Text(name, style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal.shade800)),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Pick a time and tell us the main reason. We’ll set up a video GP call and remind you and your caregiver.',
+                  Text(
+                    headerName,
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal.shade800),
                   ),
+                  const SizedBox(height: 8),
+                  const Text('Pick a time and tell us the main reason. We’ll set up a video GP call and remind you and your caregiver.'),
                 ]),
               ),
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
+
+            // caregiver-only: pick linked elder
+            if (_userType == 'caregiver') ...[
+              Text('Choose linked elderly', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 6),
+              if (_linkedElderlyIds.isEmpty)
+                Card(
+                  color: Colors.orange.shade100,
+                  child: const ListTile(
+                    leading: Icon(Icons.person_off),
+                    title: Text('No linked elderly profiles'),
+                    subtitle: Text('Link an elderly profile before booking on their behalf.'),
+                  ),
+                )
+              else if (_linkedElderlyIds.length == 1)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: ChoiceChip(
+                    selected: true,
+                    onSelected: (_) {},
+                    label: Text(_linkedElderlyIds.first),
+                  ),
+                )
+              else
+                DropdownButtonFormField<String>(
+                  value: _effectiveElderUid,
+                  items: _linkedElderlyIds
+                      .map((id) => DropdownMenuItem(value: id, child: Text(id)))
+                      .toList(),
+                  onChanged: (v) => setState(() => _effectiveElderUid = v),
+                  decoration: const InputDecoration(
+                    labelText: 'Linked elderly',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              const SizedBox(height: 16),
+            ],
 
             Row(children: [
               Expanded(
@@ -242,8 +314,8 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
                 );
               },
             ),
-
             const SizedBox(height: 8),
+
             TextFormField(
               controller: _reasonCtrl,
               maxLines: 3,
@@ -256,7 +328,7 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
             const SizedBox(height: 16),
 
             FutureBuilder<Map<String, String>?>(
-              future: _ctrl.fetchPrimaryCaregiver(widget.userProfile.uid),
+              future: _ctrl.fetchPrimaryCaregiver(_effectiveElderUid ?? widget.userProfile.uid),
               builder: (_, careSnap) {
                 final cg = careSnap.data;
                 if (cg == null) {

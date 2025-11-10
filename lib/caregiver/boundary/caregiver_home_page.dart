@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -6,13 +7,12 @@ import '../../models/user_profile.dart';
 import '../../ui/widgets/kpi_card.dart';
 import '../controller/caregiver_home_controller.dart'
     show CaregiverHomeController, CaregiverHomeViewModel;
-import 'create_appointments_page.dart';
+import 'medicine_reminders_page.dart';
 import '../../financial/wallet_page.dart';
 import '../../medical/gp_consultation_page.dart';
 import '../../medical/consultation_booking_page.dart';
 import 'package:provider/provider.dart';
 import '../../medical/shop_page.dart' as shop;
-import '../../services/cart_services.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../features/share_experience_page.dart';
 import '../../features/communicate_page.dart';
@@ -29,19 +29,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../assistant_chat.dart';
 
 
-
-
-// If you still need these helpers, align names; otherwise remove both.
-List<String> _extractElderlyId(Map<String, dynamic> d) {
-  final many = (d['elderlyIds'] as List?)?.map((e) => e.toString()).toList() ?? const [];
-  final single = (d['elderlyId'] as String?)?.trim();
-  final set = <String>{...many};
-  if (single != null && single.isNotEmpty) set.add(single);
-  set.removeWhere((e) => e.isEmpty);
-  return set.toList();
-}
-
-/// Stream elders by ids (handles Firestore `whereIn` 10-item chunks)
 Stream<List<DocumentSnapshot<Map<String, dynamic>>>> _streamElderlyId(
   List<String> uids,
 ) {
@@ -497,12 +484,10 @@ Widget _buildCommunicateRow(BuildContext context) {
                   _buildCommunicateRow(context),
                   const SizedBox(height: 12),
 
-                  _UpcomingEventsSection(
-                    events: vm.upcomingEventsByElder[_selectedElderlyId!] ?? const [],
+                  CaregiverUpcomingRemindersSection(
+                    elderlyIds: vm.linkedElderlyIds,
+                    elderlyNameByUid: vm.elderNames, // optional map of uid -> display name
                   ),
-                  const SizedBox(height: 12),
-
-                  _RecommendationsSection(recs: vm.learningRecs),
                   const SizedBox(height: 12),
 
                   _CommunityFeedPreview(),
@@ -521,9 +506,10 @@ Widget _buildCommunicateRow(BuildContext context) {
                   ),
                   const SizedBox(height: 12),
 
-                  _MedicationTracker(
-                    meds: vm.todayMedsByElder[_selectedElderlyId!] ?? const [],
-                    onMarkDone: _c.markMedDone,
+                  MedicationTracker(
+                    reminders: vm.todayMedsByElder[_selectedElderlyId!] ?? const [],
+                    elderlyLookup: vm.elderNames,
+                    onMarkDone: _c.markMedDoneByIds,
                   ),
                   const SizedBox(height: 12),
 
@@ -546,7 +532,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                       Navigator.push(
                         context,
                         MaterialPageRoute(
-                          builder: (_) => CreateAppointmentsPage(
+                          builder: (_) => CreateMedicationReminderPage(
                             userProfile: widget.userProfile,
                             elderlyId: _selectedElderlyId,
                           ),
@@ -572,7 +558,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                     Navigator.push(
                       context,
                       MaterialPageRoute(
-                        builder: (_) => CreateAppointmentsPage(
+                        builder: (_) => CreateMedicationReminderPage(
                           userProfile: widget.userProfile,
                           elderlyId: _selectedElderlyId,
                         ),
@@ -1225,67 +1211,327 @@ class _AnnouncementsSection extends StatelessWidget {
   }
 }
 
-class _UpcomingEventsSection extends StatelessWidget {
-  final List<Map<String, dynamic>> events;
+class EventReminder {
+  final String id;        // field name under reminders/{userKey}
+  final String title;
+  final String startTime; // ISO-8601 string
+  final int duration;     // minutes
+  final String createdAt; // ISO-8601 string
 
-  const _UpcomingEventsSection({required this.events});
+  EventReminder({
+    required this.id,
+    required this.title,
+    required this.startTime,
+    required this.duration,
+    required this.createdAt,
+  });
 
-  @override
-  Widget build(BuildContext context) {
-    if (events.isEmpty) {
-      return const Card(
-        child: ListTile(
-          leading: Icon(Icons.event_available_outlined),
-          title: Text('No upcoming events scheduled.'),
-        ),
-      );
+  factory EventReminder.fromMap(String id, Map<String, dynamic> m) {
+    int _toInt(Object? v) {
+      if (v is int) return v;
+      if (v is double) return v.toInt();
+      return int.tryParse(v?.toString() ?? '') ?? 0;
     }
-    return Card(
-      child: Column(
-        children: events.map((e) {
-          final start = (e['start'] as Timestamp?)?.toDate();
-          final end = (e['end'] as Timestamp?)?.toDate();
-          final startStr = start != null ? DateFormat('EEE, MMM d, h:mm a').format(start) : '—';
-          final endStr = end != null ? DateFormat('h:mm a').format(end) : '';
-          return ListTile(
-            leading: const Icon(Icons.event, color: Colors.orange),
-            title: Text((e['title'] ?? 'Event').toString()),
-            subtitle: Text(endStr.isNotEmpty ? '$startStr – $endStr' : startStr),
-            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-            onTap: () {},
-          );
-        }).toList(),
-      ),
+
+    return EventReminder(
+      id: id,
+      title: (m['title'] ?? '').toString(),
+      startTime: (m['startTime'] ?? '').toString(),
+      duration: _toInt(m['duration']),
+      createdAt: (m['createdAt'] ?? '').toString(),
     );
   }
 }
 
-class _RecommendationsSection extends StatelessWidget {
-  final List<Map<String, dynamic>> recs;
+/// View-model with owner context for listing
+class _OwnedReminder {
+  final String elderlyUid;
+  final String elderlyLabel; // name or fallback to uid
+  final EventReminder r;
 
-  const _RecommendationsSection({required this.recs});
+  _OwnedReminder({
+    required this.elderlyUid,
+    required this.elderlyLabel,
+    required this.r,
+  });
+
+  DateTime? get start => DateTime.tryParse(r.startTime);
+}
+
+/// ─────────────────────────────────────────────────────────────────
+/// Caregiver section: shows upcoming reminders for all linked elderly
+/// Pass in the caregiver's list of elderly UIDs and (optionally) a
+/// lookup map for display names.
+/// ─────────────────────────────────────────────────────────────────
+class CaregiverUpcomingRemindersSection extends StatefulWidget {
+  /// All elderly UIDs linked to this caregiver (from caregiver profile).
+  final List<String> elderlyIds;
+
+  /// Optional display names for each elderly UID.
+  /// If absent or missing, the UI will show the UID.
+  final Map<String, String> elderlyNameByUid;
+
+  const CaregiverUpcomingRemindersSection({
+    super.key,
+    required this.elderlyIds,
+    this.elderlyNameByUid = const {},
+  });
+
+  @override
+  State<CaregiverUpcomingRemindersSection> createState() =>
+      _CaregiverUpcomingRemindersSectionState();
+}
+
+class _CaregiverUpcomingRemindersSectionState
+    extends State<CaregiverUpcomingRemindersSection> {
+  final _db = FirebaseFirestore.instance;
+
+  /// uid -> emailKey (for /reminders/{emailKey})
+  final Map<String, String> _emailKeyByUid = {};
+
+  /// Active Firestore subscriptions (one per elderly reminders doc)
+  final List<StreamSubscription> _subs = [];
+
+  /// In-memory store: uid -> reminderId -> EventReminder
+  final Map<String, Map<String, EventReminder>> _byOwner = {};
+
+  /// UI filter: '__ALL__' or a specific elderlyUid
+  String _selected = '__ALL__';
+
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _initAndSubscribe();
+  }
+
+  @override
+  void didUpdateWidget(covariant CaregiverUpcomingRemindersSection oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.elderlyIds.toSet() != widget.elderlyIds.toSet()) {
+      _teardownSubs();
+      _emailKeyByUid.clear();
+      _byOwner.clear();
+      _selected = '__ALL__';
+      _initAndSubscribe();
+    }
+  }
+
+  @override
+  void dispose() {
+    _teardownSubs();
+    super.dispose();
+  }
+
+  void _teardownSubs() {
+    for (final s in _subs) {
+      s.cancel();
+    }
+    _subs.clear();
+  }
+
+  /// Resolve AccountByUid/{uid}.emailKey, then subscribe to /reminders/{emailKey}
+  Future<void> _initAndSubscribe() async {
+    final ids = widget.elderlyIds.where((e) => e.trim().isNotEmpty).toList();
+    if (ids.isEmpty) {
+      setState(() => _loading = false);
+      return;
+    }
+
+    for (final uid in ids) {
+      try {
+        final byUid = await _db.collection('AccountByUid').doc(uid).get();
+        final emailKey = (byUid.data()?['emailKey'] as String?)?.trim();
+        if (emailKey == null || emailKey.isEmpty) {
+          // Skip if no emailKey recorded; still mark structure to avoid NPE
+          _emailKeyByUid[uid] = '';
+          _byOwner[uid] = {};
+          continue;
+        }
+
+        _emailKeyByUid[uid] = emailKey;
+        _byOwner[uid] = {};
+
+        // subscribe to /reminders/{emailKey}
+        final sub = _db.collection('reminders').doc(emailKey).snapshots().listen(
+          (snap) {
+            final next = <String, EventReminder>{};
+            if (snap.exists) {
+              final data = snap.data() ?? {};
+              data.forEach((k, v) {
+                if (v is Map<String, dynamic>) {
+                  next[k] = EventReminder.fromMap(k, v);
+                } else if (v is Map) {
+                  next[k] = EventReminder.fromMap(k, Map<String, dynamic>.from(v));
+                }
+              });
+            }
+            setState(() {
+              _byOwner[uid] = next;
+              _loading = false;
+            });
+          },
+          onError: (_) {
+            // keep UI responsive even if one stream errors
+            setState(() => _loading = false);
+          },
+        );
+
+        _subs.add(sub);
+      } catch (_) {
+        // ignore this uid on error; continue with others
+        setState(() => _loading = false);
+      }
+    }
+
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
+
+  List<_OwnedReminder> get _allOwned {
+    final out = <_OwnedReminder>[];
+    _byOwner.forEach((uid, map) {
+      final label = widget.elderlyNameByUid[uid] ?? uid;
+      map.forEach((_, r) {
+        out.add(_OwnedReminder(elderlyUid: uid, elderlyLabel: label, r: r));
+      });
+    });
+    // sort by start time ascending (nulls last)
+    out.sort((a, b) {
+      final ax = a.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bx = b.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return ax.compareTo(bx);
+    });
+    return out;
+  }
+
+  List<_OwnedReminder> get _filtered {
+    final all = _allOwned;
+    if (_selected == '__ALL__') return all;
+    return all.where((e) => e.elderlyUid == _selected).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (recs.isEmpty) {
+    final ids = widget.elderlyIds;
+    final list = _filtered;
+
+    if (_loading) {
       return const Card(
-        child: ListTile(
-          leading: Icon(Icons.lightbulb_outline),
-          title: Text('No learning recommendations for now.'),
+        child: Padding(
+          padding: EdgeInsets.all(16),
+          child: Center(child: LinearProgressIndicator()),
         ),
       );
     }
+
+    if (ids.isEmpty) {
+      return const Card(
+        child: ListTile(
+          leading: Icon(Icons.people_outline),
+          title: Text('No linked elderly found.'),
+          subtitle: Text('Link an elderly profile to view their reminders here.'),
+        ),
+      );
+    }
+
+    if (list.isEmpty) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _header(context),
+              const SizedBox(height: 8),
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.event_available_outlined),
+                title: Text('No upcoming event reminders for the selection.'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Card(
-      child: Column(
-        children: recs
-            .map((r) => ListTile(
-                  leading: const Icon(Icons.school, color: Colors.green),
-                  title: Text((r['title'] ?? 'Topic').toString()),
-                  trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                ))
-            .toList(),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _header(context),
+            const SizedBox(height: 8),
+            ...list.map((o) {
+              final start = o.start;
+              final startStr = start != null
+                  ? DateFormat('EEE, MMM d, h:mm a').format(start)
+                  : '—';
+              final endStr = _fmtEnd(start, o.r.duration);
+
+              return ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.event, color: Colors.orange),
+                title: Text(o.r.title.isEmpty ? 'Reminder' : o.r.title,
+                    maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  endStr.isNotEmpty ? '$startStr – $endStr' : startStr,
+                ),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    color: Colors.blueGrey.withOpacity(0.1),
+                  ),
+                  child: Text(
+                    o.elderlyLabel,
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+                onTap: () {
+                  // Optionally navigate to detail page or edit dialog
+                },
+              );
+            }),
+          ],
+        ),
       ),
     );
+  }
+
+  Widget _header(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    final items = <DropdownMenuItem<String>>[
+      const DropdownMenuItem(
+        value: '__ALL__',
+        child: Text('All elderly'),
+      ),
+      ...widget.elderlyIds.map((uid) {
+        final label = widget.elderlyNameByUid[uid] ?? uid;
+        return DropdownMenuItem(value: uid, child: Text(label));
+      }),
+    ];
+
+    return Row(
+      children: [
+        Text('Upcoming Event Reminders', style: theme.titleMedium),
+        const Spacer(),
+        DropdownButton<String>(
+          value: _selected,
+          onChanged: (v) => setState(() => _selected = v ?? '__ALL__'),
+          items: items,
+        ),
+      ],
+    );
+  }
+
+  String _fmtEnd(DateTime? start, int minutes) {
+    if (start == null || minutes <= 0) return '';
+    final end = start.add(Duration(minutes: minutes));
+    return DateFormat('h:mm a').format(end);
   }
 }
 
@@ -1452,30 +1698,166 @@ class _ScheduleTodaySection extends StatelessWidget {
   }
 }
 
-class _MedicationTracker extends StatelessWidget {
-  final List<Map<String, dynamic>> meds;
-  final Future<void> Function(DocumentReference ref) onMarkDone;
 
-  const _MedicationTracker({
-    required this.meds,
+class MedicationTracker extends StatefulWidget {
+  
+  final List<dynamic> reminders;
+
+  final Map<String, String> elderlyLookup;
+
+  final Future<void> Function(String elderlyId, String reminderId) onMarkDone;
+
+    final String? initialSelectedElderlyId;
+      final ValueChanged<String /* '__ALL__' or elderlyId */ >? onFilterChanged;
+
+
+
+  const MedicationTracker({
+    super.key,
+    required this.reminders,
     required this.onMarkDone,
+    this.elderlyLookup = const {},
+    this.initialSelectedElderlyId,
+    this.onFilterChanged,
   });
 
   @override
+  State<MedicationTracker> createState() => _MedicationTrackerState();
+}
+
+class MedicationReminderLike {
+  final String id;
+  final String elderlyId;
+  final String name;
+  final String dosage;
+  final String time;
+  final bool isCompleted;
+
+  MedicationReminderLike({
+    required this.id,
+    required this.elderlyId,
+    required this.name,
+    required this.dosage,
+    required this.time,
+    required this.isCompleted,
+  });
+
+  /// Convert from Map or strongly-typed model.
+  factory MedicationReminderLike.fromAny(dynamic v) {
+    if (v is MedicationReminderLike) return v;
+
+    // Assume Map-like
+    final Map<String, dynamic> m = (v as Map).map(
+      (k, val) => MapEntry(k.toString(), val),
+    );
+
+    final status = (m['status'] ?? '').toString().trim().toLowerCase();
+    final completed = (m['isCompleted'] is bool)
+        ? (m['isCompleted'] as bool)
+        : (status == 'completed' || status == 'done' || status == 'taken');
+
+    return MedicationReminderLike(
+      id: (m['id'] ?? '').toString(),
+      elderlyId: (m['elderlyId'] ?? '').toString(),
+      name: (m['medicationName'] ?? 'Medication').toString(),
+      dosage: (m['dosage'] ?? '').toString(),
+      time: (m['reminderTime'] ?? 'Anytime').toString(),
+      isCompleted: completed,
+    );
+  }
+}
+
+class _MedicationTrackerState extends State<MedicationTracker> {
+  String _selectedElderly = '__ALL__';
+
+  @override
+  void initState() {
+    super.initState();
+    // if parent passed an initial filter AND it's valid, use it; else '__ALL__'
+    final ids = _elderlyIds; // computed from current reminders
+    final pref = widget.initialSelectedElderlyId?.trim();
+    if (pref != null && pref.isNotEmpty && ids.contains(pref)) {
+      _selectedElderly = pref;
+    } else {
+      _selectedElderly = '__ALL__';
+    }
+  }
+
+  List<MedicationReminderLike> get _all =>
+      widget.reminders.map(MedicationReminderLike.fromAny).toList();
+
+  List<String> get _elderlyIds {
+    final ids = _all.map((e) => e.elderlyId).where((e) => e.isNotEmpty).toSet().toList();
+    ids.sort();
+    return ids;
+  }
+
+  String _elderlyLabel(String id) =>
+      id == '__ALL__' ? 'All elderly' : (widget.elderlyLookup[id] ?? id);
+
+  List<MedicationReminderLike> get _filtered =>
+      _selectedElderly == '__ALL__'
+          ? _all
+          : _all.where((r) => r.elderlyId == _selectedElderly).toList();
+
+  Future<void> _nudgeToTakeMedicine(MedicationReminderLike item) async {
+    final db = FirebaseFirestore.instance;
+    final fromUid = FirebaseAuth.instance.currentUser?.uid ?? 'unknown';
+    final toUid = item.elderlyId;
+    final title = 'Time to take your medication';
+    final msg = [
+      if (item.name.isNotEmpty) item.name,
+      if (item.dosage.isNotEmpty) item.dosage,
+      if (item.time.isNotEmpty) 'at ${item.time}',
+    ].join(' • ');
+
+    await db.collection('notifications').add({
+      'toUid': toUid,
+      'fromUid': fromUid,
+      'type': 'medication_prompt',     // NEW type for your rules/handlers
+      'title': title,
+      'message': msg,
+      'reminderId': item.id,
+      'elderlyId': toUid,
+      'timestamp': FieldValue.serverTimestamp(),
+      'read': false,
+      'priority': 'medium',
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reminder sent to take medicine')),
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final meds = _filtered;
+
     if (meds.isEmpty) {
-      return const Card(
-        child: ListTile(
-          leading: Icon(Icons.medication_outlined),
-          title: Text('No medications scheduled for today'),
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _header(context),
+              const SizedBox(height: 8),
+              const ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(Icons.medication_outlined),
+                title: Text('No medications scheduled for the selected elderly'),
+              ),
+            ],
+          ),
         ),
       );
     }
 
     final total = meds.length;
-    final done = meds.where((m) => (m['status'] ?? 'pending') == 'completed').length;
-    final raw = total == 0 ? 0.0 : done / total;
-    final pct = raw.isFinite ? raw : 0.0;
+    final done = meds.where((m) => m.isCompleted).length;
+    final pct = total == 0 ? 0.0 : (done / total);
 
     return Card(
       child: Padding(
@@ -1483,7 +1865,7 @@ class _MedicationTracker extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Medication Tracker', style: Theme.of(context).textTheme.titleMedium),
+            _header(context),
             const SizedBox(height: 6),
             Row(
               children: [
@@ -1493,25 +1875,45 @@ class _MedicationTracker extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 6),
-            LinearProgressIndicator(value: pct),
+            LinearProgressIndicator(value: pct.clamp(0.0, 1.0)),
             const SizedBox(height: 8),
+
+            // Items
             ...meds.map((m) {
-              final name = (m['medicationName'] ?? 'Medication').toString();
-              final dosage = (m['dosage'] ?? '').toString();
-              final time = (m['reminderTime'] ?? 'Anytime').toString();
-              final status = (m['status'] ?? 'pending').toString();
-              final ref = m['ref'] as DocumentReference;
+              final elderlyName = _elderlyLabel(m.elderlyId);
+              final subtitleParts = <String>[
+                if (elderlyName.isNotEmpty) 'For: $elderlyName',
+                if (m.dosage.isNotEmpty) m.dosage,
+                m.time,
+              ];
+              final subtitle = subtitleParts.join(' • ');
+
+              final trailing = m.isCompleted
+                  ? const Chip(label: Text('Done'))
+                  : Wrap(
+                      spacing: 8,
+                      children: [
+                        TextButton(
+                          onPressed: () => widget.onMarkDone(m.elderlyId, m.id),
+                          child: const Text('Mark done'),
+                        ),
+                        OutlinedButton.icon(
+                          onPressed: () => _nudgeToTakeMedicine(m),
+                          icon: const Icon(Icons.notifications_active),
+                          label: const Text('Nudge'),
+                        ),
+                      ],
+                    );
 
               return ListTile(
-                leading: const Icon(Icons.medication),
-                title: Text(name),
-                subtitle: Text('$dosage • $time'),
-                trailing: status == 'completed'
-                    ? const Chip(label: Text('Done'))
-                    : TextButton(
-                        onPressed: () => onMarkDone(ref),
-                        child: const Text('Mark done'),
-                      ),
+                contentPadding: EdgeInsets.zero,
+                leading: Icon(
+                  m.isCompleted ? Icons.check_circle : Icons.medication,
+                  color: m.isCompleted ? Colors.green : null,
+                ),
+                title: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(subtitle),
+                trailing: trailing,
               );
             }),
           ],
@@ -1519,7 +1921,34 @@ class _MedicationTracker extends StatelessWidget {
       ),
     );
   }
+
+  Widget _header(BuildContext context) {
+    final theme = Theme.of(context).textTheme;
+    final ids = _elderlyIds;
+
+    return Row(
+      children: [
+        Text('Medication Tracker', style: theme.titleMedium),
+        const Spacer(),
+        DropdownButton<String>(
+          value: _selectedElderly,
+          onChanged: (v) => setState(() => _selectedElderly = v ?? '__ALL__'),
+          items: <DropdownMenuItem<String>>[
+            const DropdownMenuItem(
+              value: '__ALL__',
+              child: Text('All elderly'),
+            ),
+            ...ids.map((id) => DropdownMenuItem(
+                  value: id,
+                  child: Text(_elderlyLabel(id)),
+                )),
+          ],
+        ),
+      ],
+    );
+  }
 }
+
 
 class _NotificationsSection extends StatelessWidget {
   final List<Map<String, dynamic>> notifications;

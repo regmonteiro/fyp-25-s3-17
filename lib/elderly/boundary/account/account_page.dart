@@ -8,7 +8,6 @@ import 'profile_details_page.dart';
 import 'payment_details_page.dart';
 import 'caregiver_access_page.dart';
 import 'password_settings_page.dart';
-import 'support_feedback_page.dart';
 import 'settings_page.dart';
 import '../../../assistant_chat.dart';
 
@@ -80,15 +79,6 @@ class AccountPage extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const PasswordSettingsPage()),
-            ),
-          ),
-          _tile(
-            icon: Icons.support_agent,
-            title: "Support / Feedback",
-            subtitle: "Rate us, write feedback, chat with bot",
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(builder: (_) => const SupportFeedbackPage()),
             ),
           ),
           const SizedBox(height: 24),

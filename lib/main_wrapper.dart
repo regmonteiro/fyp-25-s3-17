@@ -5,7 +5,7 @@ import 'package:provider/provider.dart';
 
 import 'caregiver/boundary/caregiver_dashboard_page.dart';
 import 'elderly/boundary/elderly_dashboard_page.dart';
-import 'admin/boundary/admin_dashboard.dart';
+import 'admin/admin_dashboard.dart';
 import 'models/user_profile.dart';
 import 'features/controller/community_controller.dart';
 import 'services/account_bootstrap.dart';

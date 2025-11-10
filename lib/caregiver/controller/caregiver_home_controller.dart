@@ -486,12 +486,27 @@ Future<void> unlinkElderly(String elderlyId) async {
     await ref.update({'done': !done});
   }
 
-  Future<void> markMedDone(DocumentReference ref) async {
-    await ref.update({
-      'status': 'completed',
-      'completedAt': FieldValue.serverTimestamp(),
-    });
+  Future<void> markMedDoneByIds(String elderlyId, String reminderId) async {
+  final doc = _fs.collection('medicationReminders').doc(reminderId);
+
+  try {
+    final snap = await doc.get();
+    if (!snap.exists) throw StateError('Reminder not found');
+    final data = snap.data();
+    if (data is Map<String, dynamic>) {
+      final owner = (data['elderlyId'] ?? '').toString();
+      if (owner.isNotEmpty && owner != elderlyId) {
+      }
+    }
+  } catch (_) {
   }
+
+  await doc.update({
+    'status': 'completed',
+    'completedAt': FieldValue.serverTimestamp(),
+  });
+}
+
 
   Future<void> normalizeCaregiverDoc(String caregiverId) async {
     final ref = _fs.collection('Account').doc(caregiverId);

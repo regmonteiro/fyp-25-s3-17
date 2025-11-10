@@ -3,7 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../models/user_profile.dart';
 import 'caregiver_home_page.dart';
-import 'create_appointments_page.dart';
+import 'medicine_reminders_page.dart';
 import 'report_page.dart';
 import '../boundary/accounts_pages/cg_account_page.dart';
 import '../controller/caregiver_dashboard_controller.dart';
@@ -45,7 +45,7 @@ class _DashboardScaffold extends StatelessWidget {
         ),
       ),
       _TabSpec(
-          title: 'Create Events',
+          title: 'Create Medicine Reminders',
           icon: Icons.event_available_outlined,
           content: Builder(
             builder: (ctx) {
@@ -53,7 +53,7 @@ class _DashboardScaffold extends StatelessWidget {
               final page = ctx.findAncestorWidgetOfExactType<CaregiverDashboardPage>()!;
               final userProfile = page.userProfile;
 
-              return CreateAppointmentsPage(
+              return CreateMedicationReminderPage(
                 userProfile: userProfile,
                 elderlyId: dashboard.selectedElderId,
               );
@@ -124,7 +124,7 @@ class _DashboardScaffold extends StatelessWidget {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
-                    builder: (_) => CreateAppointmentsPage(
+                    builder: (_) => CreateMedicationReminderPage(
                       userProfile: page.userProfile,
                       elderlyId: d.selectedElderId!,
                     ),

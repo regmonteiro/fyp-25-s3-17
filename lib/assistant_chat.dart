@@ -41,7 +41,7 @@ class _AssistantChatState extends State<AssistantChat> {
   String _lang = "en";
 
   final List<Message> _messages = [
-    const Message(Sender.bot, "Hello! I am your AI assistant.")
+    const Message(Sender.bot, "Hello! I am your AI assistant."),
   ];
 
   // ───────────────────────── init / dispose ─────────────────────────
@@ -51,7 +51,10 @@ class _AssistantChatState extends State<AssistantChat> {
 
     // Tie Functions to the initialized Firebase app + correct region
     final app = Firebase.app();
-    _functions = FirebaseFunctions.instanceFor(app: app, region: 'asia-southeast1');
+    _functions = FirebaseFunctions.instanceFor(
+      app: app,
+      region: 'asia-southeast1',
+    );
 
     _stt = stt.SpeechToText();
     _tts = FlutterTts();
@@ -114,9 +117,9 @@ class _AssistantChatState extends State<AssistantChat> {
     setState(() => _lang = code);
     await _configureTtsLanguage();
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Language set to $code")),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text("Language set to $code")));
   }
 
   Future<void> _configureTtsLanguage() async {
@@ -125,13 +128,15 @@ class _AssistantChatState extends State<AssistantChat> {
     await _tts.setSpeechRate(0.50);
     await _tts.setPitch(1.0);
 
-    // Best-effort voice match
+
+// Best-effort voice match
     try {
       final voices = await _tts.getVoices;
       if (voices is List) {
         final list = voices.cast<Map>();
         final match = list.firstWhere(
-          (v) => (v['locale'] as String?)?.toLowerCase() == ttsLang.toLowerCase(),
+          (v) =>
+              (v['locale'] as String?)?.toLowerCase() == ttsLang.toLowerCase(),
           orElse: () => list.first,
         );
         final name = match['name'];
@@ -145,7 +150,11 @@ class _AssistantChatState extends State<AssistantChat> {
   }
 
   // ───────────────────────── translation ─────────────────────────
-  Future<String> _translateText(String text, String targetLang, String sourceLang) async {
+  Future<String> _translateText(
+    String text,
+    String targetLang,
+    String sourceLang,
+  ) async {
     final t = text.trim();
     if (t.isEmpty || targetLang == sourceLang) return t;
 
@@ -182,8 +191,11 @@ class _AssistantChatState extends State<AssistantChat> {
     // Unofficial Google fallback
     try {
       final res = await http
-          .get(Uri.parse(
-              "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sourceLang&tl=$targetLang&dt=t&q=${Uri.encodeComponent(t)}"))
+          .get(
+            Uri.parse(
+              "https://translate.googleapis.com/translate_a/single?client=gtx&sl=$sourceLang&tl=$targetLang&dt=t&q=${Uri.encodeComponent(t)}",
+            ),
+          )
           .timeout(const Duration(seconds: 6));
       final data = jsonDecode(res.body);
       return (data[0] as List).map((seg) => seg[0] as String).join("");
@@ -218,8 +230,12 @@ class _AssistantChatState extends State<AssistantChat> {
     stt.LocaleName chosen = locales.firstWhere(
       (l) => l.localeId.toLowerCase() == wanted.toLowerCase(),
       orElse: () => locales.firstWhere(
-        (l) => l.localeId.toLowerCase().startsWith(wanted.split('-').first.toLowerCase()),
-        orElse: () => locales.isNotEmpty ? locales.first : stt.LocaleName('en-US', 'English (US)'),
+        (l) => l.localeId.toLowerCase().startsWith(
+          wanted.split('-').first.toLowerCase(),
+        ),
+        orElse: () => locales.isNotEmpty
+            ? locales.first
+            : stt.LocaleName('en-US', 'English (US)'),
       ),
     );
 
@@ -241,7 +257,7 @@ class _AssistantChatState extends State<AssistantChat> {
     );
   }
 
-  // ───────────────────────── voice out ─────────────────────────
+// ───────────────────────── voice out ─────────────────────────
   Future<void> _speak(String text) async {
     final t = text.trim();
     if (t.isEmpty) return;
@@ -250,7 +266,6 @@ class _AssistantChatState extends State<AssistantChat> {
     await _tts.speak(t);
   }
 
-  // ───────────────────────── send ─────────────────────────
   Future<void> _sendMessage(String messageText) async {
     final trimmed = messageText.trim();
     if (trimmed.isEmpty) return;
@@ -261,54 +276,95 @@ class _AssistantChatState extends State<AssistantChat> {
       _controller.clear();
     });
 
-    // 1) Translate to English if needed
+    // ✅ Special case: "Who am I"
+    if (trimmed.toLowerCase() == "who am i") {
+      final reply = "Your name is ${widget.userEmail}";
+      setState(() {
+        _messages.add(Message(Sender.bot, reply));
+        _isLoading = false;
+      });
+      unawaited(_speak(reply));
+      return;
+    }
+
+    // ✅ 1. Translate text into English (safe fallback)
     String msgInEnglish = trimmed;
     try {
       if (_lang != "en") {
         msgInEnglish = await _translateText(trimmed, "en", _lang);
+        if (msgInEnglish.isEmpty) msgInEnglish = trimmed;
       }
-    } catch (_) {
-      // If translation fails, proceed with original text
+    } catch (e) {
+      print("⚠️ Translation to EN failed: $e");
       msgInEnglish = trimmed;
     }
 
-    // 2) Call callable function
-    Map data = const {};
+    print("🟦 Sending to API: $msgInEnglish");
+
+    // ✅ 2. Send to Firebase Function / API
+    Map data = {};
     try {
-      final callable = _functions.httpsCallable('dialogflowGateway');
-      final callResult = await callable.call({
-        'userId': widget.userEmail,
-        'message': msgInEnglish,
-        // If your CF expects languageCode, you can send 'en' since we translate.
-        'languageCode': 'en',
-      });
-      data = (callResult.data as Map?) ?? const {};
+      final url = Uri.parse(
+        "https://us-central1-elderly-aiassistant.cloudfunctions.net/dialogflowGateway",
+      );
+
+      final res = await http
+          .post(
+            url,
+            headers: {"Content-Type": "application/json"},
+            body: jsonEncode({
+              "userId": widget.userEmail,
+              "message": msgInEnglish,
+              "languageCode": "en",
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      print("🔵 API Status: ${res.statusCode}");
+      print("🔵 API Response: ${res.body}");
+
+      if (res.statusCode == 200) {
+        data = jsonDecode(res.body);
+      } else {
+        throw Exception("HTTP Error ${res.statusCode}");
+      }
     } catch (e) {
+      print("❌ API ERROR: $e");
+
       if (!mounted) return;
       setState(() {
-        _messages.add(const Message(
-            Sender.bot, "⚠️ I ran into a network error (call). Please try again."));
+        _messages.add(
+          const Message(Sender.bot, "⚠️ Network error. Please try again."),
+        );
         _isLoading = false;
       });
       return;
     }
 
-    // 3) Extract and translate back
+    // ✅ 3. Extract and translate reply
     final raw = (data['reply'] as String?) ?? "Sorry, I didn't understand.";
+    print("🟢 Raw reply from API: $raw");
+
     String reply = raw;
     try {
       if (_lang != "en") {
         reply = await _translateText(raw, _lang, "en");
+        if (reply.isEmpty) reply = raw;
       }
-    } catch (_) {
-      reply = raw; // fallback to EN
+    } catch (e) {
+      print("⚠️ Translation back failed: $e");
+      reply = raw;
     }
 
+    print("🟢 Final reply to user: $reply");
+
+    // ✅ 4. Display + TTS speak
     if (!mounted) return;
     setState(() {
       _messages.add(Message(Sender.bot, reply));
       _isLoading = false;
     });
+
     unawaited(_speak(reply));
   }
 
@@ -317,7 +373,7 @@ class _AssistantChatState extends State<AssistantChat> {
   Widget build(BuildContext context) {
     final canSend = _controller.text.trim().isNotEmpty && !_isLoading;
 
-    return Scaffold(
+return Scaffold(
       appBar: AppBar(
         title: const Text("AI Assistant"),
         actions: [
@@ -347,12 +403,16 @@ class _AssistantChatState extends State<AssistantChat> {
                   final m = _messages[index];
                   final isBot = m.sender == Sender.bot;
                   return Align(
-                    alignment: isBot ? Alignment.centerLeft : Alignment.centerRight,
+                    alignment: isBot
+                        ? Alignment.centerLeft
+                        : Alignment.centerRight,
                     child: Container(
                       margin: const EdgeInsets.symmetric(vertical: 4),
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: isBot ? Colors.blue.shade200 : Colors.blue.shade400,
+                        color: isBot
+                            ? Colors.blue.shade200
+                            : Colors.blue.shade400,
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(m.text),
@@ -365,7 +425,10 @@ class _AssistantChatState extends State<AssistantChat> {
             if (_isLoading)
               const Padding(
                 padding: EdgeInsets.only(bottom: 8),
-                child: Text("AI is thinking...", style: TextStyle(fontStyle: FontStyle.italic)),
+                child: Text(
+                  "AI is thinking...",
+                  style: TextStyle(fontStyle: FontStyle.italic),
+                ),
               ),
 
             // input row
@@ -380,7 +443,8 @@ class _AssistantChatState extends State<AssistantChat> {
                   child: TextField(
                     controller: _controller,
                     textInputAction: TextInputAction.send,
-                    onChanged: (_) => setState(() {}), // keeps send button in sync
+                    onChanged: (_) =>
+                        setState(() {}), // keeps send button in sync
                     onSubmitted: _sendMessage,
                     decoration: const InputDecoration(
                       hintText: "Type your message or tap the mic...",
@@ -389,7 +453,9 @@ class _AssistantChatState extends State<AssistantChat> {
                   ),
                 ),
                 IconButton(
-                  onPressed: canSend ? () => _sendMessage(_controller.text) : null,
+                  onPressed: canSend
+                      ? () => _sendMessage(_controller.text)
+                      : null,
                   icon: const Icon(Icons.send),
                 ),
               ],

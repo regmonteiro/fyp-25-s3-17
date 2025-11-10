@@ -26,21 +26,31 @@ class _CartPageState extends State<CartPage> {
   bool _loading = true;
   String? _err;
 
+  // data
   List<Map<String, dynamic>> _cart = [];
   List<Map<String, dynamic>> _cards = [];
   List<Map<String, dynamic>> _addresses = [];
   List<Map<String, dynamic>> _orders = [];
   double _walletBalance = 0.0;
 
+  // selection
   String? _selectedAddressId;
   String? _selectedCardId;
   String? _payment; // 'wallet' | 'paynow' | 'card'
+
+  // checkout extras
+  String _voucherCode = '';
+  double _voucherDiscount = 0.0;
+  double _deliveryFee = 0.0;
+
+  // delivery fee rules
+  static const double _deliveryFlat = 3.50;
+  static const double _freeDeliveryThreshold = 50.00;
 
   @override
   void initState() {
     super.initState();
 
-    // 0) Must have a signed-in user with a real email
     final user = _auth.currentUser;
     final email = (user?.email ?? '').trim().toLowerCase();
     if (user == null || email.isEmpty) {
@@ -53,7 +63,6 @@ class _CartPageState extends State<CartPage> {
       return;
     }
 
-    // 1) Initialize with a freshly refreshed ID token (rules read request.auth.token.*)
     _initWithFreshToken();
   }
 
@@ -64,10 +73,10 @@ class _CartPageState extends State<CartPage> {
       _email = (_auth.currentUser!.email ?? '').trim().toLowerCase();
       final db = FirebaseFirestore.instance;
 
-      _cartSvc  = CartServiceFs(email: _email, db: db);
-      _pmSvc    = PaymentMethodsServiceFs(email: _email, db: db);
-      _orderSvc = OrderServiceFs(email: _email, db: db);
-      _addrSvc  = AddressServiceFs(db: db);
+      _cartSvc   = CartServiceFs(email: _email, db: db);
+      _pmSvc     = PaymentMethodsServiceFs(email: _email, db: db);
+      _orderSvc  = OrderServiceFs(email: _email, db: db);
+      _addrSvc   = AddressServiceFs(db: db);
       _walletSvc = WalletServicePs(email: _email);
 
       await _bootstrap();
@@ -81,10 +90,8 @@ class _CartPageState extends State<CartPage> {
     try {
       if (mounted) setState(() { _loading = true; _err = null; });
 
-      // 1) Guarantee cart doc exists before any reads
       await _cartSvc.ensureCartDoc();
 
-      // 2) Load data
       final cart  = await _cartSvc.getCart();
       final cards = await _pmSvc.getSavedCards();
 
@@ -110,13 +117,16 @@ class _CartPageState extends State<CartPage> {
         _walletBalance = bal;
         _loading = false;
       });
+
+      _recalcFees(); // compute delivery fee (and keep voucher if any)
     } catch (e) {
       if (!mounted) return;
       setState(() { _err = e.toString(); _loading = false; });
     }
   }
 
-  double _total() {
+  // ---------- Money math ----------
+  double _subtotal() {
     return _cart.fold<double>(
       0.0,
       (sum, it) {
@@ -129,8 +139,25 @@ class _CartPageState extends State<CartPage> {
     );
   }
 
+  void _recalcFees() {
+    // delivery fee:
+    final sub = _subtotal();
+    _deliveryFee = (sub >= _freeDeliveryThreshold) ? 0.0 : _deliveryFlat;
+
+    // re-validate voucher discount to avoid negative totals
+    _voucherDiscount = _clampVoucherDiscount(_voucherCode, sub, _deliveryFee, _voucherDiscount);
+    setState(() {}); // refresh UI
+  }
+
+  double _grandTotal() {
+    final g = _subtotal() + _deliveryFee - _voucherDiscount;
+    return g < 0 ? 0 : g;
+  }
+
+  String _fmt(double v) => NumberFormat.currency(symbol: 'S\$').format(v);
+
+  // ---------- Cart actions ----------
   Future<void> _removeOne(String productId) async {
-    // update local list instantly for snappy UI
     final idx = _cart.indexWhere((e) => e['id'] == productId);
     if (idx < 0) return;
 
@@ -141,26 +168,126 @@ class _CartPageState extends State<CartPage> {
       _cart[idx] = {..._cart[idx], 'quantity': q - 1};
     }
     if (mounted) setState(() {});
+    _recalcFees();
 
-    // persist to Firestore via service
     await _cartSvc.removeItem(productId);
   }
 
+  // ---------- Voucher logic ----------
+  double _clampVoucherDiscount(String code, double subtotal, double delivery, double requested) {
+    // supported:
+    //  - WELCOME5  => S$5 off
+    //  - FREEDEL   => sets delivery fee to 0 (handled by applyVoucher)
+    // cap: cannot result in negative payable
+    final maxDiscount = subtotal + delivery;
+    return requested.clamp(0.0, maxDiscount);
+  }
+
+  void _applyVoucher(String raw) {
+    final code = raw.trim().toUpperCase();
+    double discount = 0.0;
+
+    // evaluate code
+    if (code == 'WELCOME5') {
+      discount = 5.0;
+      // delivery normal
+      final sub = _subtotal();
+      _deliveryFee = (sub >= _freeDeliveryThreshold) ? 0.0 : _deliveryFlat;
+    } else if (code == 'FREEDEL') {
+      _deliveryFee = 0.0;
+      discount = 0.0;
+    } else if (code.isEmpty) {
+      // reset
+      final sub = _subtotal();
+      _deliveryFee = (sub >= _freeDeliveryThreshold) ? 0.0 : _deliveryFlat;
+      discount = 0.0;
+    } else {
+      // unknown
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Invalid voucher code')),
+      );
+      return;
+    }
+
+    _voucherCode = code;
+    _voucherDiscount = _clampVoucherDiscount(code, _subtotal(), _deliveryFee, discount);
+    setState(() {});
+  }
+
+  // ---------- Pay gating ----------
   bool _canPay() {
     if (_cart.isEmpty) return false;
     if (_selectedAddressId == null) return false;
     if (_payment == null) return false;
     if (_payment == 'card' && _selectedCardId == null) return false;
-    if (_payment == 'wallet') return _walletBalance >= _total();
+    if (_payment == 'wallet') return _walletBalance >= _grandTotal();
     return true;
   }
 
+  // ---------- PayNow Mock Flow ----------
+  Future<bool> _payNowFlow(double amount) async {
+    return await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('PayNow — Scan & Pay', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            Text('Amount: ${_fmt(amount)}'),
+            const SizedBox(height: 12),
+            // Mock QR panel
+            Container(
+              width: 220,
+              height: 220,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.black26),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              alignment: Alignment.center,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: const [
+                  Icon(Icons.qr_code_2, size: 120),
+                  SizedBox(height: 6),
+                  Text('Mock QR'),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text('Use any banking app to “simulate” payment.\nThis is a demo flow and does not charge real money.',
+                textAlign: TextAlign.center),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('I’ve paid'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ]),
+        ),
+      ),
+    ) ?? false;
+  }
+
+  // ---------- Complete payment ----------
   Future<void> _completePayment() async {
     if (!_canPay()) return;
 
     try {
-      final amt = _total();
-
       final addr = _addresses.firstWhere(
         (a) => a['id'] == _selectedAddressId,
         orElse: () => <String, dynamic>{},
@@ -173,10 +300,16 @@ class _CartPageState extends State<CartPage> {
         return;
       }
 
+      final subtotal = _subtotal();
+      final delivery = _deliveryFee;
+      final discount = _voucherDiscount;
+      final total = _grandTotal();
+
       Map<String, dynamic> payment;
+
       if (_payment == 'wallet') {
         final ok = await _walletSvc.makePayment(
-          amt,
+          total,
           'AllCare Shop Purchase',
           paymentMethod: 'wallet',
         );
@@ -187,10 +320,12 @@ class _CartPageState extends State<CartPage> {
           );
           return;
         }
-        setState(() => _walletBalance -= amt);
-        payment = {'method': 'wallet', 'amount': amt, 'status': 'Confirmed'};
+        setState(() => _walletBalance -= total);
+        payment = {'method': 'wallet', 'amount': total, 'status': 'Confirmed'};
       } else if (_payment == 'paynow') {
-        payment = {'method': 'paynow', 'amount': amt, 'status': 'Confirmed'};
+        final ok = await _payNowFlow(total);
+        if (!ok) return;
+        payment = {'method': 'paynow', 'amount': total, 'status': 'Confirmed'};
       } else {
         final card = _cards.firstWhere(
           (c) => c['id'] == _selectedCardId,
@@ -207,7 +342,7 @@ class _CartPageState extends State<CartPage> {
           'method': 'card',
           'cardType': card['cardType'],
           'lastFour': card['lastFour'],
-          'amount': amt,
+          'amount': total,
           'status': 'Confirmed',
         };
       }
@@ -215,16 +350,20 @@ class _CartPageState extends State<CartPage> {
       // Create final order doc at /MedicalProducts/orders/orders/{autoId}
       await _orderSvc.createOrder(
         items: _cart,
-        totalAmount: amt,
+        totalAmount: total,
         deliveryAddress: addr,
         paymentMethod: payment,
       );
 
-      // Clear the user's cart doc
       await _cartSvc.clearCart();
 
       if (!mounted) return;
-      setState(() => _cart = []);
+      setState(() {
+        _cart = [];
+        _voucherCode = '';
+        _voucherDiscount = 0.0;
+        _deliveryFee = 0.0;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Order confirmed!')),
       );
@@ -237,6 +376,7 @@ class _CartPageState extends State<CartPage> {
     }
   }
 
+  // ---------- Orders (with Reorder) ----------
   Future<void> _showOrders() async {
     final orders = await _orderSvc.getUserOrders();
     if (!mounted) return;
@@ -245,21 +385,58 @@ class _CartPageState extends State<CartPage> {
     final f = NumberFormat.currency(symbol: 'S\$');
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       builder: (_) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: _orders.isEmpty
               ? const Text('No orders yet.')
               : ListView.separated(
+                  shrinkWrap: true,
                   itemCount: _orders.length,
                   separatorBuilder: (_, __) => const Divider(),
                   itemBuilder: (_, i) {
                     final o = _orders[i];
                     final id = (o['id'] as String?) ?? 'N/A';
-                    return ListTile(
-                      title: Text('Order #${id.length > 8 ? id.substring(id.length - 8) : id}'),
-                      subtitle: Text('${o['status']} • ${o['createdAt']}'),
-                      trailing: Text(f.format((o['totalAmount'] ?? 0).toDouble())),
+                    final short = id.length > 8 ? id.substring(id.length - 8) : id;
+                    final createdAt = (o['createdAt'] ?? '').toString();
+                    final items = (o['items'] ?? []) as List;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        ListTile(
+                          title: Text('Order #$short'),
+                          subtitle: Text('${o['status']} • $createdAt'),
+                          trailing: Text(f.format((o['totalAmount'] ?? 0).toDouble())),
+                        ),
+                        // Reorder button
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.shopping_bag),
+                            label: const Text('Reorder'),
+                            onPressed: () async {
+                              // Rehydrate cart with past items
+                              final past = items.map<Map<String, dynamic>>((e) => Map<String, dynamic>.from(e as Map)).toList();
+                              setState(() => _cart = past);
+                              // Persist (try common method names)
+                              try {
+                                await _cartSvc.saveCart(past);
+                              } catch (_) {
+                                try { await _cartSvc.saveCart(past); } catch (_) {/* ignore */ }
+                              }
+                              _recalcFees();
+                              if (mounted) Navigator.of(context).pop();
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Cart updated with past order items.')),
+                                );
+                              }
+                            },
+                          ),
+                        ),
+                      ],
                     );
                   },
                 ),
@@ -268,6 +445,7 @@ class _CartPageState extends State<CartPage> {
     );
   }
 
+  // ---------- Checkout Sheet ----------
   void _openCheckout() {
     final f = NumberFormat.currency(symbol: 'S\$');
     showModalBottomSheet(
@@ -276,15 +454,20 @@ class _CartPageState extends State<CartPage> {
       builder: (_) => StatefulBuilder(
         builder: (ctx, setSheet) => SafeArea(
           child: Padding(
-            padding: const EdgeInsets.all(16),
+            padding: EdgeInsets.only(
+              left: 16, right: 16, top: 16,
+              bottom: 16 + MediaQuery.of(context).viewInsets.bottom,
+            ),
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Text('Total: ${f.format(_total())}',
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('Checkout', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 8),
-                  Text('Wallet: ${f.format(_walletBalance)}'),
+
+                  // Totals block
+                  _totalsBlock(setSheet),
+
                   const Divider(height: 24),
                   const Text('Delivery Address', style: TextStyle(fontWeight: FontWeight.bold)),
                   const SizedBox(height: 8),
@@ -294,24 +477,33 @@ class _CartPageState extends State<CartPage> {
                     Column(
                       children: _addresses.map((a) {
                         final sel = _selectedAddressId == a['id'];
-                        return ListTile(
-                          dense: true,
-                          onTap: () => setSheet(() => _selectedAddressId = a['id']),
-                          leading: Radio<String>(
-                            value: a['id'],
-                            groupValue: _selectedAddressId,
-                            onChanged: (v) => setSheet(() => _selectedAddressId = v),
+                        return Card(
+                          child: ListTile(
+                            onTap: () => setSheet(() => _selectedAddressId = a['id']),
+                            leading: Radio<String>(
+                              value: a['id'],
+                              groupValue: _selectedAddressId,
+                              onChanged: (v) => setSheet(() => _selectedAddressId = v),
+                            ),
+                            title: Row(
+                              children: [
+                                Text(a['name'] ?? ''),
+                                const SizedBox(width: 6),
+                                if (a['isDefault'] == true)
+                                  const Chip(label: Text('Default'), visualDensity: VisualDensity.compact),
+                              ],
+                            ),
+                            subtitle: Text(
+                              '${a['recipientName']}\n'
+                              '${a['blockStreet']}\n'
+                              '${a['unitNumber']}, Singapore ${a['postalCode']}',
+                            ),
+                            trailing: sel ? const Icon(Icons.check_circle, color: Colors.green) : null,
                           ),
-                          title: Text(a['name'] ?? ''),
-                          subtitle: Text(
-                            '${a['recipientName']}\n'
-                            '${a['blockStreet']}\n'
-                            '${a['unitNumber']}, Singapore ${a['postalCode']}',
-                          ),
-                          trailing: sel ? const Icon(Icons.check_circle, color: Colors.green) : null,
                         );
                       }).toList(),
                     ),
+
                   const Divider(height: 24),
                   const Text('Payment Method', style: TextStyle(fontWeight: FontWeight.bold)),
                   RadioListTile<String>(
@@ -325,7 +517,7 @@ class _CartPageState extends State<CartPage> {
                     value: 'paynow',
                     groupValue: _payment,
                     onChanged: (v) => setSheet(() => _payment = v),
-                    title: const Text('PayNow'),
+                    title: const Text('PayNow (QR)'),
                   ),
                   RadioListTile<String>(
                     value: 'card',
@@ -363,6 +555,7 @@ class _CartPageState extends State<CartPage> {
                         }).toList(),
                       ),
                   ],
+
                   const SizedBox(height: 16),
                   ElevatedButton(
                     onPressed: _canPay()
@@ -382,6 +575,68 @@ class _CartPageState extends State<CartPage> {
     );
   }
 
+  Widget _totalsBlock(void Function(void Function()) setSheet) {
+    final sub = _subtotal();
+    final total = _grandTotal();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          Row(
+            children: [
+              const Text('Subtotal'),
+              const Spacer(),
+              Text(_fmt(sub)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Text('Delivery'),
+              const Spacer(),
+              Text(_deliveryFee == 0 ? 'Free' : _fmt(_deliveryFee)),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Text('Voucher'),
+              const Spacer(),
+              Text(_voucherDiscount == 0 ? '—' : '- ${_fmt(_voucherDiscount)}'),
+            ],
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            decoration: InputDecoration(
+              labelText: 'Voucher code',
+              hintText: 'WELCOME5 / FREEDEL',
+              suffixIcon: TextButton(
+                onPressed: () => setSheet(() => _applyVoucher(_voucherCode)),
+                child: const Text('Apply'),
+              ),
+            ),
+            onChanged: (v) => setSheet(() => _voucherCode = v),
+          ),
+          const SizedBox(height: 10),
+          const Divider(),
+          Row(
+            children: [
+              Text('Total', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              Text(_fmt(total), style: Theme.of(context).textTheme.titleMedium),
+            ],
+          ),
+          if (_subtotal() >= _freeDeliveryThreshold)
+            const Padding(
+              padding: EdgeInsets.only(top: 6),
+              child: Text('🎉 You’ve unlocked free delivery!', style: TextStyle(color: Colors.green)),
+            ),
+        ]),
+      ),
+    );
+  }
+
+  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     final f = NumberFormat.currency(symbol: 'S\$');
@@ -433,9 +688,15 @@ class _CartPageState extends State<CartPage> {
         child: Row(
           children: [
             Expanded(
-              child: Text(
-                'Total: ${f.format(_total())}',
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Subtotal: ${_fmt(_subtotal())}'),
+                  Text('Delivery: ${_deliveryFee == 0 ? 'Free' : _fmt(_deliveryFee)}'),
+                  Text('Total: ${_fmt(_grandTotal())}',
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ],
               ),
             ),
             ElevatedButton(

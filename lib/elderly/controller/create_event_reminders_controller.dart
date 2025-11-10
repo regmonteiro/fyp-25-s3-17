@@ -1,164 +1,146 @@
-import 'dart:async';
+// lib/.../create_event_reminders_page.dart (or its own file you import)
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:intl/intl.dart';
 
-/// Model
-class EventReminder {
-  final String id;            // Firestore field name (random id)
+class Reminder {
+  final String id;
   final String title;
-  final String startTime;     // ISO-8601 String e.g. "2025-10-21T13:34"
-  final int duration;         // minutes
-  final String createdAt;     // ISO-8601 String
+  final String startTimeIso; // ISO string "yyyy-MM-ddTHH:mm" or full ISO-8601
+  final int duration;
+  final String createdAt;
 
-  EventReminder({
+  Reminder({
     required this.id,
     required this.title,
-    required this.startTime,
+    required this.startTimeIso,
     required this.duration,
     required this.createdAt,
   });
 
-  factory EventReminder.fromMap(String id, Map<String, dynamic> m) {
-    return EventReminder(
-      id: id,
-      title: (m['title'] ?? '').toString(),
-      startTime: (m['startTime'] ?? '').toString(),
-      duration: _toInt(m['duration']),
-      createdAt: (m['createdAt'] ?? '').toString(),
-    );
-  }
+  DateTime? get start => startTimeIso.isEmpty ? null : DateTime.tryParse(startTimeIso);
 
   Map<String, dynamic> toMap() => {
-        'title': title,
-        'startTime': startTime,
-        'duration': duration,
-        'createdAt': createdAt,
-      };
+    'title': title,
+    'startTime': startTimeIso,
+    'duration': duration,
+    'createdAt': createdAt,
+  };
 
-  bool isValid() =>
-      title.trim().isNotEmpty &&
-      startTime.trim().isNotEmpty &&
-      duration > 0;
+  static Reminder fromMap(String id, Map<String, dynamic> m) => Reminder(
+    id: id,
+    title: (m['title'] ?? '').toString(),
+    startTimeIso: (m['startTime'] ?? '').toString(),
+    duration: int.tryParse((m['duration'] ?? 0).toString()) ?? 0,
+    createdAt: (m['createdAt'] ?? '').toString(),
+  );
 }
 
-int _toInt(Object? v) {
-  if (v is int) return v;
-  if (v is double) return v.toInt();
-  return int.tryParse(v?.toString() ?? '') ?? 0;
-}
+class ReminderService {
+  final _db = FirebaseFirestore.instance;
 
-/// Firestore boundary/service
-class RemindersService {
-  final FirebaseFirestore _fs;
-  RemindersService({FirebaseFirestore? firestore})
-      : _fs = firestore ?? FirebaseFirestore.instance;
-
-  /// Transform an email into the canonical Firestore key used by your doc id.
-  /// Matches your screenshot: replace both '.' and '@' with '_'.
-  String emailToKey(String emailOrKey) {
-    if (!emailOrKey.contains('@')) return emailOrKey;
-    return emailOrKey.trim().replaceAll('.', '_').replaceAll('@', '_');
+  String _emailToKey(String email) {
+    final lower = email.trim().toLowerCase();
+    final at = lower.indexOf('@');
+    if (at < 0) return lower.replaceAll('.', '_');
+    final local  = lower.substring(0, at);
+    final domain = lower.substring(at + 1).replaceAll('.', '_');
+    return '$local@$domain'; // keep '@'
   }
 
-  DocumentReference<Map<String, dynamic>> _docRef(String userKey) =>
-      _fs.collection('reminders').doc(userKey);
+  Future<String?> _resolveUserKeyFromAccount() async {
+    final fs = FirebaseFirestore.instance;
+    final u = FirebaseAuth.instance.currentUser;
+    if (u == null) return null;
 
-  /// Create: generate an id and store as a FIELD on reminders/{userKey}
-  Future<void> createReminder(String userKey, {
-    required String title,
-    required String startTime, // "yyyy-MM-ddTHH:mm" (or any ISO string)
-    required int durationMinutes,
-  }) async {
-    final id = _fs.collection('_ids').doc().id; // cheap random id
-    final reminder = EventReminder(
-      id: id,
-      title: title.trim(),
-      startTime: startTime.trim(),
-      duration: durationMinutes,
-      createdAt: DateTime.now().toIso8601String(),
-    );
-    if (!reminder.isValid()) {
-      throw Exception('Invalid reminder data');
-    }
-    await _docRef(userKey).set({ id: reminder.toMap() }, SetOptions(merge: true));
+    // Prefer /AccountByUid mapping (authoritative)
+    final snap = await fs.collection('AccountByUid').doc(u.uid).get();
+    final key = (snap.data()?['emailKey'] as String?)?.trim();
+    if (key != null && key.isNotEmpty) return key;
+
+    // Fallback to auth email → key
+    final mail = u.email?.trim().toLowerCase();
+    if (mail != null && mail.isNotEmpty) return _emailToKey(mail);
+
+    return null;
   }
 
-  /// Subscribe to reminders/{userKey} and emit a sorted list (by startTime).
-  Stream<List<EventReminder>> subscribeToReminders(String userKey) {
-    return _docRef(userKey).snapshots().map((snap) {
-      if (!snap.exists) return <EventReminder>[];
-      final data = snap.data() ?? {};
-      final list = <EventReminder>[];
-      for (final entry in data.entries) {
-        final key = entry.key;
-        final val = entry.value;
-        if (val is Map<String, dynamic>) {
-          list.add(EventReminder.fromMap(key, val));
-        } else if (val is Map) {
-          list.add(EventReminder.fromMap(key, Map<String, dynamic>.from(val)));
-        }
+  Future<DocumentReference<Map<String, dynamic>>?> _remindersDocRef() async {
+    final key = await _resolveUserKeyFromAccount();
+    if (key == null) return null;
+    return _db.collection('reminders').doc(key);
+  }
+
+  Stream<List<Reminder>> subscribeMine() async* {
+  final doc = await _remindersDocRef();
+  if (doc == null) {
+    yield const <Reminder>[];
+    return;
+  }
+  yield* doc.snapshots().map((snap) {
+    if (!snap.exists) return <Reminder>[];
+    final data = snap.data() ?? {};
+    final items = <Reminder>[];
+    for (final e in data.entries) {
+      final v = e.value;
+      if (v is Map<String, dynamic>) {
+        items.add(Reminder.fromMap(e.key, v));
+      } else if (v is Map) {
+        items.add(Reminder.fromMap(e.key, Map<String, dynamic>.from(v)));
       }
-      list.sort((a, b) =>
-          DateTime.tryParse(a.startTime)?.compareTo(DateTime.tryParse(b.startTime) ?? DateTime(0)) ?? 0);
-      return list;
+    }
+    items.sort((a, b) {
+      final ax = a.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+      final bx = b.start ?? DateTime.fromMillisecondsSinceEpoch(0);
+      return ax.compareTo(bx);
+    });
+    return items;
     });
   }
 
-  /// Delete a single reminder field: set it to FieldValue.delete()
-  Future<void> deleteReminder(String userKey, String reminderId) async {
-    await _docRef(userKey).update({ reminderId: FieldValue.delete() });
-  }
-
-  /// Update a reminder field in-place.
-  Future<void> updateReminder(String userKey, String reminderId, {
-    String? title,
-    String? startTime,
-    int? durationMinutes,
+  Future<void> create({
+    required String title,
+    required DateTime start,
+    required int durationMinutes,
   }) async {
-    final update = <String, dynamic>{};
-    if (title != null) update['title'] = title.trim();
-    if (startTime != null) update['startTime'] = startTime.trim();
-    if (durationMinutes != null) update['duration'] = durationMinutes;
-    update['createdAt'] = DateTime.now().toIso8601String();
+    final doc = await _remindersDocRef();
+    if (doc == null) throw Exception('No Account/email key found.');
 
-    // Validate minimally (title/startTime may be unchanged; server will merge)
-    if (update.containsKey('duration') && (durationMinutes ?? 0) <= 0) {
-      throw Exception('Invalid duration');
-    }
-    await _docRef(userKey).set({ reminderId: update }, SetOptions(merge: true));
-  }
-
-  /// One-off fetch; returns a sorted list.
-  Future<List<EventReminder>> getReminders(String userKey) async {
-    final snap = await _docRef(userKey).get();
-    if (!snap.exists) return <EventReminder>[];
-    final data = snap.data() ?? {};
-    final list = <EventReminder>[];
-    for (final e in data.entries) {
-      final id = e.key;
-      final v = e.value;
-      if (v is Map<String, dynamic>) {
-        list.add(EventReminder.fromMap(id, v));
-      } else if (v is Map) {
-        list.add(EventReminder.fromMap(id, Map<String, dynamic>.from(v)));
+    final id = _db.collection('_ids').doc().id;
+    await doc.set({
+      'ownerEmailKey': doc.id,
+      if (FirebaseAuth.instance.currentUser?.uid != null)
+        'ownerUid': FirebaseAuth.instance.currentUser!.uid,
+      id: {
+        'title': title.trim(),
+        // Use same format as your controller update (or pick full ISO consistently)
+        'startTime': DateFormat("yyyy-MM-ddTHH:mm").format(start),
+        'duration': durationMinutes,
+        'createdAt': DateTime.now().toIso8601String(),
       }
-    }
-    list.sort((a, b) =>
-        DateTime.tryParse(a.startTime)?.compareTo(DateTime.tryParse(b.startTime) ?? DateTime(0)) ?? 0);
-    return list;
+    }, SetOptions(merge: true));
   }
 
-  /// Fetch single reminder by id (field).
-  Future<EventReminder?> getReminderById(String userKey, String reminderId) async {
-    final snap = await _docRef(userKey).get();
-    if (!snap.exists) return null;
-    final data = snap.data() ?? {};
-    final v = data[reminderId];
-    if (v is Map<String, dynamic>) {
-      return EventReminder.fromMap(reminderId, v);
+  Future<void> update({
+    required String id,
+    required Reminder updated,
+  }) async {
+    final doc = await _remindersDocRef();
+    if (doc == null) throw Exception('No Account/email key found.');
+    await doc.set({ id: updated.toMap() }, SetOptions(merge: true));
+  }
+
+  Future<void> delete(String id) async {
+    final doc = await _remindersDocRef();
+    if (doc == null) throw Exception('No Account/email key found.');
+    try {
+      await doc.update({ id: FieldValue.delete() });
+    } on FirebaseException catch (e) {
+      if (e.code == 'not-found') {
+        await doc.set(const <String, dynamic>{}, SetOptions(merge: true));
+        return;
+      }
+      rethrow;
     }
-    if (v is Map) {
-      return EventReminder.fromMap(reminderId, Map<String, dynamic>.from(v));
-    }
-    return null;
   }
 }
