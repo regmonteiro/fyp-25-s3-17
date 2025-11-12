@@ -1,11 +1,8 @@
-// lib/admin/admin_manage_service_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-
-import 'admin_shell.dart';
 import '../models/user_profile.dart';
-import 'admin_routes.dart' show navigateAdmin;
+import 'admin_routes.dart';
 
 class AdminManageServicePage extends StatefulWidget {
   final UserProfile userProfile;
@@ -20,28 +17,12 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _db = FirebaseFirestore.instance;
 
-  // State variables
   bool _isLoading = false;
   String _searchQuery = '';
   List<ServiceItem> _allServices = [];
   List<ServiceItem> _filteredServices = [];
-  ServiceItem? _editingService;
-
-  // Form data
   final TextEditingController _searchController = TextEditingController();
 
-  // Colors
-  final Color _backgroundColor = const Color(0xFFf5f5f5);
-  final Color _whiteColor = Colors.white;
-  final Color _darkGrayColor = const Color(0xFF666666);
-  final Color _purpleColor = Colors.purple.shade500;
-  final Color _redColor = Colors.red;
-  final Color _blueColor = Colors.blue;
-  final Color _greenColor = Colors.green;
-  final Color _orangeColor = Colors.orange;
-  final Color _lightGrayColor = const Color(0xFFE0E0E0);
-
-  static const String _TAG = "AdminManageServices";
   static const String _COLLECTION_SERVICES = "Services";
 
   @override
@@ -50,98 +31,93 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
     _loadServices();
   }
 
+  void _navigateToDashboard() {
+    // Use your existing navigation function
+    navigateAdmin(context, 'adminDashboard', widget.userProfile);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AdminShell(
-      profile: widget.userProfile,
-      currentKey: 'adminManageService',
-      title: 'Services',
-      body: _buildBody(),
-      floatingActionButton: _buildAddButton(),
-      showBackButton: true,
-      onBackPressed: () =>
-          navigateAdmin(context, 'adminDashboard', widget.userProfile),
-      showDashboardButton: true,
-    );
-  }
-
-  Widget _buildBody() {
-    return Column(
-      children: [
-        // Header Section (search)
-        _buildHeaderSection(),
-
-        // Loading State
-        if (_isLoading)
-          Expanded(child: _buildLoadingState())
-        else
-          // Empty or Services Grid/List
-          Expanded(
-            child: _filteredServices.isEmpty
-                ? _buildEmptyState()
-                : _buildServicesLayout(),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildHeaderSection() {
-    return Container(
-      width: double.infinity,
-      padding: EdgeInsets.all(
-        _getResponsiveValue(mobile: 16, tablet: 20, desktop: 24),
-      ),
-      color: _whiteColor,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Create, edit, and manage AllCare Platform services",
-            style: TextStyle(
-              color: _darkGrayColor,
-              fontSize: _getResponsiveValue(
-                mobile: 12,
-                tablet: 14,
-                desktop: 16,
-              ),
-            ),
-          ),
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: SizedBox(
-                  height: _getResponsiveValue(
-                    mobile: 44,
-                    tablet: 48,
-                    desktop: 52,
-                  ),
-                  child: TextField(
-                    controller: _searchController,
-                    decoration: InputDecoration(
-                      hintText: "Search services...",
-                      border: const OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(
-                        horizontal: _getResponsiveValue(
-                          mobile: 12,
-                          tablet: 16,
-                          desktop: 20,
-                        ),
-                      ),
-                    ),
-                    onChanged: (value) {
-                      setState(() {
-                        _searchQuery = value;
-                        _filterServices();
-                      });
-                    },
-                  ),
-                ),
-              ),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Manage Services'),
+        backgroundColor: Colors.purple.shade500,
+        foregroundColor: Colors.white,
+        leading: IconButton(
+          icon: Icon(Icons.arrow_back),
+          onPressed: _navigateToDashboard, // Use the navigation function
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.dashboard),
+            onPressed: _navigateToDashboard, // Use the navigation function
           ),
         ],
       ),
+      body: _buildBody(),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _createService,
+        backgroundColor: Colors.purple.shade500,
+        child: Icon(Icons.add, color: Colors.white),
+      ),
+    );
+  }
+
+  // ... rest of your existing methods (_buildBody, _loadServices, etc.) remain the same
+  Widget _buildBody() {
+    return Column(
+      children: [
+        // Header Section
+        Container(
+          padding: EdgeInsets.all(16),
+          color: Colors.white,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "Create, edit, and manage AllCare Platform services",
+                style: TextStyle(color: Colors.grey.shade600, fontSize: 14),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: _searchController,
+                decoration: InputDecoration(
+                  hintText: "Search services...",
+                  border: OutlineInputBorder(),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: Icon(Icons.clear),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {
+                              _searchQuery = '';
+                              _filterServices();
+                            });
+                          },
+                        )
+                      : null,
+                ),
+                onChanged: (value) {
+                  setState(() {
+                    _searchQuery = value;
+                    _filterServices();
+                  });
+                },
+              ),
+            ],
+          ),
+        ),
+
+        // Content
+        if (_isLoading)
+          Expanded(child: _buildLoadingState())
+        else
+          Expanded(
+            child: _filteredServices.isEmpty
+                ? _buildEmptyState()
+                : _buildServicesList(),
+          ),
+      ],
     );
   }
 
@@ -152,16 +128,7 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
         children: [
           CircularProgressIndicator(),
           SizedBox(height: 16),
-          Text(
-            "Loading services...",
-            style: TextStyle(
-              fontSize: _getResponsiveValue(
-                mobile: 14,
-                tablet: 16,
-                desktop: 18,
-              ),
-            ),
-          ),
+          Text("Loading services..."),
         ],
       ),
     );
@@ -170,185 +137,93 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
-        padding: EdgeInsets.all(
-          _getResponsiveValue(mobile: 24, tablet: 32, desktop: 40),
-        ),
-        child: Text(
-          _searchQuery.isEmpty
-              ? "No services found. Create your first service to get started."
-              : 'No services found matching "$_searchQuery"',
-          style: TextStyle(
-            fontSize: _getResponsiveValue(mobile: 14, tablet: 16, desktop: 18),
-            color: _darkGrayColor,
-          ),
-          textAlign: TextAlign.center,
+        padding: EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.medical_services_outlined, size: 64, color: Colors.grey),
+            SizedBox(height: 16),
+            Text(
+              _searchQuery.isEmpty
+                  ? "No services found. Create your first service!"
+                  : 'No services found matching "$_searchQuery"',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+            if (_searchQuery.isEmpty) ...[
+              SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _createService,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.purple.shade500,
+                  foregroundColor: Colors.white,
+                ),
+                child: Text("Create First Service"),
+              ),
+            ],
+          ],
         ),
       ),
     );
-  }
-
-  Widget _buildServicesLayout() {
-    final screenWidth = MediaQuery.of(context).size.width;
-
-    if (screenWidth < 600) {
-      // Mobile - List view
-      return _buildServicesList();
-    } else if (screenWidth < 1200) {
-      // Tablet - Grid with 2 columns
-      return _buildServicesGrid(crossAxisCount: 2);
-    } else {
-      // Desktop - Grid with 3 columns
-      return _buildServicesGrid(crossAxisCount: 3);
-    }
   }
 
   Widget _buildServicesList() {
     return ListView.builder(
-      padding: const EdgeInsets.all(12),
+      padding: EdgeInsets.all(12),
       itemCount: _filteredServices.length,
       itemBuilder: (context, index) =>
-          _buildServiceListItem(_filteredServices[index]),
+          _buildServiceItem(_filteredServices[index]),
     );
   }
 
-  Widget _buildServiceListItem(ServiceItem service) {
+  Widget _buildServiceItem(ServiceItem service) {
     return Card(
-      elevation: 2,
-      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      margin: EdgeInsets.symmetric(vertical: 8, horizontal: 12),
       child: Padding(
-        padding: EdgeInsets.all(
-          _getResponsiveValue(mobile: 16, tablet: 20, desktop: 24),
-        ),
+        padding: EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Title
             Text(
               service.title,
-              style: TextStyle(
-                fontSize: _getResponsiveValue(
-                  mobile: 18,
-                  tablet: 20,
-                  desktop: 22,
-                ),
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF333333),
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
-            const SizedBox(height: 8),
-            // Description
+            SizedBox(height: 8),
             Text(
               service.description,
-              style: TextStyle(
-                fontSize: _getResponsiveValue(
-                  mobile: 14,
-                  tablet: 16,
-                  desktop: 18,
-                ),
-                color: _darkGrayColor,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              style: TextStyle(color: Colors.grey.shade600),
             ),
-            const SizedBox(height: 12),
-            // Details
             if (service.details.isNotEmpty) ...[
-              Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8F9FA),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Details:",
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF333333),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      service.details,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFF444444),
-                        height: 1.4,
-                      ),
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
+              SizedBox(height: 8),
+              Text(
+                service.details,
+                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 12),
             ],
-            Container(
-              height: 1,
-              color: _lightGrayColor,
-              margin: const EdgeInsets.symmetric(vertical: 12),
-            ),
-            // Buttons
+            SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () => _editService(service),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _purpleColor,
-                      foregroundColor: _whiteColor,
-                      padding: EdgeInsets.symmetric(
-                        vertical: _getResponsiveValue(
-                          mobile: 8,
-                          tablet: 12,
-                          desktop: 16,
-                        ),
-                      ),
+                      backgroundColor: Colors.purple.shade500,
+                      foregroundColor: Colors.white,
                     ),
-                    child: Text(
-                      "Edit",
-                      style: TextStyle(
-                        fontSize: _getResponsiveValue(
-                          mobile: 12,
-                          tablet: 14,
-                          desktop: 16,
-                        ),
-                      ),
-                    ),
+                    child: Text("Edit"),
                   ),
                 ),
-                const SizedBox(width: 8),
+                SizedBox(width: 8),
                 Expanded(
                   child: ElevatedButton(
                     onPressed: () => _deleteService(service),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: _redColor,
-                      foregroundColor: _whiteColor,
-                      padding: EdgeInsets.symmetric(
-                        vertical: _getResponsiveValue(
-                          mobile: 8,
-                          tablet: 12,
-                          desktop: 16,
-                        ),
-                      ),
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
                     ),
-                    child: Text(
-                      "Delete",
-                      style: TextStyle(
-                        fontSize: _getResponsiveValue(
-                          mobile: 12,
-                          tablet: 14,
-                          desktop: 16,
-                        ),
-                      ),
-                    ),
+                    child: Text("Delete"),
                   ),
                 ),
               ],
@@ -357,224 +232,27 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
         ),
       ),
     );
-  }
-
-  Widget _buildServicesGrid({required int crossAxisCount}) {
-    return GridView.builder(
-      padding: EdgeInsets.all(
-        _getResponsiveValue(mobile: 8, tablet: 12, desktop: 16),
-      ),
-      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: crossAxisCount,
-        crossAxisSpacing: _getResponsiveValue(
-          mobile: 8,
-          tablet: 12,
-          desktop: 16,
-        ),
-        mainAxisSpacing: _getResponsiveValue(
-          mobile: 8,
-          tablet: 12,
-          desktop: 16,
-        ),
-        childAspectRatio: _getResponsiveValue(
-          mobile: 0.75,
-          tablet: 0.8,
-          desktop: 0.85,
-        ),
-      ),
-      itemCount: _filteredServices.length,
-      itemBuilder: (_, i) => _buildServiceCard(_filteredServices[i]),
-    );
-  }
-
-  Widget _buildServiceCard(ServiceItem service) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      child: Padding(
-        padding: EdgeInsets.all(
-          _getResponsiveValue(mobile: 12, tablet: 16, desktop: 20),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Title
-            Text(
-              service.title,
-              style: TextStyle(
-                fontSize: _getResponsiveValue(
-                  mobile: 16,
-                  tablet: 18,
-                  desktop: 20,
-                ),
-                fontWeight: FontWeight.bold,
-                color: const Color(0xFF333333),
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 8),
-            // Description
-            Text(
-              service.description,
-              style: TextStyle(
-                fontSize: _getResponsiveValue(
-                  mobile: 12,
-                  tablet: 14,
-                  desktop: 16,
-                ),
-                color: _darkGrayColor,
-              ),
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            const SizedBox(height: 12),
-            // Details
-            if (service.details.isNotEmpty) ...[
-              Container(
-                margin: const EdgeInsets.only(top: 8),
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF8F9FA),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      "Details:",
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        color: Color(0xFF333333),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      service.details,
-                      style: const TextStyle(
-                        fontSize: 10,
-                        color: Color(0xFF444444),
-                        height: 1.4,
-                      ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-            ],
-            const Spacer(),
-            Container(
-              height: 1,
-              color: _lightGrayColor,
-              margin: const EdgeInsets.symmetric(vertical: 12),
-            ),
-            // Buttons
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _editService(service),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _purpleColor,
-                      foregroundColor: _whiteColor,
-                      padding: EdgeInsets.symmetric(
-                        vertical: _getResponsiveValue(
-                          mobile: 8,
-                          tablet: 10,
-                          desktop: 12,
-                        ),
-                      ),
-                    ),
-                    child: Text(
-                      "Edit",
-                      style: TextStyle(
-                        fontSize: _getResponsiveValue(
-                          mobile: 12,
-                          tablet: 14,
-                          desktop: 16,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-                SizedBox(
-                  width: _getResponsiveValue(mobile: 6, tablet: 8, desktop: 12),
-                ),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => _deleteService(service),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: _redColor,
-                      foregroundColor: _whiteColor,
-                      padding: EdgeInsets.symmetric(
-                        vertical: _getResponsiveValue(
-                          mobile: 8,
-                          tablet: 10,
-                          desktop: 12,
-                        ),
-                      ),
-                    ),
-                    child: Text(
-                      "Delete",
-                      style: TextStyle(
-                        fontSize: _getResponsiveValue(
-                          mobile: 12,
-                          tablet: 14,
-                          desktop: 16,
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildAddButton() => FloatingActionButton(
-    onPressed: _createService,
-    backgroundColor: _purpleColor,
-    foregroundColor: _whiteColor,
-    child: const Icon(Icons.add),
-  );
-
-  // Helper method to get responsive values
-  double _getResponsiveValue({
-    required double mobile,
-    required double tablet,
-    required double desktop,
-  }) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    if (screenWidth < 600) {
-      return mobile;
-    } else if (screenWidth < 1200) {
-      return tablet;
-    } else {
-      return desktop;
-    }
   }
 
   // Data methods
   void _loadServices() async {
     setState(() => _isLoading = true);
     try {
-      final snap = await _db.collection(_COLLECTION_SERVICES).get();
-      final list = <ServiceItem>[];
-      for (final d in snap.docs) {
-        try {
-          list.add(ServiceItem.fromDocument(d));
-        } catch (e) {
-          // ignore malformed docs
-        }
+      final querySnapshot = await _db.collection(_COLLECTION_SERVICES).get();
+      List<ServiceItem> services = [];
+
+      for (final doc in querySnapshot.docs) {
+        services.add(ServiceItem.fromDocument(doc));
       }
+
+      if (services.isEmpty) {
+        await _createDefaultServices();
+        _loadServices();
+        return;
+      }
+
       setState(() {
-        _allServices = list;
+        _allServices = services;
         _filterServices();
         _isLoading = false;
       });
@@ -582,7 +260,35 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load services: $e')));
+      ).showSnackBar(SnackBar(content: Text('Error: $e')));
+    }
+  }
+
+  Future<void> _createDefaultServices() async {
+    try {
+      final servicesData = {
+        "service1": {
+          "title": "Personal AI Assistant",
+          "description": "Guidance, habit reminders, and smart suggestions.",
+          "details": "AI assistance for older adults.",
+          "category": "AI Assistance",
+          "price": 0.0,
+          "duration": "24/7",
+          "isActive": true,
+          "createdAt": FieldValue.serverTimestamp(),
+          "updatedAt": FieldValue.serverTimestamp(),
+          "createdBy": _auth.currentUser?.email ?? 'admin',
+        },
+      };
+
+      final batch = _db.batch();
+      servicesData.forEach((id, data) {
+        batch.set(_db.collection(_COLLECTION_SERVICES).doc(id), data);
+      });
+      await batch.commit();
+    } catch (e) {
+      print('Error creating services: $e');
+      rethrow;
     }
   }
 
@@ -590,114 +296,100 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
     final q = _searchQuery.toLowerCase().trim();
     _filteredServices = q.isEmpty
         ? List.of(_allServices)
-        : _allServices.where((s) {
-            bool contains(String? text) =>
-                (text ?? '').toLowerCase().contains(q);
-            return contains(s.title) ||
-                contains(s.description) ||
-                contains(s.details);
-          }).toList();
-    _filteredServices.sort((a, b) => a.title.compareTo(b.title));
+        : _allServices
+              .where(
+                (s) =>
+                    s.title.toLowerCase().contains(q) ||
+                    s.description.toLowerCase().contains(q),
+              )
+              .toList();
     setState(() {});
   }
 
   void _createService() {
-    _editingService = null;
-    _showServiceForm();
+    _showServiceForm(null);
   }
 
-  void _editService(ServiceItem s) {
-    _editingService = s;
-    _showServiceForm();
+  void _editService(ServiceItem service) {
+    _showServiceForm(service);
   }
 
-  void _showServiceForm() {
+  void _showServiceForm(ServiceItem? service) {
     showDialog(
       context: context,
       builder: (_) => ServiceFormDialog(
-        service: _editingService,
-        onSubmit: _submitServiceForm,
+        service: service,
+        onSubmit: (title, description, details) async {
+          if (title.isEmpty || description.isEmpty) return;
+
+          setState(() => _isLoading = true);
+          final data = {
+            'title': title,
+            'description': description,
+            'details': details,
+            'category': 'General',
+            'price': 0.0,
+            'duration': 'Flexible',
+            'updatedAt': FieldValue.serverTimestamp(),
+            'createdBy': _auth.currentUser?.email ?? 'admin',
+            'isActive': true,
+          };
+
+          try {
+            if (service != null) {
+              await _db
+                  .collection(_COLLECTION_SERVICES)
+                  .doc(service.id)
+                  .update(data);
+            } else {
+              data['createdAt'] = FieldValue.serverTimestamp();
+              await _db.collection(_COLLECTION_SERVICES).add(data);
+            }
+            _loadServices();
+          } catch (e) {
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text('Failed: $e')));
+          }
+        },
       ),
     );
   }
 
-  void _submitServiceForm(
-    String title,
-    String description,
-    String details,
-  ) async {
-    setState(() => _isLoading = true);
-
-    final data = {
-      'title': title,
-      'description': description,
-      'details': details,
-      'createdAt': DateTime.now().toIso8601String(),
-      'createdBy': _auth.currentUser?.email ?? 'admin',
-    };
-
-    try {
-      if (_editingService != null) {
-        await _db
-            .collection(_COLLECTION_SERVICES)
-            .doc(_editingService!.id)
-            .set(data);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Service updated successfully')),
-        );
-      } else {
-        await _db.collection(_COLLECTION_SERVICES).add(data);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Service created successfully')),
-        );
-      }
-      _loadServices();
-    } catch (e) {
-      setState(() => _isLoading = false);
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to save service: $e')));
-    }
-  }
-
-  void _deleteService(ServiceItem s) {
+  void _deleteService(ServiceItem service) {
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Delete Service'),
-        content: Text(
-          'Are you sure you want to delete "${s.title}"? This action cannot be undone.',
-        ),
+        title: Text('Delete Service'),
+        content: Text('Delete "${service.title}"?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
-              _performDeleteService(s.id);
+              _performDeleteService(service.id);
             },
-            child: Text('Delete', style: TextStyle(color: _redColor)),
+            child: Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
     );
   }
 
-  Future<void> _performDeleteService(String serviceId) async {
+  Future<void> _performDeleteService(String id) async {
     setState(() => _isLoading = true);
     try {
-      await _db.collection(_COLLECTION_SERVICES).doc(serviceId).delete();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Service deleted successfully')),
-      );
+      await _db.collection(_COLLECTION_SERVICES).doc(id).delete();
       _loadServices();
     } catch (e) {
       setState(() => _isLoading = false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(SnackBar(content: Text('Failed to delete service: $e')));
+      ).showSnackBar(SnackBar(content: Text('Failed to delete: $e')));
     }
   }
 
@@ -708,41 +400,45 @@ class _AdminManageServicePageState extends State<AdminManageServicePage> {
   }
 }
 
-// Service model
 class ServiceItem {
-  String id;
-  String title;
-  String description;
-  String details;
+  final String id;
+  final String title;
+  final String description;
+  final String details;
+  final String category;
+  final double price;
+  final String duration;
+  final bool isActive;
 
   ServiceItem({
     required this.id,
     required this.title,
     required this.description,
     required this.details,
+    this.category = 'General',
+    this.price = 0.0,
+    this.duration = 'Flexible',
+    this.isActive = true,
   });
 
-  factory ServiceItem.fromDocument(DocumentSnapshot document) {
-    final data = document.data() as Map<String, dynamic>? ?? {};
+  factory ServiceItem.fromDocument(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
     return ServiceItem(
-      id: document.id,
-      title: data['title'] as String? ?? '',
-      description: data['description'] as String? ?? '',
-      details: data['details'] as String? ?? '',
+      id: doc.id,
+      title: data['title']?.toString() ?? 'Untitled',
+      description: data['description']?.toString() ?? '',
+      details: data['details']?.toString() ?? '',
+      category: data['category']?.toString() ?? 'General',
+      price: (data['price'] as num?)?.toDouble() ?? 0.0,
+      duration: data['duration']?.toString() ?? 'Flexible',
+      isActive: data['isActive'] as bool? ?? true,
     );
   }
-
-  Map<String, dynamic> toMap() => {
-    'title': title,
-    'description': description,
-    'details': details,
-  };
 }
 
-// Service Form Dialog
 class ServiceFormDialog extends StatefulWidget {
   final ServiceItem? service;
-  final Function(String title, String description, String details) onSubmit;
+  final Function(String, String, String) onSubmit;
 
   const ServiceFormDialog({Key? key, this.service, required this.onSubmit})
     : super(key: key);
@@ -752,7 +448,6 @@ class ServiceFormDialog extends StatefulWidget {
 }
 
 class _ServiceFormDialogState extends State<ServiceFormDialog> {
-  final _formKey = GlobalKey<FormState>();
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
   final _detailsController = TextEditingController();
@@ -760,188 +455,89 @@ class _ServiceFormDialogState extends State<ServiceFormDialog> {
   @override
   void initState() {
     super.initState();
-    final s = widget.service;
-    if (s != null) {
-      _titleController.text = s.title;
-      _descriptionController.text = s.description;
-      _detailsController.text = s.details;
-    }
-  }
-
-  double _getDialogWidth(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    if (screenWidth < 600) {
-      return screenWidth * 0.95;
-    } else if (screenWidth < 1200) {
-      return 500;
-    } else {
-      return 600;
+    if (widget.service != null) {
+      _titleController.text = widget.service!.title;
+      _descriptionController.text = widget.service!.description;
+      _detailsController.text = widget.service!.details;
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      child: Form(
-        key: _formKey,
-        child: Container(
-          padding: EdgeInsets.all(_getResponsivePadding()),
-          width: _getDialogWidth(context),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              widget.service != null ? "Edit Service" : "Create Service",
+              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 20),
+            TextField(
+              controller: _titleController,
+              decoration: InputDecoration(
+                labelText: "Title *",
+                border: OutlineInputBorder(),
+              ),
+            ),
+            SizedBox(height: 16),
+            TextField(
+              controller: _descriptionController,
+              decoration: InputDecoration(
+                labelText: "Description *",
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 2,
+            ),
+            SizedBox(height: 16),
+            TextField(
+              controller: _detailsController,
+              decoration: InputDecoration(
+                labelText: "Details",
+                border: OutlineInputBorder(),
+              ),
+              maxLines: 3,
+            ),
+            SizedBox(height: 20),
+            Row(
               children: [
-                Text(
-                  widget.service != null
-                      ? "Edit Service"
-                      : "Create New Service",
-                  style: TextStyle(
-                    fontSize: _getResponsiveValue(
-                      mobile: 18,
-                      tablet: 20,
-                      desktop: 22,
-                    ),
-                    fontWeight: FontWeight.bold,
+                Expanded(
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: Text("Cancel"),
                   ),
                 ),
-                const SizedBox(height: 20),
-
-                // Title
-                _buildFormField(
-                  label: "Title *",
-                  controller: _titleController,
-                  hintText: "Service Title *",
-                  validator: (v) => (v == null || v.isEmpty)
-                      ? 'Service title is required'
-                      : null,
-                  maxLines: 1,
-                ),
-
-                // Description
-                _buildFormField(
-                  label: "Description *",
-                  controller: _descriptionController,
-                  hintText: "Description *",
-                  validator: (v) => (v == null || v.isEmpty)
-                      ? 'Description is required'
-                      : null,
-                  maxLines: 2,
-                ),
-
-                // Details
-                _buildFormField(
-                  label: "Details",
-                  controller: _detailsController,
-                  hintText: "Full Details",
-                  maxLines: 4,
-                ),
-
-                const SizedBox(height: 20),
-
-                // Buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: Text("Cancel"),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _submitForm,
-                        child: Text(
-                          widget.service != null
-                              ? "Update Service"
-                              : "Create Service",
-                          style: TextStyle(
-                            fontSize: _getResponsiveValue(
-                              mobile: 14,
-                              tablet: 16,
-                              desktop: 16,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                SizedBox(width: 16),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _submit,
+                    child: Text(widget.service != null ? "Update" : "Create"),
+                  ),
                 ),
               ],
             ),
-          ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildFormField({
-    required String label,
-    required TextEditingController controller,
-    required String hintText,
-    int maxLines = 1,
-    String? Function(String?)? validator,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: _getResponsiveValue(mobile: 14, tablet: 16, desktop: 16),
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 8),
-        TextFormField(
-          controller: controller,
-          maxLines: maxLines,
-          decoration: InputDecoration(
-            hintText: hintText,
-            border: const OutlineInputBorder(),
-          ),
-          validator: validator,
-        ),
-        const SizedBox(height: 16),
-      ],
-    );
-  }
-
-  double _getResponsiveValue({
-    required double mobile,
-    required double tablet,
-    required double desktop,
-  }) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    if (screenWidth < 600) {
-      return mobile;
-    } else if (screenWidth < 1200) {
-      return tablet;
-    } else {
-      return desktop;
-    }
-  }
-
-  double _getResponsivePadding() {
-    final screenWidth = MediaQuery.of(context).size.width;
-    if (screenWidth < 600) {
-      return 16;
-    } else if (screenWidth < 1200) {
-      return 20;
-    } else {
-      return 24;
-    }
-  }
-
-  void _submitForm() {
-    if (_formKey.currentState!.validate()) {
-      widget.onSubmit(
-        _titleController.text.trim(),
-        _descriptionController.text.trim(),
-        _detailsController.text.trim(),
+  void _submit() {
+    if (_titleController.text.isEmpty || _descriptionController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Title and description are required')),
       );
-      Navigator.pop(context);
+      return;
     }
+    widget.onSubmit(
+      _titleController.text.trim(),
+      _descriptionController.text.trim(),
+      _detailsController.text.trim(),
+    );
+    Navigator.pop(context);
   }
 
   @override
