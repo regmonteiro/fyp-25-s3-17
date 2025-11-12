@@ -41,7 +41,9 @@ class _AdminManagePageState extends State<AdminManagePage> {
           }) {
             return Card(
               elevation: 3,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
               child: InkWell(
                 borderRadius: BorderRadius.circular(16),
                 onTap: onTap,
@@ -84,7 +86,11 @@ class _AdminManagePageState extends State<AdminManagePage> {
                           ],
                         ),
                       ),
-                      Icon(Icons.arrow_forward_ios_rounded, size: 18, color: Colors.black54),
+                      Icon(
+                        Icons.arrow_forward_ios_rounded,
+                        size: 18,
+                        color: Colors.black54,
+                      ),
                     ],
                   ),
                 ),
@@ -103,7 +109,8 @@ class _AdminManagePageState extends State<AdminManagePage> {
                 title: 'Activities',
                 subtitle: 'Create, edit, and review community activities',
                 icon: Icons.event_note_outlined,
-                onTap: () => _go('adminManageActivites'), // note: your key spelling
+                onTap: () =>
+                    _go('adminManageActivites'), // note: your key spelling
                 color: Colors.indigo,
               ),
               card(
@@ -126,7 +133,9 @@ class _AdminManagePageState extends State<AdminManagePage> {
                 icon: Icons.handyman_outlined,
                 onTap: () {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Services management coming soon')),
+                    const SnackBar(
+                      content: Text('Services management coming soon'),
+                    ),
                   );
                 },
                 color: Colors.deepOrange,

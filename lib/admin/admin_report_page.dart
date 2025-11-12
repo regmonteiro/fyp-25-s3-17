@@ -1,13 +1,20 @@
+import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'admin_shell.dart';
-
 import '../models/user_profile.dart';
+
 class AdminReportsPage extends StatefulWidget {
   final UserProfile userProfile;
-  const AdminReportsPage({Key? key, required this.userProfile}) : super(key: key);
+  const AdminReportsPage({Key? key, required this.userProfile})
+    : super(key: key);
   @override
   _AdminReportsState createState() => _AdminReportsState();
 }
@@ -77,55 +84,6 @@ class _AdminReportsState extends State<AdminReportsPage> {
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: _buildMainContent(),
-      ),
-    );
-  }
-
-  AppBar _buildAppBar() {
-    return AppBar(
-      backgroundColor: _purpleColor,
-      elevation: 4,
-      title: Row(
-        children: [
-          IconButton(
-            icon: Icon(Icons.menu, color: _whiteColor),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Menu clicked")),
-              );
-            },
-          ),
-          Expanded(
-            child: Text(
-              "Admin Usage Report",
-              style: TextStyle(
-                color: _whiteColor,
-                fontSize: 20,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-          IconButton(
-            icon: Icon(Icons.notifications, color: _whiteColor),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text("Notifications clicked")),
-              );
-            },
-          ),
-          ElevatedButton(
-            onPressed: _logoutUser,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: _redColor,
-              padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            ),
-            child: Text(
-              "Logout",
-              style: TextStyle(color: _whiteColor),
-            ),
-          ),
-          SizedBox(width: 8),
-        ],
       ),
     );
   }
@@ -359,13 +317,7 @@ class _AdminReportsState extends State<AdminReportsPage> {
         padding: EdgeInsets.symmetric(horizontal: 8, vertical: 0),
         minimumSize: Size(0, 35),
       ),
-      child: Text(
-        text,
-        style: TextStyle(
-          color: _whiteColor,
-          fontSize: 12,
-        ),
-      ),
+      child: Text(text, style: TextStyle(color: _whiteColor, fontSize: 12)),
     );
   }
 
@@ -415,7 +367,10 @@ class _AdminReportsState extends State<AdminReportsPage> {
 
   Widget _buildReportSummary() {
     int totalUsers = _reportData.length;
-    int totalLogins = _reportData.fold(0, (sum, user) => sum + (user['loginCount'] as int));
+    int totalLogins = _reportData.fold(
+      0,
+      (sum, user) => sum + (user['loginCount'] as int),
+    );
 
     return Text(
       "Total Users: $totalUsers\nTotal Logins: $totalLogins",
@@ -478,10 +433,7 @@ class _AdminReportsState extends State<AdminReportsPage> {
         child: Center(
           child: Text(
             "No users found",
-            style: TextStyle(
-              fontSize: 14,
-              color: Colors.grey.shade700,
-            ),
+            style: TextStyle(fontSize: 14, color: Colors.grey.shade700),
           ),
         ),
       );
@@ -491,16 +443,30 @@ class _AdminReportsState extends State<AdminReportsPage> {
       scrollDirection: Axis.horizontal,
       child: DataTable(
         columns: [
-          DataColumn(label: Text("Email", style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text("Login Count", style: TextStyle(fontWeight: FontWeight.bold))),
-          DataColumn(label: Text("Last Active", style: TextStyle(fontWeight: FontWeight.bold))),
+          DataColumn(
+            label: Text("Email", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+          DataColumn(
+            label: Text(
+              "Login Count",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+          DataColumn(
+            label: Text(
+              "Last Active",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
         ],
         rows: users.map((user) {
-          return DataRow(cells: [
-            DataCell(Text(user['email'] ?? "N/A")),
-            DataCell(Text(user['loginCount'].toString())),
-            DataCell(Text(user['lastActiveDate'] ?? "N/A")),
-          ]);
+          return DataRow(
+            cells: [
+              DataCell(Text(user['email'] ?? "N/A")),
+              DataCell(Text(user['loginCount'].toString())),
+              DataCell(Text(user['lastActiveDate'] ?? "N/A")),
+            ],
+          );
         }).toList(),
       ),
     );
@@ -531,11 +497,26 @@ class _AdminReportsState extends State<AdminReportsPage> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text("20", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text("15", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text("10", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text("5", style: TextStyle(fontSize: 12, color: Colors.grey)),
-                    Text("0", style: TextStyle(fontSize: 12, color: Colors.grey)),
+                    Text(
+                      "20",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    Text(
+                      "15",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    Text(
+                      "10",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    Text(
+                      "5",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    Text(
+                      "0",
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
                   ],
                 ),
               ),
@@ -562,26 +543,24 @@ class _AdminReportsState extends State<AdminReportsPage> {
   }
 
   Widget _buildBar(String label, int count, Color color) {
-    int maxCount = [_adminCount, _caregiverCount, _elderlyCount, _unknownCount].reduce((a, b) => a > b ? a : b);
+    int maxCount = [
+      _adminCount,
+      _caregiverCount,
+      _elderlyCount,
+      _unknownCount,
+    ].reduce((a, b) => a > b ? a : b);
     double heightFactor = maxCount > 0 ? count / maxCount : 0;
     double barHeight = 200 * heightFactor;
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        Container(
-          width: 30,
-          height: barHeight,
-          color: color,
-        ),
+        Container(width: 30, height: barHeight, color: color),
         SizedBox(height: 4),
         Text(
           "$label\n$count",
           textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 12,
-            color: Colors.grey,
-          ),
+          style: TextStyle(fontSize: 12, color: Colors.grey),
         ),
       ],
     );
@@ -605,7 +584,9 @@ class _AdminReportsState extends State<AdminReportsPage> {
         Container(
           height: 300,
           padding: EdgeInsets.all(16),
-          child: totalUsers > 0 ? _buildPieChartContent() : _buildPieChartPlaceholder(),
+          child: totalUsers > 0
+              ? _buildPieChartContent()
+              : _buildPieChartPlaceholder(),
         ),
       ],
     );
@@ -650,9 +631,19 @@ class _AdminReportsState extends State<AdminReportsPage> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              _buildLegendItem("Active Users", _activeUsers, activePercentage.round(), _chartColors[5]),
+              _buildLegendItem(
+                "Active Users",
+                _activeUsers,
+                activePercentage.round(),
+                _chartColors[5],
+              ),
               SizedBox(height: 8),
-              _buildLegendItem("Inactive Users", _inactiveUsers, inactivePercentage.round(), _chartColors[4]),
+              _buildLegendItem(
+                "Inactive Users",
+                _inactiveUsers,
+                inactivePercentage.round(),
+                _chartColors[4],
+              ),
             ],
           ),
         ),
@@ -664,22 +655,20 @@ class _AdminReportsState extends State<AdminReportsPage> {
     return Center(
       child: Text(
         "Loading pie chart...",
-        style: TextStyle(
-          fontSize: 16,
-          color: Colors.grey,
-        ),
+        style: TextStyle(fontSize: 16, color: Colors.grey),
       ),
     );
   }
 
-  Widget _buildLegendItem(String label, int count, int percentage, Color color) {
+  Widget _buildLegendItem(
+    String label,
+    int count,
+    int percentage,
+    Color color,
+  ) {
     return Row(
       children: [
-        Container(
-          width: 20,
-          height: 20,
-          color: color,
-        ),
+        Container(width: 20, height: 20, color: color),
         SizedBox(width: 8),
         Expanded(
           child: Text(
@@ -692,23 +681,20 @@ class _AdminReportsState extends State<AdminReportsPage> {
   }
 
   Widget _buildLoadingIndicator() {
-    return Center(
-      child: CircularProgressIndicator(),
-    );
+    return Center(child: CircularProgressIndicator());
   }
 
   Color _getUserTypeColor(String userType) {
     switch (userType.toLowerCase()) {
-      case "admin": return _chartColors[0];
-      case "caregiver": return _chartColors[1];
-      case "elderly": return _chartColors[2];
-      default: return _chartColors[3];
+      case "admin":
+        return _chartColors[0];
+      case "caregiver":
+        return _chartColors[1];
+      case "elderly":
+        return _chartColors[2];
+      default:
+        return _chartColors[3];
     }
-  }
-
-  // Navigation Handler
-  void _handleNavigationChanged(String activityKey) {
-    print("$_TAG: Navigation changed to: $activityKey");
   }
 
   // Date Picker
@@ -720,7 +706,8 @@ class _AdminReportsState extends State<AdminReportsPage> {
       lastDate: DateTime.now(),
     ).then((selectedDate) {
       if (selectedDate != null) {
-        controller.text = "${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}";
+        controller.text =
+            "${selectedDate.year}-${selectedDate.month.toString().padLeft(2, '0')}-${selectedDate.day.toString().padLeft(2, '0')}";
       }
     });
   }
@@ -770,44 +757,61 @@ class _AdminReportsState extends State<AdminReportsPage> {
   void _fetchAllUserDataForOverview() {
     _reportData.clear();
 
-    _db.collection("Account").get().then((querySnapshot) {
-      if (querySnapshot.docs.isNotEmpty) {
-        _processUserDataForOverview(querySnapshot);
-      } else {
-        _showError("No user data found.");
-        _setLoading(false);
-      }
-    }).catchError((error) {
-      _showError("Failed to fetch user data: $error");
-      _setLoading(false);
-    });
+    _db
+        .collection("Account")
+        .get()
+        .then((querySnapshot) {
+          if (querySnapshot.docs.isNotEmpty) {
+            _processUserDataForOverview(querySnapshot);
+          } else {
+            _showError("No user data found.");
+            _setLoading(false);
+          }
+        })
+        .catchError((error) {
+          _showError("Failed to fetch user data: $error");
+          _setLoading(false);
+        });
   }
 
   void _fetchReportDataWithDates(String startDate, String endDate) {
     _reportData.clear();
 
-    _db.collection("Account").get().then((querySnapshot) {
-      if (querySnapshot.docs.isNotEmpty) {
-        _processUserDataWithDates(querySnapshot, startDate, endDate);
-      } else {
-        _showError("No user data found.");
-        _setLoading(false);
-      }
-    }).catchError((error) {
-      _showError("Failed to fetch user data: $error");
-      _setLoading(false);
-    });
+    _db
+        .collection("Account")
+        .get()
+        .then((querySnapshot) {
+          if (querySnapshot.docs.isNotEmpty) {
+            _processUserDataWithDates(querySnapshot, startDate, endDate);
+          } else {
+            _showError("No user data found.");
+            _setLoading(false);
+          }
+        })
+        .catchError((error) {
+          _showError("Failed to fetch user data: $error");
+          _setLoading(false);
+        });
   }
 
   void _processUserDataForOverview(QuerySnapshot querySnapshot) {
     _processUserData(querySnapshot, null, null, false);
   }
 
-  void _processUserDataWithDates(QuerySnapshot querySnapshot, String startDate, String endDate) {
+  void _processUserDataWithDates(
+    QuerySnapshot querySnapshot,
+    String startDate,
+    String endDate,
+  ) {
     _processUserData(querySnapshot, startDate, endDate, true);
   }
 
-  void _processUserData(QuerySnapshot querySnapshot, String? startDate, String? endDate, bool showFilters) {
+  void _processUserData(
+    QuerySnapshot querySnapshot,
+    String? startDate,
+    String? endDate,
+    bool showFilters,
+  ) {
     _reportData.clear();
 
     for (var document in querySnapshot.docs) {
@@ -825,7 +829,8 @@ class _AdminReportsState extends State<AdminReportsPage> {
         if (loginLogs.isNotEmpty) {
           if (startDate != null && endDate != null) {
             // Filter logs by date range for detailed report
-            List<Map<String, dynamic>> filteredLogs = _filterLoginLogsByDateRange(loginLogs, startDate, endDate);
+            List<Map<String, dynamic>> filteredLogs =
+                _filterLoginLogsByDateRange(loginLogs, startDate, endDate);
             loginCount = filteredLogs.length;
 
             // Get last active date from filtered logs
@@ -839,13 +844,15 @@ class _AdminReportsState extends State<AdminReportsPage> {
               Map<String, dynamic> lastLog = filteredLogs.first;
               DateTime? lastActive = _parseDateFromLog(lastLog);
               if (lastActive != null) {
-                lastActiveDate = "${lastActive.year}-${lastActive.month.toString().padLeft(2, '0')}-${lastActive.day.toString().padLeft(2, '0')} ${lastActive.hour.toString().padLeft(2, '0')}:${lastActive.minute.toString().padLeft(2, '0')}";
+                lastActiveDate =
+                    "${lastActive.year}-${lastActive.month.toString().padLeft(2, '0')}-${lastActive.day.toString().padLeft(2, '0')} ${lastActive.hour.toString().padLeft(2, '0')}:${lastActive.minute.toString().padLeft(2, '0')}";
               }
             } else {
               // Use last login from all logs if no logs in range
               DateTime? lastLogin = _getLastLoginFromAllLogs(loginLogs);
               if (lastLogin != null) {
-                lastActiveDate = "${lastLogin.year}-${lastLogin.month.toString().padLeft(2, '0')}-${lastLogin.day.toString().padLeft(2, '0')} ${lastLogin.hour.toString().padLeft(2, '0')}:${lastLogin.minute.toString().padLeft(2, '0')}";
+                lastActiveDate =
+                    "${lastLogin.year}-${lastLogin.month.toString().padLeft(2, '0')}-${lastLogin.day.toString().padLeft(2, '0')} ${lastLogin.hour.toString().padLeft(2, '0')}:${lastLogin.minute.toString().padLeft(2, '0')}";
               }
             }
           } else {
@@ -855,7 +862,8 @@ class _AdminReportsState extends State<AdminReportsPage> {
             // Get last active date from ALL logs
             DateTime? lastLogin = _getLastLoginFromAllLogs(loginLogs);
             if (lastLogin != null) {
-              lastActiveDate = "${lastLogin.year}-${lastLogin.month.toString().padLeft(2, '0')}-${lastLogin.day.toString().padLeft(2, '0')} ${lastLogin.hour.toString().padLeft(2, '0')}:${lastLogin.minute.toString().padLeft(2, '0')}";
+              lastActiveDate =
+                  "${lastLogin.year}-${lastLogin.month.toString().padLeft(2, '0')}-${lastLogin.day.toString().padLeft(2, '0')} ${lastLogin.hour.toString().padLeft(2, '0')}:${lastLogin.minute.toString().padLeft(2, '0')}";
             }
           }
         } else {
@@ -863,7 +871,8 @@ class _AdminReportsState extends State<AdminReportsPage> {
           Timestamp? lastLogin = document.get("lastLoginDate");
           if (lastLogin != null) {
             DateTime lastLoginDate = lastLogin.toDate();
-            lastActiveDate = "${lastLoginDate.year}-${lastLoginDate.month.toString().padLeft(2, '0')}-${lastLoginDate.day.toString().padLeft(2, '0')} ${lastLoginDate.hour.toString().padLeft(2, '0')}:${lastLoginDate.minute.toString().padLeft(2, '0')}";
+            lastActiveDate =
+                "${lastLoginDate.year}-${lastLoginDate.month.toString().padLeft(2, '0')}-${lastLoginDate.day.toString().padLeft(2, '0')} ${lastLoginDate.hour.toString().padLeft(2, '0')}:${lastLoginDate.minute.toString().padLeft(2, '0')}";
           }
         }
 
@@ -877,8 +886,9 @@ class _AdminReportsState extends State<AdminReportsPage> {
         };
 
         _reportData.add(reportItem);
-        print("$_TAG: Processed user: $email, Logins: $loginCount, Last Active: $lastActiveDate");
-
+        print(
+          "$_TAG: Processed user: $email, Logins: $loginCount, Last Active: $lastActiveDate",
+        );
       } catch (e) {
         print("$_TAG: Error processing user document: $e");
       }
@@ -896,12 +906,18 @@ class _AdminReportsState extends State<AdminReportsPage> {
     }
   }
 
-  List<Map<String, dynamic>> _filterLoginLogsByDateRange(Map<String, dynamic> loginLogs, String startDate, String endDate) {
+  List<Map<String, dynamic>> _filterLoginLogsByDateRange(
+    Map<String, dynamic> loginLogs,
+    String startDate,
+    String endDate,
+  ) {
     List<Map<String, dynamic>> filteredLogs = [];
 
     try {
       DateTime start = DateTime.parse(startDate);
-      DateTime end = DateTime.parse(endDate).add(Duration(days: 1)); // Include end date
+      DateTime end = DateTime.parse(
+        endDate,
+      ).add(Duration(days: 1)); // Include end date
 
       // Iterate through all login logs
       for (var entry in loginLogs.entries) {
@@ -909,7 +925,9 @@ class _AdminReportsState extends State<AdminReportsPage> {
         if (logEntry is Map<String, dynamic>) {
           DateTime? logDate = _parseDateFromLog(logEntry);
 
-          if (logDate != null && !logDate.isBefore(start) && logDate.isBefore(end)) {
+          if (logDate != null &&
+              !logDate.isBefore(start) &&
+              logDate.isBefore(end)) {
             filteredLogs.add(logEntry);
           }
         }
@@ -943,7 +961,8 @@ class _AdminReportsState extends State<AdminReportsPage> {
       if (logEntry is Map<String, dynamic>) {
         DateTime? logDate = _parseDateFromLog(logEntry);
 
-        if (logDate != null && (lastLogin == null || logDate.isAfter(lastLogin))) {
+        if (logDate != null &&
+            (lastLogin == null || logDate.isAfter(lastLogin))) {
           lastLogin = logDate;
         }
       }
@@ -1023,10 +1042,12 @@ class _AdminReportsState extends State<AdminReportsPage> {
       String email = user["email"];
 
       // Apply user type filter
-      bool typeMatches = _selectedUserType == "all" || _selectedUserType == userType;
+      bool typeMatches =
+          _selectedUserType == "all" || _selectedUserType == userType;
 
       // Apply search filter
-      bool searchMatches = _searchTerm.isEmpty || email.toLowerCase().contains(_searchTerm);
+      bool searchMatches =
+          _searchTerm.isEmpty || email.toLowerCase().contains(_searchTerm);
 
       if (typeMatches && searchMatches) {
         _filteredReportData.add(user);
@@ -1051,25 +1072,419 @@ class _AdminReportsState extends State<AdminReportsPage> {
     });
   }
 
-  void _downloadPdf() {
+  // PDF Download Implementation - Fixed Version
+  void _downloadPdf() async {
     if (_filteredReportData.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("No data to export")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("No data to export")));
       return;
     }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("PDF export feature would be implemented here")),
+    _setLoading(true);
+
+    try {
+      // Generate PDF document
+      final pdf = await _generatePdfDocument();
+
+      // Save and share the PDF
+      await _saveAndSharePdf(pdf);
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("PDF exported successfully")));
+    } catch (e) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("Failed to export PDF: $e")));
+      print("$_TAG: PDF export error: $e");
+    } finally {
+      _setLoading(false);
+    }
+  }
+
+  Future<pw.Document> _generatePdfDocument() async {
+    final pdf = pw.Document();
+
+    // Get report metadata
+    String reportTitle = "Admin Usage Report";
+    String generatedDate = DateTime.now().toString().split('.').first;
+    String dateRange =
+        _startDateController.text.isNotEmpty &&
+            _endDateController.text.isNotEmpty
+        ? "${_startDateController.text} to ${_endDateController.text}"
+        : "All Time Overview";
+
+    // Use simple page format to avoid font issues
+    pdf.addPage(
+      pw.Page(
+        pageFormat: PdfPageFormat.a4,
+        margin: pw.EdgeInsets.all(20),
+        build: (pw.Context context) {
+          return pw.Column(
+            crossAxisAlignment: pw.CrossAxisAlignment.start,
+            children: [
+              // Header
+              pw.Text(
+                reportTitle,
+                style: pw.TextStyle(
+                  fontSize: 20,
+                  fontWeight: pw.FontWeight.bold,
+                ),
+              ),
+              pw.SizedBox(height: 8),
+              pw.Text(
+                "Generated on: $generatedDate",
+                style: pw.TextStyle(fontSize: 10),
+              ),
+              pw.Text(
+                "Date Range: $dateRange",
+                style: pw.TextStyle(fontSize: 10),
+              ),
+              pw.SizedBox(height: 20),
+
+              // Summary Statistics
+              _buildPdfSummarySection(),
+              pw.SizedBox(height: 20),
+
+              // User Type Distribution
+              _buildPdfUserTypeSection(),
+              pw.SizedBox(height: 20),
+
+              // Subscriber Status
+              _buildPdfSubscriberSection(),
+              pw.SizedBox(height: 20),
+
+              // User Data Table
+              _buildPdfUserTableSection(),
+            ],
+          );
+        },
+      ),
     );
-    print("$_TAG: PDF Export Data: ${_filteredReportData.length} records");
+
+    return pdf;
+  }
+
+  pw.Widget _buildPdfSummarySection() {
+    int totalUsers = _reportData.length;
+    int totalLogins = _reportData.fold(
+      0,
+      (sum, user) => sum + (user['loginCount'] as int),
+    );
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      padding: pw.EdgeInsets.all(12),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            "Report Summary",
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 8),
+          _buildPdfSummaryRow("Total Users:", totalUsers.toString()),
+          _buildPdfSummaryRow("Total Logins:", totalLogins.toString()),
+          _buildPdfSummaryRow("Active Users:", _activeUsers.toString()),
+          _buildPdfSummaryRow("Inactive Users:", _inactiveUsers.toString()),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfSummaryRow(String label, String value) {
+    return pw.Padding(
+      padding: pw.EdgeInsets.only(bottom: 4),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        children: [
+          pw.Text(label, style: pw.TextStyle(fontSize: 12)),
+          pw.Text(
+            value,
+            style: pw.TextStyle(fontSize: 12, fontWeight: pw.FontWeight.bold),
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfUserTypeSection() {
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      padding: pw.EdgeInsets.all(12),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            "User Type Distribution",
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 8),
+          pw.Row(
+            mainAxisAlignment: pw.MainAxisAlignment.spaceAround,
+            children: [
+              _buildPdfTypeItem("Admin", _adminCount),
+              _buildPdfTypeItem("Caregiver", _caregiverCount),
+              _buildPdfTypeItem("Elderly", _elderlyCount),
+              _buildPdfTypeItem("Unknown", _unknownCount),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfTypeItem(String type, int count) {
+    return pw.Column(
+      children: [
+        pw.Container(
+          width: 30,
+          height: 30,
+          decoration: pw.BoxDecoration(
+            color: _getPdfColor(_getUserTypeColor(type.toLowerCase())),
+            borderRadius: pw.BorderRadius.circular(15),
+          ),
+          child: pw.Center(
+            child: pw.Text(
+              count.toString(),
+              style: pw.TextStyle(
+                color: PdfColors.white,
+                fontWeight: pw.FontWeight.bold,
+                fontSize: 10,
+              ),
+            ),
+          ),
+        ),
+        pw.SizedBox(height: 4),
+        pw.Text(type, style: pw.TextStyle(fontSize: 8)),
+      ],
+    );
+  }
+
+  pw.Widget _buildPdfSubscriberSection() {
+    int totalUsers = _activeUsers + _inactiveUsers;
+    double activePercentage = totalUsers > 0
+        ? (_activeUsers / totalUsers) * 100
+        : 0;
+    double inactivePercentage = totalUsers > 0
+        ? (_inactiveUsers / totalUsers) * 100
+        : 0;
+
+    return pw.Container(
+      decoration: pw.BoxDecoration(
+        border: pw.Border.all(color: PdfColors.grey300),
+        borderRadius: pw.BorderRadius.circular(8),
+      ),
+      padding: pw.EdgeInsets.all(12),
+      child: pw.Column(
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
+        children: [
+          pw.Text(
+            "Subscriber Status",
+            style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+          ),
+          pw.SizedBox(height: 8),
+          _buildPdfStatusItem(
+            "Active Users",
+            _activeUsers,
+            activePercentage,
+            PdfColors.green,
+          ),
+          pw.SizedBox(height: 4),
+          _buildPdfStatusItem(
+            "Inactive Users",
+            _inactiveUsers,
+            inactivePercentage,
+            PdfColors.red,
+          ),
+        ],
+      ),
+    );
+  }
+
+  pw.Widget _buildPdfStatusItem(
+    String label,
+    int count,
+    double percentage,
+    PdfColor color,
+  ) {
+    return pw.Row(
+      children: [
+        pw.Container(width: 10, height: 10, color: color),
+        pw.SizedBox(width: 8),
+        pw.Expanded(
+          child: pw.Text(
+            "$label: $count (${percentage.toStringAsFixed(1)}%)",
+            style: pw.TextStyle(fontSize: 10),
+          ),
+        ),
+      ],
+    );
+  }
+
+  pw.Widget _buildPdfUserTableSection() {
+    if (_filteredReportData.isEmpty) {
+      return pw.Text(
+        "No user data available",
+        style: pw.TextStyle(fontSize: 12),
+      );
+    }
+
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: [
+        pw.Text(
+          "User Details (${_filteredReportData.length} users)",
+          style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold),
+        ),
+        pw.SizedBox(height: 8),
+        // Simple table without complex formatting
+        pw.Column(
+          children: [
+            // Table header
+            pw.Container(
+              color: PdfColors.grey200,
+              padding: pw.EdgeInsets.all(4),
+              child: pw.Row(
+                children: [
+                  pw.Expanded(
+                    flex: 2,
+                    child: pw.Text(
+                      "Email",
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  pw.Expanded(
+                    flex: 1,
+                    child: pw.Text(
+                      "Type",
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  pw.Expanded(
+                    flex: 1,
+                    child: pw.Text(
+                      "Logins",
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  pw.Expanded(
+                    flex: 1,
+                    child: pw.Text(
+                      "Last Active",
+                      style: pw.TextStyle(
+                        fontSize: 8,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // Table rows
+            ..._filteredReportData
+                .map(
+                  (user) => pw.Container(
+                    decoration: pw.BoxDecoration(
+                      border: pw.Border(
+                        bottom: pw.BorderSide(color: PdfColors.grey300),
+                      ),
+                    ),
+                    padding: pw.EdgeInsets.all(4),
+                    child: pw.Row(
+                      children: [
+                        pw.Expanded(
+                          flex: 2,
+                          child: pw.Text(
+                            user['email'] ?? "N/A",
+                            style: pw.TextStyle(fontSize: 7),
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: 1,
+                          child: pw.Text(
+                            _capitalize(user['userType']),
+                            style: pw.TextStyle(fontSize: 7),
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: 1,
+                          child: pw.Text(
+                            user['loginCount'].toString(),
+                            style: pw.TextStyle(fontSize: 7),
+                          ),
+                        ),
+                        pw.Expanded(
+                          flex: 1,
+                          child: pw.Text(
+                            user['lastActiveDate'] ?? "N/A",
+                            style: pw.TextStyle(fontSize: 7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+                .toList(),
+          ],
+        ),
+      ],
+    );
+  }
+
+  String _capitalize(String text) {
+    if (text.isEmpty) return text;
+    return text[0].toUpperCase() + text.substring(1);
+  }
+
+  PdfColor _getPdfColor(Color color) {
+    return PdfColor.fromInt(color.value);
+  }
+
+  Future<void> _saveAndSharePdf(pw.Document pdf) async {
+    try {
+      final bytes = await pdf.save();
+
+      await Printing.sharePdf(
+        bytes: bytes,
+        filename: 'admin_report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+    } catch (e) {
+      print("Error sharing PDF: $e");
+      // Fallback: Save to temporary directory
+      final output = await getTemporaryDirectory();
+      final file = File(
+        "${output.path}/admin_report_${DateTime.now().millisecondsSinceEpoch}.pdf",
+      );
+      await file.writeAsBytes(await pdf.save());
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("PDF saved to device storage")));
+    }
   }
 
   void _logoutUser() {
     _auth.signOut();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text("Logged out successfully")),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text("Logged out successfully")));
     _redirectToLogin();
   }
 
@@ -1162,162 +1577,4 @@ class PieChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
-}
-
-// ADNavigation Widget (included in same file)
-class ADNavigation extends StatefulWidget {
-  final Function(String) onNavigationChanged;
-
-  const ADNavigation({Key? key, required this.onNavigationChanged}) : super(key: key);
-
-  @override
-  _ADNavigationState createState() => _ADNavigationState();
-}
-
-class _ADNavigationState extends State<ADNavigation> {
-  static const String _TAG = "ADNavigation";
-
-  final Color _purpleColor = Colors.purple.shade500;
-  final Color _whiteColor = Colors.white;
-
-  String _currentActivity = "adminReports";
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: _whiteColor,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.3),
-            blurRadius: 8.0,
-            offset: Offset(0, 2),
-          ),
-        ],
-      ),
-      padding: EdgeInsets.symmetric(vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            _buildNavItem("ad_dashboardNav", "Dashboard", "adminDashboard"),
-            _buildNavItem("ad_profileNav", "Profile", "adminProfile"),
-            _buildNavItem("ad_reportsNav", "Reports", "adminReports"),
-            _buildNavItem("ad_feedbackNav", "Feedback", "adminFeedback"),
-            _buildNavItem("ad_rolesNav", "Roles", "adminRoles"),
-            _buildNavItem("ad_safetyMeasuresNav", "Safety Measures", "adminSafetyMeasures"),
-            _buildNavItem("ad_announcementNav", "Announcement", "adminAnnouncement"),
-            _buildNavItem("ad_manageNav", "Manage", "adminManage", isLast: true),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildNavItem(String id, String text, String activityKey, {bool isLast = false}) {
-    bool isSelected = _currentActivity == activityKey;
-
-    return Container(
-      margin: EdgeInsets.only(right: isLast ? 16 : 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _handleNavigation(activityKey),
-          borderRadius: BorderRadius.circular(20),
-          child: Container(
-            padding: EdgeInsets.all(12),
-            decoration: isSelected
-                ? BoxDecoration(
-              color: _purpleColor,
-              borderRadius: BorderRadius.circular(20),
-            )
-                : null,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 24,
-                  height: 24,
-                  decoration: BoxDecoration(
-                    color: isSelected ? _whiteColor : _purpleColor,
-                    shape: BoxShape.rectangle,
-                  ),
-                ),
-                SizedBox(height: 4),
-                Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isSelected ? _whiteColor : _purpleColor,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _handleNavigation(String activityKey) {
-    print("$_TAG: Navigating to $activityKey");
-
-    try {
-      if (_currentActivity != activityKey) {
-        setState(() {
-          _currentActivity = activityKey;
-        });
-
-        widget.onNavigationChanged(activityKey);
-      } else {
-        print("$_TAG: Already on $activityKey");
-        _highlightCurrentItem(activityKey);
-      }
-    } catch (e) {
-      print("$_TAG: Error navigating to $activityKey: $e");
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Cannot open ${_getScreenName(activityKey)}")),
-      );
-    }
-  }
-
-  String _getScreenName(String activityKey) {
-    String screenName = activityKey.replaceAll('admin', '');
-    if (screenName.isEmpty) return "Screen";
-
-    String result = screenName[0].toUpperCase() + screenName.substring(1);
-    result = result.replaceAllMapped(RegExp(r'[A-Z]'), (match) => ' ${match.group(0)}');
-
-    return result.trim();
-  }
-
-  void _highlightCurrentItem(String currentActivity) {
-    print("$_TAG: AD Highlighting: $currentActivity");
-
-    try {
-      setState(() {
-        _currentActivity = currentActivity;
-      });
-    } catch (e) {
-      print("$_TAG: Error highlighting current item: $currentActivity, $e");
-    }
-  }
-
-  // Public methods to mimic the Java class functionality
-  void highlightCurrentItem(String currentActivity) {
-    _highlightCurrentItem(currentActivity);
-  }
-
-  void refreshNavigation() {
-    print("$_TAG: Refreshing navigation...");
-    setState(() {});
-  }
-
-  bool isNavigationInitialized() {
-    return true;
-  }
 }

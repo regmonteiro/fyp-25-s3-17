@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb; // for kIsWeb
-import 'dart:io' show Platform; // for Platform.isIOS
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'dart:io' show Platform;
 import 'package:firebase_auth/firebase_auth.dart';
 import '../models/user_profile.dart';
 import 'admin_top_nav.dart';
@@ -14,6 +14,9 @@ class AdminShell extends StatelessWidget {
   final Widget body;
   final Widget? floatingActionButton;
   final List<Widget>? actions;
+  final bool showBackButton; // New: Control back button visibility
+  final VoidCallback? onBackPressed; // New: Custom back action
+  final bool showDashboardButton; // New: Control dashboard button visibility
 
   const AdminShell({
     Key? key,
@@ -23,9 +26,10 @@ class AdminShell extends StatelessWidget {
     required this.body,
     this.floatingActionButton,
     this.actions,
+    this.showBackButton = false, // Default: no back button
+    this.onBackPressed, // Optional custom back action
+    this.showDashboardButton = true, // Default: show dashboard button
   }) : super(key: key);
-
-
 
   Route _logoutRoute() {
     if (!kIsWeb && Platform.isIOS) {
@@ -36,8 +40,10 @@ class AdminShell extends StatelessWidget {
           const begin = Offset(0.0, 1.0);
           const end = Offset.zero;
           const curve = Curves.ease;
-          final tween = Tween(begin: begin, end: end)
-              .chain(CurveTween(curve: curve));
+          final tween = Tween(
+            begin: begin,
+            end: end,
+          ).chain(CurveTween(curve: curve));
           final offsetAnimation = animation.drive(tween);
           return SlideTransition(position: offsetAnimation, child: child);
         },
@@ -49,11 +55,10 @@ class AdminShell extends StatelessWidget {
   Future<void> _logout(BuildContext context) async {
     try {
       await FirebaseAuth.instance.signOut();
-      // Clear the stack and go to WelcomeScreen using the custom route.
       Navigator.of(context).pushAndRemoveUntil(_logoutRoute(), (r) => false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Logged out successfully')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Logged out successfully')));
     } catch (_) {
       // Optionally handle/log error
     }
@@ -73,16 +78,35 @@ class AdminShell extends StatelessWidget {
         backgroundColor: Colors.purple.shade500,
         title: Text(title, style: const TextStyle(color: Colors.white)),
         leading: Builder(
-          builder: (ctx) => IconButton(
-            icon: const Icon(Icons.menu, color: Colors.white),
-            onPressed: () => Scaffold.of(ctx).openDrawer(),
-          ),
+          builder: (ctx) {
+            // Show back button if enabled, otherwise show menu
+            if (showBackButton) {
+              return IconButton(
+                icon: const Icon(Icons.arrow_back, color: Colors.white),
+                onPressed: onBackPressed ?? () => Navigator.of(context).pop(),
+              );
+            } else {
+              return IconButton(
+                icon: const Icon(Icons.menu, color: Colors.white),
+                onPressed: () => Scaffold.of(ctx).openDrawer(),
+              );
+            }
+          },
         ),
         actions: [
+          // Dashboard quick access button (except on dashboard page itself)
+          if (showDashboardButton && currentKey != 'adminDashboard')
+            IconButton(
+              icon: const Icon(Icons.dashboard, color: Colors.white),
+              onPressed: () =>
+                  navigateAdmin(context, 'adminDashboard', profile),
+              tooltip: 'Go to Dashboard',
+            ),
           IconButton(
             icon: const Icon(Icons.notifications, color: Colors.white),
-            onPressed: () => ScaffoldMessenger.of(context)
-                .showSnackBar(const SnackBar(content: Text('Notifications clicked'))),
+            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Notifications clicked')),
+            ),
           ),
           TextButton(
             onPressed: () => _logout(context),
@@ -120,40 +144,43 @@ class _AdminDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget tile(String title, String key, IconData icon) => ListTile(
-          leading: Icon(icon, color: currentKey == key ? Colors.purple : null),
-          title: Text(
-            title,
-            style: TextStyle(
-              color: currentKey == key ? Colors.purple : null,
-              fontWeight:
-                  currentKey == key ? FontWeight.bold : FontWeight.normal,
-            ),
-          ),
-          onTap: () {
-            Navigator.pop(context);
-            if (currentKey != key) onSelect(key);
-          },
-        );
+      leading: Icon(icon, color: currentKey == key ? Colors.purple : null),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: currentKey == key ? Colors.purple : null,
+          fontWeight: currentKey == key ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      onTap: () {
+        Navigator.pop(context);
+        if (currentKey != key) onSelect(key);
+      },
+    );
 
     return Drawer(
       child: SafeArea(
         child: Column(
           children: [
             const SizedBox(height: 8),
-            tile('Dashboard',        'adminDashboard',      Icons.dashboard_outlined),
-            tile('Profile',          'adminProfile',        Icons.person_outline),
-            tile('Reports',          'adminReports',        Icons.assessment_outlined),
-            tile('Feedback',         'adminFeedback',       Icons.chat_bubble_outline),
-            tile('Roles',            'adminRoles',          Icons.admin_panel_settings_outlined),
-            tile('Safety Measures',  'adminSafetyMeasures', Icons.health_and_safety_outlined),
-            tile('Announcement',     'adminAnnouncement',   Icons.campaign_outlined),
-            tile('Manage',           'adminManage',         Icons.tune),
+            tile('Dashboard', 'adminDashboard', Icons.dashboard_outlined),
+            tile('Profile', 'adminProfile', Icons.person_outline),
+            tile('Reports', 'adminReports', Icons.assessment_outlined),
+            tile('Feedback', 'adminFeedback', Icons.chat_bubble_outline),
+            tile('Roles', 'adminRoles', Icons.admin_panel_settings_outlined),
+            tile(
+              'Safety Measures',
+              'adminSafetyMeasures',
+              Icons.health_and_safety_outlined,
+            ),
+            tile('Announcement', 'adminAnnouncement', Icons.campaign_outlined),
+            tile('Manage', 'adminManage', Icons.tune),
             const Spacer(),
             const Divider(),
             ListTile(
               leading: const Icon(Icons.logout, color: Colors.red),
               title: const Text('Logout', style: TextStyle(color: Colors.red)),
-              onTap: onLogout, // uses the custom route via _logout above
+              onTap: onLogout,
             ),
           ],
         ),

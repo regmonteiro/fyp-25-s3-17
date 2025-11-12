@@ -1,14 +1,15 @@
-// lib/admin/admin_manage_activities_page.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'admin_shell.dart';
 import '../models/user_profile.dart';
+import 'admin_routes.dart';
 
 class AdminManageActivitiesPage extends StatefulWidget {
   final UserProfile userProfile;
-  const AdminManageActivitiesPage({Key? key, required this.userProfile}) : super(key: key);
+  const AdminManageActivitiesPage({Key? key, required this.userProfile})
+    : super(key: key);
 
   @override
   _AdminManageActivitiesState createState() => _AdminManageActivitiesState();
@@ -29,9 +30,29 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   final TextEditingController _searchController = TextEditingController();
 
   // Constants
-  final List<String> _categories = ["Exercise", "Social", "Educational", "Creative", "Wellness", "Entertainment"];
-  final List<String> _difficulties = ["Easy", "Beginner", "Intermediate", "Advanced"];
-  final List<String> _durations = ["15 mins", "30 mins", "45 mins", "1 hour", "1.5 hours", "2 hours", "2+ hours"];
+  final List<String> _categories = [
+    "Exercise",
+    "Social",
+    "Educational",
+    "Creative",
+    "Wellness",
+    "Entertainment",
+  ];
+  final List<String> _difficulties = [
+    "Easy",
+    "Beginner",
+    "Intermediate",
+    "Advanced",
+  ];
+  final List<String> _durations = [
+    "15 mins",
+    "30 mins",
+    "45 mins",
+    "1 hour",
+    "1.5 hours",
+    "2 hours",
+    "2+ hours",
+  ];
 
   // Colors
   final Color _backgroundColor = const Color(0xFFf5f5f5);
@@ -61,6 +82,10 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       title: 'Activities',
       body: _buildBody(),
       floatingActionButton: _buildAddButton(),
+      showBackButton: true,
+      onBackPressed: () =>
+          navigateAdmin(context, 'adminDashboard', widget.userProfile),
+      showDashboardButton: true,
     );
   }
 
@@ -74,11 +99,11 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
         if (_isLoading)
           Expanded(child: _buildLoadingState())
         else
-          // Empty or Activities Grid
+          // Empty or Activities Grid/List
           Expanded(
             child: _filteredActivities.isEmpty
                 ? _buildEmptyState()
-                : _buildActivitiesGrid(),
+                : _buildActivitiesLayout(),
           ),
       ],
     );
@@ -87,7 +112,9 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   Widget _buildHeaderSection() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: EdgeInsets.all(
+        _getResponsiveValue(mobile: 16, tablet: 20, desktop: 24),
+      ),
       color: _whiteColor,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -96,7 +123,11 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
             "Create, edit, and manage activities for elderly users",
             style: TextStyle(
               color: _darkGrayColor,
-              fontSize: 14,
+              fontSize: _getResponsiveValue(
+                mobile: 12,
+                tablet: 14,
+                desktop: 16,
+              ),
             ),
           ),
           const SizedBox(height: 16),
@@ -104,13 +135,23 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
             children: [
               Expanded(
                 child: SizedBox(
-                  height: 48,
+                  height: _getResponsiveValue(
+                    mobile: 44,
+                    tablet: 48,
+                    desktop: 52,
+                  ),
                   child: TextField(
                     controller: _searchController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       hintText: "Search activities...",
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                      border: const OutlineInputBorder(),
+                      contentPadding: EdgeInsets.symmetric(
+                        horizontal: _getResponsiveValue(
+                          mobile: 12,
+                          tablet: 16,
+                          desktop: 20,
+                        ),
+                      ),
                     ),
                     onChanged: (value) {
                       setState(() {
@@ -132,10 +173,19 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
-        children: const [
+        children: [
           CircularProgressIndicator(),
           SizedBox(height: 16),
-          Text("Loading activities..."),
+          Text(
+            "Loading activities...",
+            style: TextStyle(
+              fontSize: _getResponsiveValue(
+                mobile: 14,
+                tablet: 16,
+                desktop: 18,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -144,23 +194,221 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   Widget _buildEmptyState() {
     return Center(
       child: Padding(
-        padding: const EdgeInsets.all(32),
+        padding: EdgeInsets.all(
+          _getResponsiveValue(mobile: 24, tablet: 32, desktop: 40),
+        ),
         child: Text(
           _searchQuery.isEmpty
               ? "No activities found. Create your first activity to get started."
               : 'No activities found matching "$_searchQuery"',
-          style: TextStyle(fontSize: 16, color: _darkGrayColor),
+          style: TextStyle(
+            fontSize: _getResponsiveValue(mobile: 14, tablet: 16, desktop: 18),
+            color: _darkGrayColor,
+          ),
           textAlign: TextAlign.center,
         ),
       ),
     );
   }
 
-  Widget _buildActivitiesGrid() {
-    return GridView.builder(
+  Widget _buildActivitiesLayout() {
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    if (screenWidth < 600) {
+      // Mobile - List view
+      return _buildActivitiesList();
+    } else if (screenWidth < 1200) {
+      // Tablet - Grid with 2 columns
+      return _buildActivitiesGrid(crossAxisCount: 2);
+    } else {
+      // Desktop - Grid with 3 columns
+      return _buildActivitiesGrid(crossAxisCount: 3);
+    }
+  }
+
+  Widget _buildActivitiesList() {
+    return ListView.builder(
       padding: const EdgeInsets.all(12),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2, crossAxisSpacing: 12, mainAxisSpacing: 12, childAspectRatio: 0.8,
+      itemCount: _filteredActivities.length,
+      itemBuilder: (context, index) =>
+          _buildActivityListItem(_filteredActivities[index]),
+    );
+  }
+
+  Widget _buildActivityListItem(Activity activity) {
+    return Card(
+      elevation: 2,
+      margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      child: Padding(
+        padding: EdgeInsets.all(
+          _getResponsiveValue(mobile: 16, tablet: 20, desktop: 24),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Title
+            Text(
+              activity.title,
+              style: TextStyle(
+                fontSize: _getResponsiveValue(
+                  mobile: 18,
+                  tablet: 20,
+                  desktop: 22,
+                ),
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF333333),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
+            // Summary
+            Text(
+              activity.summary,
+              style: TextStyle(
+                fontSize: _getResponsiveValue(
+                  mobile: 14,
+                  tablet: 16,
+                  desktop: 18,
+                ),
+                color: _darkGrayColor,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 12),
+            // Primary tags
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                if ((activity.category ?? '').isNotEmpty)
+                  _chip(activity.category!, _blueColor),
+                if ((activity.difficulty ?? '').isNotEmpty)
+                  _chip(activity.difficulty!, _greenColor),
+                if ((activity.duration ?? '').isNotEmpty)
+                  _chip(activity.duration!, _orangeColor),
+              ],
+            ),
+            if (activity.tags.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: activity.tags
+                    .map((t) => _chip(t, _purpleColor))
+                    .toList(),
+              ),
+            ],
+            Container(
+              height: 1,
+              color: _lightGrayColor,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            if ((activity.description ?? '').isNotEmpty) ...[
+              Text(
+                activity.description!,
+                style: TextStyle(
+                  fontSize: _getResponsiveValue(
+                    mobile: 12,
+                    tablet: 14,
+                    desktop: 16,
+                  ),
+                  color: const Color(0xFF444444),
+                  height: 1.4,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 12),
+            ],
+            // Buttons
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _editActivity(activity),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _purpleColor,
+                      foregroundColor: _whiteColor,
+                      padding: EdgeInsets.symmetric(
+                        vertical: _getResponsiveValue(
+                          mobile: 8,
+                          tablet: 12,
+                          desktop: 16,
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      "Edit",
+                      style: TextStyle(
+                        fontSize: _getResponsiveValue(
+                          mobile: 12,
+                          tablet: 14,
+                          desktop: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _deleteActivity(activity),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _redColor,
+                      foregroundColor: _whiteColor,
+                      padding: EdgeInsets.symmetric(
+                        vertical: _getResponsiveValue(
+                          mobile: 8,
+                          tablet: 12,
+                          desktop: 16,
+                        ),
+                      ),
+                    ),
+                    child: Text(
+                      "Delete",
+                      style: TextStyle(
+                        fontSize: _getResponsiveValue(
+                          mobile: 12,
+                          tablet: 14,
+                          desktop: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActivitiesGrid({required int crossAxisCount}) {
+    return GridView.builder(
+      padding: EdgeInsets.all(
+        _getResponsiveValue(mobile: 8, tablet: 12, desktop: 16),
+      ),
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
+        crossAxisSpacing: _getResponsiveValue(
+          mobile: 8,
+          tablet: 12,
+          desktop: 16,
+        ),
+        mainAxisSpacing: _getResponsiveValue(
+          mobile: 8,
+          tablet: 12,
+          desktop: 16,
+        ),
+        childAspectRatio: _getResponsiveValue(
+          mobile: 0.75,
+          tablet: 0.8,
+          desktop: 0.85,
+        ),
       ),
       itemCount: _filteredActivities.length,
       itemBuilder: (_, i) => _buildActivityCard(_filteredActivities[i]),
@@ -172,73 +420,148 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
       child: Padding(
-        padding: const EdgeInsets.all(20),
+        padding: EdgeInsets.all(
+          _getResponsiveValue(mobile: 12, tablet: 16, desktop: 20),
+        ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Title
             Text(
               activity.title,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF333333)),
-              maxLines: 1, overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: _getResponsiveValue(
+                  mobile: 16,
+                  tablet: 18,
+                  desktop: 20,
+                ),
+                fontWeight: FontWeight.bold,
+                color: const Color(0xFF333333),
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
             const SizedBox(height: 8),
             // Summary
             Text(
               activity.summary,
-              style: TextStyle(fontSize: 16, color: _darkGrayColor),
-              maxLines: 2, overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: _getResponsiveValue(
+                  mobile: 12,
+                  tablet: 14,
+                  desktop: 16,
+                ),
+                color: _darkGrayColor,
+              ),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
             // Primary tags
             Wrap(
-              spacing: 8, runSpacing: 8,
+              spacing: 6,
+              runSpacing: 6,
               children: [
-                if ((activity.category ?? '').isNotEmpty) _chip(activity.category!, _blueColor),
-                if ((activity.difficulty ?? '').isNotEmpty) _chip(activity.difficulty!, _greenColor),
-                if ((activity.duration ?? '').isNotEmpty) _chip(activity.duration!, _orangeColor),
+                if ((activity.category ?? '').isNotEmpty)
+                  _chip(activity.category!, _blueColor),
+                if ((activity.difficulty ?? '').isNotEmpty)
+                  _chip(activity.difficulty!, _greenColor),
+                if ((activity.duration ?? '').isNotEmpty)
+                  _chip(activity.duration!, _orangeColor),
               ],
             ),
             if (activity.tags.isNotEmpty) ...[
               const SizedBox(height: 8),
               Wrap(
-                spacing: 8, runSpacing: 8,
-                children: activity.tags.map((t) => _chip(t, _purpleColor)).toList(),
+                spacing: 6,
+                runSpacing: 6,
+                children: activity.tags
+                    .map((t) => _chip(t, _purpleColor))
+                    .toList(),
               ),
             ],
-            Container(height: 1, color: _lightGrayColor, margin: const EdgeInsets.symmetric(vertical: 16)),
+            const Spacer(),
+            Container(
+              height: 1,
+              color: _lightGrayColor,
+              margin: const EdgeInsets.symmetric(vertical: 12),
+            ),
             if ((activity.description ?? '').isNotEmpty) ...[
               Text(
                 activity.description!,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF444444), height: 1.4),
-                maxLines: 3, overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: _getResponsiveValue(
+                    mobile: 10,
+                    tablet: 12,
+                    desktop: 14,
+                  ),
+                  color: const Color(0xFF444444),
+                  height: 1.4,
+                ),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
             ],
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _editActivity(activity),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _purpleColor, foregroundColor: _whiteColor,
+            // Buttons
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _editActivity(activity),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _purpleColor,
+                      foregroundColor: _whiteColor,
+                      padding: EdgeInsets.symmetric(
+                        vertical: _getResponsiveValue(
+                          mobile: 8,
+                          tablet: 10,
+                          desktop: 12,
+                        ),
                       ),
-                      child: const Text("Edit"),
+                    ),
+                    child: Text(
+                      "Edit",
+                      style: TextStyle(
+                        fontSize: _getResponsiveValue(
+                          mobile: 12,
+                          tablet: 14,
+                          desktop: 16,
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: ElevatedButton(
-                      onPressed: () => _deleteActivity(activity),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _redColor, foregroundColor: _whiteColor,
+                ),
+                SizedBox(
+                  width: _getResponsiveValue(mobile: 6, tablet: 8, desktop: 12),
+                ),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: () => _deleteActivity(activity),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _redColor,
+                      foregroundColor: _whiteColor,
+                      padding: EdgeInsets.symmetric(
+                        vertical: _getResponsiveValue(
+                          mobile: 8,
+                          tablet: 10,
+                          desktop: 12,
+                        ),
                       ),
-                      child: const Text("Delete"),
+                    ),
+                    child: Text(
+                      "Delete",
+                      style: TextStyle(
+                        fontSize: _getResponsiveValue(
+                          mobile: 12,
+                          tablet: 14,
+                          desktop: 16,
+                        ),
+                      ),
                     ),
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ],
         ),
@@ -247,20 +570,48 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   }
 
   Widget _chip(String text, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(16)),
-        child: Text(text,
-            style: TextStyle(color: _whiteColor, fontSize: 12, fontWeight: FontWeight.bold)),
-      );
+    padding: EdgeInsets.symmetric(
+      horizontal: _getResponsiveValue(mobile: 8, tablet: 10, desktop: 12),
+      vertical: _getResponsiveValue(mobile: 4, tablet: 5, desktop: 6),
+    ),
+    decoration: BoxDecoration(
+      color: color,
+      borderRadius: BorderRadius.circular(16),
+    ),
+    child: Text(
+      text,
+      style: TextStyle(
+        color: _whiteColor,
+        fontSize: _getResponsiveValue(mobile: 10, tablet: 11, desktop: 12),
+        fontWeight: FontWeight.bold,
+      ),
+    ),
+  );
 
   Widget _buildAddButton() => FloatingActionButton(
-        onPressed: _createActivity,
-        backgroundColor: _purpleColor,
-        foregroundColor: _whiteColor,
-        child: const Icon(Icons.add),
-      );
+    onPressed: _createActivity,
+    backgroundColor: _purpleColor,
+    foregroundColor: _whiteColor,
+    child: const Icon(Icons.add),
+  );
 
-  // ───────── Data methods ─────────
+  // Helper method to get responsive values
+  double _getResponsiveValue({
+    required double mobile,
+    required double tablet,
+    required double desktop,
+  }) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    if (screenWidth < 600) {
+      return mobile;
+    } else if (screenWidth < 1200) {
+      return tablet;
+    } else {
+      return desktop;
+    }
+  }
+
+  // ───────── Data methods (unchanged) ─────────
   void _loadActivities() async {
     setState(() => _isLoading = true);
     try {
@@ -280,9 +631,9 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       });
     } catch (e) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load activities: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load activities: $e')));
     }
   }
 
@@ -354,7 +705,10 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
 
     try {
       if (_editingActivity != null) {
-        await _db.collection(_COLLECTION_ACTIVITIES).doc(_editingActivity!.id).set(data);
+        await _db
+            .collection(_COLLECTION_ACTIVITIES)
+            .doc(_editingActivity!.id)
+            .set(data);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Activity updated successfully')),
         );
@@ -367,9 +721,9 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       _loadActivities();
     } catch (e) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to save activity: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to save activity: $e')));
     }
   }
 
@@ -378,9 +732,14 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Delete Activity'),
-        content: const Text('Are you sure you want to delete this activity? This action cannot be undone.'),
+        content: const Text(
+          'Are you sure you want to delete this activity? This action cannot be undone.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           TextButton(
             onPressed: () {
               Navigator.pop(context);
@@ -403,9 +762,9 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
       _loadActivities();
     } catch (e) {
       setState(() => _isLoading = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to delete activity: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to delete activity: $e')));
     }
   }
 
@@ -416,7 +775,7 @@ class _AdminManageActivitiesState extends State<AdminManageActivitiesPage> {
   }
 }
 
-// ───────── Activity model & form dialog (unchanged from your version) ─────────
+// ───────── Activity model & form dialog (with responsive improvements) ─────────
 
 class Activity {
   String id;
@@ -481,7 +840,8 @@ class ActivityFormDialog extends StatefulWidget {
     String description,
     bool requiresAuth,
     List<String> tags,
-  ) onSubmit;
+  )
+  onSubmit;
 
   const ActivityFormDialog({
     Key? key,
@@ -533,84 +893,106 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
     _selectedDuration ??= widget.durations.first;
   }
 
+  double _getDialogWidth(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    if (screenWidth < 600) {
+      return screenWidth * 0.95;
+    } else if (screenWidth < 1200) {
+      return 600;
+    } else {
+      return 700;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
       child: Form(
         key: _formKey,
         child: Container(
-          padding: const EdgeInsets.all(20),
-          width: double.maxFinite,
+          padding: EdgeInsets.all(_getResponsivePadding()),
+          width: _getDialogWidth(context),
           child: SingleChildScrollView(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(widget.activity != null ? "Edit Activity" : "Create New Activity",
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                Text(
+                  widget.activity != null
+                      ? "Edit Activity"
+                      : "Create New Activity",
+                  style: TextStyle(
+                    fontSize: _getResponsiveValue(
+                      mobile: 18,
+                      tablet: 20,
+                      desktop: 22,
+                    ),
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 20),
 
                 // Title
-                const Text("Title *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextFormField(
+                _buildFormField(
+                  label: "Title *",
                   controller: _titleController,
-                  decoration: const InputDecoration(hintText: "Activity Title *", border: OutlineInputBorder()),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Activity title is required' : null,
+                  hintText: "Activity Title *",
+                  validator: (v) => (v == null || v.isEmpty)
+                      ? 'Activity title is required'
+                      : null,
+                  maxLines: 1,
                 ),
-                const SizedBox(height: 16),
 
                 // Summary
-                const Text("Summary *", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextFormField(
+                _buildFormField(
+                  label: "Summary *",
                   controller: _summaryController,
+                  hintText: "Summary *",
+                  validator: (v) =>
+                      (v == null || v.isEmpty) ? 'Summary is required' : null,
                   maxLines: 3,
-                  decoration: const InputDecoration(hintText: "Summary *", border: OutlineInputBorder()),
-                  validator: (v) => (v == null || v.isEmpty) ? 'Summary is required' : null,
                 ),
-                const SizedBox(height: 16),
 
                 // Category / Difficulty / Duration
-                Row(
-                  children: [
-                    Expanded(child: _dropdown("Category", widget.categories, _selectedCategory, (v) => setState(() => _selectedCategory = v))),
-                    const SizedBox(width: 16),
-                    Expanded(child: _dropdown("Difficulty", widget.difficulties, _selectedDifficulty, (v) => setState(() => _selectedDifficulty = v))),
-                    const SizedBox(width: 16),
-                    Expanded(child: _dropdown("Duration", widget.durations, _selectedDuration, (v) => setState(() => _selectedDuration = v))),
-                  ],
-                ),
-                const SizedBox(height: 16),
+                _buildDropdownRow(),
 
                 // Image URL
-                const Text("Image URL", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextFormField(
+                _buildFormField(
+                  label: "Image URL",
                   controller: _imageController,
-                  decoration: const InputDecoration(hintText: "Image URL", border: OutlineInputBorder()),
+                  hintText: "Image URL",
+                  maxLines: 1,
                 ),
-                const SizedBox(height: 16),
 
                 // Description
-                const Text("Description", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 8),
-                TextFormField(
+                _buildFormField(
+                  label: "Description",
                   controller: _descriptionController,
+                  hintText: "Full Description",
                   maxLines: 4,
-                  decoration: const InputDecoration(hintText: "Full Description", border: OutlineInputBorder()),
                 ),
-                const SizedBox(height: 16),
 
                 // Requires Auth Checkbox
                 CheckboxListTile(
-                  title: const Text("Requires User Authentication"),
+                  title: Text(
+                    "Requires User Authentication",
+                    style: TextStyle(
+                      fontSize: _getResponsiveValue(
+                        mobile: 14,
+                        tablet: 16,
+                        desktop: 16,
+                      ),
+                    ),
+                  ),
                   value: _requiresAuth,
                   onChanged: (v) => setState(() => _requiresAuth = v ?? false),
                 ),
                 const SizedBox(height: 16),
 
                 // Tags
-                const Text("Additional Tags", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const Text(
+                  "Additional Tags",
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
                 const SizedBox(height: 8),
                 ..._tagControllers.asMap().entries.map((e) {
                   final i = e.key;
@@ -622,7 +1004,10 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
                         Expanded(
                           child: TextFormField(
                             controller: c,
-                            decoration: const InputDecoration(hintText: "Enter tag", border: OutlineInputBorder()),
+                            decoration: const InputDecoration(
+                              hintText: "Enter tag",
+                              border: OutlineInputBorder(),
+                            ),
                           ),
                         ),
                         IconButton(
@@ -642,7 +1027,9 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
                   );
                 }).toList(),
                 ElevatedButton(
-                  onPressed: () => setState(() => _tagControllers.add(TextEditingController())),
+                  onPressed: () => setState(
+                    () => _tagControllers.add(TextEditingController()),
+                  ),
                   child: const Text("+ Add Tag"),
                 ),
                 const SizedBox(height: 20),
@@ -650,12 +1037,28 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
                 // Buttons
                 Row(
                   children: [
-                    Expanded(child: TextButton(onPressed: () => Navigator.pop(context), child: const Text("Cancel"))),
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text("Cancel"),
+                      ),
+                    ),
                     const SizedBox(width: 16),
                     Expanded(
                       child: ElevatedButton(
                         onPressed: _submitForm,
-                        child: Text(widget.activity != null ? "Update Activity" : "Create Activity"),
+                        child: Text(
+                          widget.activity != null
+                              ? "Update Activity"
+                              : "Create Activity",
+                          style: TextStyle(
+                            fontSize: _getResponsiveValue(
+                              mobile: 14,
+                              tablet: 16,
+                              desktop: 16,
+                            ),
+                          ),
+                        ),
                       ),
                     ),
                   ],
@@ -668,20 +1071,156 @@ class _ActivityFormDialogState extends State<ActivityFormDialog> {
     );
   }
 
-  Widget _dropdown(String label, List<String> options, String? value, ValueChanged<String?> onChanged) {
+  Widget _buildFormField({
+    required String label,
+    required TextEditingController controller,
+    required String hintText,
+    int maxLines = 1,
+    String? Function(String?)? validator,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: _getResponsiveValue(mobile: 14, tablet: 16, desktop: 16),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 8),
+        TextFormField(
+          controller: controller,
+          maxLines: maxLines,
+          decoration: InputDecoration(
+            hintText: hintText,
+            border: const OutlineInputBorder(),
+          ),
+          validator: validator,
+        ),
+        const SizedBox(height: 16),
+      ],
+    );
+  }
+
+  Widget _buildDropdownRow() {
+    final screenWidth = MediaQuery.of(context).size.width;
+
+    if (screenWidth < 600) {
+      // Mobile - vertical layout
+      return Column(
+        children: [
+          _dropdown(
+            "Category",
+            widget.categories,
+            _selectedCategory,
+            (v) => setState(() => _selectedCategory = v),
+          ),
+          const SizedBox(height: 16),
+          _dropdown(
+            "Difficulty",
+            widget.difficulties,
+            _selectedDifficulty,
+            (v) => setState(() => _selectedDifficulty = v),
+          ),
+          const SizedBox(height: 16),
+          _dropdown(
+            "Duration",
+            widget.durations,
+            _selectedDuration,
+            (v) => setState(() => _selectedDuration = v),
+          ),
+          const SizedBox(height: 16),
+        ],
+      );
+    } else {
+      // Tablet/Desktop - horizontal layout
+      return Row(
+        children: [
+          Expanded(
+            child: _dropdown(
+              "Category",
+              widget.categories,
+              _selectedCategory,
+              (v) => setState(() => _selectedCategory = v),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _dropdown(
+              "Difficulty",
+              widget.difficulties,
+              _selectedDifficulty,
+              (v) => setState(() => _selectedDifficulty = v),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: _dropdown(
+              "Duration",
+              widget.durations,
+              _selectedDuration,
+              (v) => setState(() => _selectedDuration = v),
+            ),
+          ),
+        ],
+      );
+    }
+  }
+
+  Widget _dropdown(
+    String label,
+    List<String> options,
+    String? value,
+    ValueChanged<String?> onChanged,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: _getResponsiveValue(mobile: 14, tablet: 16, desktop: 16),
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         const SizedBox(height: 8),
         DropdownButtonFormField<String>(
           value: value ?? options.first,
-          items: options.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
+          items: options
+              .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+              .toList(),
           onChanged: onChanged,
           decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
       ],
     );
+  }
+
+  double _getResponsiveValue({
+    required double mobile,
+    required double tablet,
+    required double desktop,
+  }) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    if (screenWidth < 600) {
+      return mobile;
+    } else if (screenWidth < 1200) {
+      return tablet;
+    } else {
+      return desktop;
+    }
+  }
+
+  double _getResponsivePadding() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    if (screenWidth < 600) {
+      return 16;
+    } else if (screenWidth < 1200) {
+      return 20;
+    } else {
+      return 24;
+    }
   }
 
   void _submitForm() {

@@ -83,8 +83,8 @@ class _PrescriptionRequestPageState extends State<PrescriptionRequestPage> {
         builder: (_) => PaymentConfirmationPage(
           totalAmount: _active!.price,
           cartItems: [refillItem],
-          userProfile: _currentProfile!,          // pass an instance
-          elderlyIdOverride: _patientUid, // ensure order is for the patient
+          userProfile: _currentProfile!,
+          targetUid: _patientUid,
         ),
       ),
     );
