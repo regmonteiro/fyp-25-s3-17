@@ -24,7 +24,7 @@ class WalletTxn {
 
 class WalletServicePs {
   final FirebaseFirestore _db;
-  final String _docId; // paymentsubscriptions/{email_key}
+  final String _docId;
 
   WalletServicePs({required String email, FirebaseFirestore? db})
       : _db = db ?? FirebaseFirestore.instance,

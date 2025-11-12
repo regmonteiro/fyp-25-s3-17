@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import '../../controller/account/support_controller.dart';
+import '../../../widgets/feedback_section.dart';
+
 
 class SupportFeedbackPage extends StatefulWidget {
   const SupportFeedbackPage({Key? key}) : super(key: key);

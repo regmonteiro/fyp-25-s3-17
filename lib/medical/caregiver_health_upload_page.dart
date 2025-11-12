@@ -45,7 +45,6 @@ class _CaregiverHealthUploadPageState extends State<CaregiverHealthUploadPage> {
       ..._asStringList(data['linkedElderlyIds']),
     }.toList();
 
-    // Resolve simple display names for dropdown
     final opts = <_ElderOpt>[];
     for (final id in ids) {
       final ed = await FirebaseFirestore.instance.collection('Account').doc(id).get();

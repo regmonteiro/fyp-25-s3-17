@@ -5,10 +5,9 @@ import 'admin_shell.dart';
 import '../models/user_profile.dart';
 
 class AdminProfilePage extends StatefulWidget {
-  final UserProfile userProfile;
+  final UserProfile? userProfile;
 
-  const AdminProfilePage({Key? key, required this.userProfile})
-    : super(key: key);
+  const AdminProfilePage({Key? key, this.userProfile}) : super(key: key);
 
   @override
   _AdminProfileState createState() => _AdminProfileState();
@@ -35,6 +34,7 @@ class _AdminProfileState extends State<AdminProfilePage> {
   String _originalPhoneNumber = '';
   String _accountCreated = 'Loading...';
   String _lastLogin = 'Loading...';
+  UserProfile? _currentProfile;
 
   // Colors
   final Color _purpleColor = Colors.purple.shade500;
@@ -50,6 +50,9 @@ class _AdminProfileState extends State<AdminProfilePage> {
     super.initState();
     print('$_TAG: initState started');
     _currentUser = _auth.currentUser;
+    print('$_TAG: Current user UID: ${_currentUser?.uid}');
+    print('$_TAG: Current user email: ${_currentUser?.email}');
+    print('$_TAG: Passed profile: ${widget.userProfile?.toModelMap()}');
     _initializeData();
   }
 
@@ -60,30 +63,68 @@ class _AdminProfileState extends State<AdminProfilePage> {
   }
 
   void _initializeData() {
-    print('$_TAG: Checking passed profile data...');
-    print('$_TAG: Profile UID: ${widget.userProfile.uid}');
-    print('$_TAG: Profile firstname: ${widget.userProfile.firstname}');
-    print('$_TAG: Profile email: ${widget.userProfile.email}');
+    // First, try to use passed profile if it's valid
+    if (widget.userProfile != null &&
+        (widget.userProfile!.uid.isNotEmpty ||
+            widget.userProfile!.firstname?.isNotEmpty == true)) {
+      print('$_TAG: Using valid passed profile data');
+      _initializeWithUserProfile(widget.userProfile!);
+    } else {
+      print('$_TAG: Passed profile is empty, creating from current user');
+      _createProfileFromCurrentUser();
+    }
 
-    // Always use passed data first for immediate display
-    _initializeWithUserProfile();
-
-    // Then try to load from Firestore to get latest data
+    // Then load from Firestore to get latest data
     _loadUserDataFromFirestore();
   }
 
-  void _initializeWithUserProfile() {
+  void _createProfileFromCurrentUser() {
+    if (_currentUser == null) {
+      print('$_TAG: No current user available');
+      _safeSetState(() {
+        _isLoading = false;
+      });
+      return;
+    }
+
+    final profile = UserProfile(
+      uid: _currentUser!.uid,
+      email: _currentUser!.email,
+      firstname: _currentUser!.displayName?.split(' ').first ?? 'Admin',
+      lastname: (_currentUser!.displayName?.split(' ') ?? []).length > 1
+          ? _currentUser!.displayName!.split(' ').last
+          : 'User',
+      userType: 'admin',
+      createdAt: _currentUser!.metadata.creationTime,
+    );
+
+    _initializeWithUserProfile(profile);
+  }
+
+  void _initializeWithUserProfile(UserProfile profile) {
     if (!mounted) return;
 
-    final firstName = widget.userProfile.firstname ?? 'Not provided';
-    final lastName = widget.userProfile.lastname ?? 'Not provided';
-    final birthDate = widget.userProfile.dob != null
-        ? _formatDate(widget.userProfile.dob!)
+    _currentProfile = profile;
+
+    final firstName = profile.firstname?.isNotEmpty == true
+        ? profile.firstname!
+        : 'Admin';
+    final lastName = profile.lastname?.isNotEmpty == true
+        ? profile.lastname!
+        : 'User';
+    final birthDate = profile.dob != null
+        ? _formatDate(profile.dob!)
         : 'Not provided';
-    final phone = widget.userProfile.phoneNum ?? 'Not provided';
-    final accountCreated = widget.userProfile.createdAt != null
-        ? _formatDate(widget.userProfile.createdAt!)
-        : 'Not available';
+    final phone = profile.phoneNum?.isNotEmpty == true
+        ? profile.phoneNum!
+        : 'Not provided';
+
+    // Use creation time from Firebase Auth if available
+    final accountCreated = _currentUser?.metadata.creationTime != null
+        ? _formatDate(_currentUser!.metadata.creationTime!)
+        : (profile.createdAt != null
+              ? _formatDate(profile.createdAt!)
+              : 'Recently');
 
     _safeSetState(() {
       _firstNameController.text = firstName;
@@ -100,7 +141,7 @@ class _AdminProfileState extends State<AdminProfilePage> {
     _originalBirthDate = _birthDateController.text;
     _originalPhoneNumber = _phoneController.text;
 
-    print('$_TAG: Profile initialized successfully');
+    print('$_TAG: Profile initialized: $firstName $lastName');
   }
 
   void _loadUserDataFromFirestore() {
@@ -123,9 +164,8 @@ class _AdminProfileState extends State<AdminProfilePage> {
 
           if (!doc.exists) {
             print(
-              '$_TAG: Document does not exist for UID: ${_currentUser!.uid}',
+              '$_TAG: No Firestore document found, using current profile data',
             );
-            print('$_TAG: Using passed profile data instead');
             _safeSetState(() {
               _isLoading = false;
             });
@@ -133,20 +173,24 @@ class _AdminProfileState extends State<AdminProfilePage> {
           }
 
           final data = doc.data() as Map<String, dynamic>? ?? {};
-          print('$_TAG: Firestore data keys: ${data.keys}');
+          print('$_TAG: Firestore data: $data');
 
           final userProfile = UserProfile.fromMap(data, _currentUser!.uid);
 
           _safeSetState(() {
             _firstNameController.text =
-                userProfile.firstname ?? _firstNameController.text;
-            _lastNameController.text =
-                userProfile.lastname ?? _lastNameController.text;
+                userProfile.firstname?.isNotEmpty == true
+                ? userProfile.firstname!
+                : _firstNameController.text;
+            _lastNameController.text = userProfile.lastname?.isNotEmpty == true
+                ? userProfile.lastname!
+                : _lastNameController.text;
             _birthDateController.text = userProfile.dob != null
                 ? _formatDate(userProfile.dob!)
                 : _birthDateController.text;
-            _phoneController.text =
-                userProfile.phoneNum ?? _phoneController.text;
+            _phoneController.text = userProfile.phoneNum?.isNotEmpty == true
+                ? userProfile.phoneNum!
+                : _phoneController.text;
 
             _accountCreated = userProfile.createdAt != null
                 ? _formatDate(userProfile.createdAt!)
@@ -155,16 +199,17 @@ class _AdminProfileState extends State<AdminProfilePage> {
             _isLoading = false;
           });
 
-          // Update original values
+          // Update original values and current profile
           _originalFirstName = _firstNameController.text;
           _originalLastName = _lastNameController.text;
           _originalBirthDate = _birthDateController.text;
           _originalPhoneNumber = _phoneController.text;
+          _currentProfile = userProfile;
 
           print('$_TAG: Firestore data loaded successfully');
         })
         .catchError((e) {
-          print('$_TAG: Error loading data: $e');
+          print('$_TAG: Error loading Firestore data: $e');
           _safeSetState(() {
             _isLoading = false;
           });
@@ -174,7 +219,7 @@ class _AdminProfileState extends State<AdminProfilePage> {
   @override
   Widget build(BuildContext context) {
     return AdminShell(
-      profile: widget.userProfile,
+      profile: _currentProfile ?? UserProfile.empty(),
       currentKey: 'adminProfile',
       title: 'Profile',
       body: _buildMainContent(),
@@ -272,7 +317,28 @@ class _AdminProfileState extends State<AdminProfilePage> {
             _buildNonEditableField(_currentUser?.email ?? "Not available"),
             const SizedBox(height: 16),
             _buildLabel("Birth Date"),
-            _buildEditableField(_birthDateController, "Birth Date"),
+            GestureDetector(
+              onTap: _isEditMode ? _selectBirthDate : null,
+              child: AbsorbPointer(
+                absorbing: !_isEditMode,
+                child: TextField(
+                  controller: _birthDateController,
+                  enabled: _isEditMode,
+                  decoration: InputDecoration(
+                    hintText: "Tap to select birth date",
+                    contentPadding: const EdgeInsets.all(12),
+                    border: const OutlineInputBorder(),
+                    filled: !_isEditMode,
+                    fillColor: !_isEditMode ? Colors.grey.shade100 : null,
+                    suffixIcon: _isEditMode
+                        ? const Icon(Icons.calendar_today)
+                        : null,
+                  ),
+                  readOnly:
+                      true, // Makes the field read-only but still tappable
+                ),
+              ),
+            ),
             const SizedBox(height: 16),
             _buildLabel("Phone Number"),
             _buildEditableField(
@@ -525,13 +591,41 @@ class _AdminProfileState extends State<AdminProfilePage> {
       return;
     }
 
+    // Parse birth date from string to DateTime
+    DateTime? parsedDob;
+    if (birthDate.isNotEmpty && birthDate != 'Not provided') {
+      try {
+        // Parse date string like "01 Jan 2024"
+        final parts = birthDate.split(' ');
+        if (parts.length == 3) {
+          final day = int.parse(parts[0]);
+          final month = _parseMonth(parts[1]);
+          final year = int.parse(parts[2]);
+          parsedDob = DateTime(year, month, day);
+        }
+      } catch (e) {
+        print('Error parsing date: $e');
+      }
+    }
+
     final updates = <String, dynamic>{
       "firstname": firstName,
       "lastname": lastName,
-      "dob": birthDate,
       "phoneNum": phoneNumber,
       "lastUpdated": FieldValue.serverTimestamp(),
+      // Ensure these fields exist
+      "email": _currentUser!.email,
+      "userType": "admin",
+      "uid": _currentUser!.uid,
+      "createdAt": _currentUser!.metadata.creationTime != null
+          ? Timestamp.fromDate(_currentUser!.metadata.creationTime!)
+          : FieldValue.serverTimestamp(),
     };
+
+    // Add birth date if parsed successfully
+    if (parsedDob != null) {
+      updates["dob"] = Timestamp.fromDate(parsedDob);
+    }
 
     _safeSetState(() {
       _isLoading = true;
@@ -540,13 +634,32 @@ class _AdminProfileState extends State<AdminProfilePage> {
     _db
         .collection("Account")
         .doc(_currentUser!.uid)
-        .update(updates)
+        .set(updates, SetOptions(merge: true))
         .then((_) {
           print("$_TAG: Profile updated for ${_currentUser!.uid}");
+
+          // Update local state
+          _safeSetState(() {
+            _originalFirstName = firstName;
+            _originalLastName = lastName;
+            _originalBirthDate = birthDate;
+            _originalPhoneNumber = phoneNumber;
+            _accountCreated = _currentUser!.metadata.creationTime != null
+                ? _formatDate(_currentUser!.metadata.creationTime!)
+                : 'Recently';
+          });
+
           _exitEditMode();
           _safeSetState(() {
             _isLoading = false;
           });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Profile updated successfully'),
+              backgroundColor: Colors.green,
+            ),
+          );
         })
         .catchError((e) {
           _safeSetState(() {
@@ -554,6 +667,40 @@ class _AdminProfileState extends State<AdminProfilePage> {
           });
           _showError("Failed to update profile: $e");
         });
+  }
+
+  // Helper method to parse month string to int
+  int _parseMonth(String month) {
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    return months.indexOf(month) + 1;
+  }
+
+  void _selectBirthDate() async {
+    if (!_isEditMode) return;
+
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(1900),
+      lastDate: DateTime.now(),
+    );
+
+    if (picked != null) {
+      _birthDateController.text = _formatDate(picked);
+    }
   }
 
   void _viewLoginHistory() {

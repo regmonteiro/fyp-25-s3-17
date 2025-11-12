@@ -11,12 +11,12 @@ class CartRepository {
       _db.collection('MedicalProducts')
          .doc('carts')
          .collection(targetUid)
-         .doc('items'); // single doc that holds { items: [...] }
+         .doc('items');
 
   CollectionReference<Map<String, dynamic>> get _ordersCol =>
       _db.collection('MedicalProducts')
          .doc('orders')
-         .collection('orders'); // /MedicalProducts/orders/orders/{orderId}
+         .collection('id');
 
   // -------- Fetch items --------
   Future<List<Map<String, dynamic>>> fetchItems() async {

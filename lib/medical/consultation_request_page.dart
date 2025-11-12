@@ -52,6 +52,7 @@ class _ConsultationRequestPageState extends State<ConsultationRequestPage> {
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
+
       // Store under the patient document: users/{patientUid}/consultations/{autoId}
       final col = FirebaseFirestore.instance
           .collection('Account')

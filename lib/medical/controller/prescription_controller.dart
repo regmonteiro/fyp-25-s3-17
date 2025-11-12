@@ -48,7 +48,7 @@ class PrescriptionController {
   /// Load the most recent *active* prescription for a patient.
   static Future<Prescription?> loadActivePrescription(String patientUid) async {
     final q = await FirebaseFirestore.instance
-        .collection('users')
+        .collection('Account')
         .doc(patientUid)
         .collection('prescriptions')
         // Make the query typed for strong types downstream:

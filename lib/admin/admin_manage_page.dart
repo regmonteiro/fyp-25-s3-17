@@ -129,15 +129,10 @@ class _AdminManagePageState extends State<AdminManagePage> {
               ),
               card(
                 title: 'Services',
-                subtitle: 'Service listings & bookings (coming soon)',
+                subtitle:
+                    'Service listings & bookings', // Removed "coming soon"
                 icon: Icons.handyman_outlined,
-                onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Services management coming soon'),
-                    ),
-                  );
-                },
+                onTap: () => _go('adminManageService'), // ADDED COMMA HERE
                 color: Colors.deepOrange,
               ),
             ],
