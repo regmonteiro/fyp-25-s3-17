@@ -78,4 +78,5 @@ class DefaultFirebaseOptions {
     storageBucket: 'elderly-aiassistant.firebasestorage.app',
     measurementId: 'G-505ZBS5V0F',
   );
+
 }

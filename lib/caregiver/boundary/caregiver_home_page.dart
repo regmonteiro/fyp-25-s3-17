@@ -17,7 +17,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../features/share_experience_page.dart';
 import '../../features/communicate_page.dart';
 import 'accounts_pages/elderly_access_page.dart';
-import '../../medical/health_upload_page.dart';
+import '../../medical/caregiver_health_upload_page.dart';
 import '../../medical/controller/health_records_controller.dart';
 import '../../services/care_routine_template_service.dart';
 import 'care_routine_template_page.dart';
@@ -27,6 +27,9 @@ import '../../announcement/announcement_controller.dart';
 import '../../models/announcement.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../assistant_chat.dart';
+import 'accounts_pages/cg_account_page.dart';
+import 'view_reports_caregiver_page.dart';
+
 
 
 Stream<List<DocumentSnapshot<Map<String, dynamic>>>> _streamElderlyId(
@@ -1586,19 +1589,14 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
                 iconColor: Colors.orange.shade800,
                 page: const shop.ShopPage(),
               ),
-            _medicalButton(
-              context,
-                title: 'Upload Health',
-                icon: Icons.upload_file,
-                color: Colors.teal.shade100,
-                iconColor: Colors.teal.shade800,
-                page: ChangeNotifierProvider(
-                create: (_) => HealthRecordsController(elderlyId: elderlyId!),
-                child: const Material(
-                child: HealthUploadPage(),
-              ),
-              ),
-            )
+              _medicalButton(
+  context,
+  title: 'Upload Health',
+  icon: Icons.upload_file,
+  color: Colors.teal.shade100,
+  iconColor: Colors.teal.shade800,
+  page: CaregiverHealthUploadPage(caregiver: userProfile),
+)
           ],
         ),
       ],
@@ -2211,7 +2209,6 @@ class _CommunityFeedPreview extends StatelessWidget {
                     title: Text(content),
                     trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                     onTap: () {
-                      // If you have a details page, navigate there.
                       Navigator.push(
                         context,
                         MaterialPageRoute(builder: (_) => ShareExperiencePage()),
@@ -2254,11 +2251,24 @@ class _QuickActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final items = <_QA>[
-      _QA(Icons.add, 'Create Event', onCreateEvent),
-      _QA(Icons.medical_services, 'Add Medication', onAddMedication),
-      _QA(Icons.calendar_month, 'Schedule Appt', onScheduleAppt),
-      _QA(Icons.bar_chart, 'View Reports', onViewReports),
-      _QA(Icons.insights, 'Custom Report', onGenerateReport),
+      _QA(Icons.medical_services, 'Add Medication', (){
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => CreateMedicationReminderPage(userProfile: userProfile)),
+        );
+      }),
+      _QA(Icons.bar_chart, 'View Reports', (){
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => ViewReportsCaregiverPage(caregiverEmail: userProfile.email!)),
+        );
+      }),
+      _QA(Icons.insights, 'Upload Health Records', (){
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => CaregiverHealthUploadPage(caregiver: userProfile)),
+        );
+      }),
       _QA(Icons.groups, 'Share Experiences', () {
         Navigator.push(context, MaterialPageRoute(builder: (_) => ShareExperiencePage()));
       }),
@@ -2266,7 +2276,9 @@ class _QuickActions extends StatelessWidget {
   Navigator.push(context, MaterialPageRoute(builder: (_) => const CareRoutineTemplatePage()));
 }),
       _QA(Icons.notifications, 'Notifications', onNotifications),
-      _QA(Icons.settings, 'Settings', onSettings),
+      _QA(Icons.settings, 'Settings', (){
+        Navigator.push(context, MaterialPageRoute(builder: (_) => CgAccountPage(userProfile: userProfile)));
+      }),
 
       _QA(Icons.call, 'Call Elderly', () async {
   final state = context.findAncestorStateOfType<_CaregiverHomePageState>();

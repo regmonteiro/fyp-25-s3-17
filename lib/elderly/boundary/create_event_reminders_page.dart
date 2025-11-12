@@ -1,10 +1,9 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+
 import '../../assistant_chat.dart';
 import '../controller/create_event_reminders_controller.dart';
-
 
 class CreateEventRemindersPage extends StatefulWidget {
   const CreateEventRemindersPage({super.key});
@@ -21,7 +20,7 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
   final _durationCtl = TextEditingController();
   DateTime? _start;
   bool _loading = false;
-  String? _msg; // error or success (styled below)
+  String? _msg; // error or success message
   bool _isError = false;
 
   // editing state
@@ -34,6 +33,9 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
     _durationCtl.dispose();
     super.dispose();
   }
+
+  String _fmtDateTime(DateTime dt) =>
+      DateFormat('yyyy-MM-dd • h:mm a').format(dt);
 
   Future<void> _pickStart() async {
     final now = DateTime.now();
@@ -164,29 +166,57 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
     }
   }
 
-  String _fmtDateTime(DateTime dt) =>
-      DateFormat('yyyy-MM-dd • h:mm a').format(dt);
+  void _showHistory(List<Reminder> past) {
+    final f = DateFormat('y-MM-dd h:mm a');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: past.isEmpty
+              ? const Text('No past reminders.')
+              : ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: past.length,
+                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  itemBuilder: (_, i) {
+                    final r = past[i];
+                    final when = r.start == null ? '—' : f.format(r.start!);
+                    return ListTile(
+                      leading: const Icon(Icons.history),
+                      title: Text(
+                        r.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      subtitle: Text('Started: $when • ${r.duration} min'),
+                    );
+                  },
+                ),
+        ),
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-
       floatingActionButton: FloatingActionButton(
         backgroundColor: Colors.deepPurple,
         onPressed: () {
-            final email = FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
-            Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => AssistantChat(userEmail: email),
-              ),
-            );
-          },
+          final email =
+              FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+          Navigator.push(
+            context,
+            MaterialPageRoute(
+              builder: (_) => AssistantChat(userEmail: email),
+            ),
+          );
+        },
         child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
       ),
-
       body: Container(
-        // you can set a background image with a DecorationImage if you want to match React
         width: double.infinity,
         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
         child: Center(
@@ -194,7 +224,9 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
             constraints: const BoxConstraints(maxWidth: 900),
             child: Card(
               elevation: 12,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: SingleChildScrollView(
@@ -203,17 +235,19 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
                       const SizedBox(height: 8),
                       const Text(
                         'Create Reminder',
-                        style: TextStyle(fontSize: 28, fontWeight: FontWeight.w700),
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                       const SizedBox(height: 22),
 
-                      // form
+                      // Form
                       LayoutBuilder(
                         builder: (context, c) {
                           final twoCols = c.maxWidth > 640;
                           return Column(
                             children: [
-                              // title
                               TextField(
                                 controller: _titleCtl,
                                 decoration: const InputDecoration(
@@ -222,40 +256,70 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
                                 ),
                               ),
                               const SizedBox(height: 14),
-                              Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Text('Start Time'),
-                                        const SizedBox(height: 6),
-                                        OutlinedButton.icon(
-                                          icon: const Icon(Icons.calendar_today),
-                                          label: Text(
-                                            _start == null
-                                                ? 'Pick date & time'
-                                                : _fmtDateTime(_start!),
+                              if (twoCols)
+                                Row(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          const Text('Start Time'),
+                                          const SizedBox(height: 6),
+                                          OutlinedButton.icon(
+                                            icon:
+                                                const Icon(Icons.calendar_today),
+                                            label: Text(
+                                              _start == null
+                                                  ? 'Pick date & time'
+                                                  : _fmtDateTime(_start!),
+                                            ),
+                                            onPressed: _pickStart,
                                           ),
-                                          onPressed: _pickStart,
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const SizedBox(width: 16),
-                                  Expanded(
-                                    child: TextField(
-                                      controller: _durationCtl,
-                                      keyboardType: TextInputType.number,
-                                      decoration: const InputDecoration(
-                                        labelText: 'Duration (minutes)',
-                                        border: OutlineInputBorder(),
+                                        ],
                                       ),
                                     ),
+                                    const SizedBox(width: 16),
+                                    Expanded(
+                                      child: TextField(
+                                        controller: _durationCtl,
+                                        keyboardType: TextInputType.number,
+                                        decoration: const InputDecoration(
+                                          labelText: 'Duration (minutes)',
+                                          border: OutlineInputBorder(),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              else ...[
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text('Start Time'),
+                                    const SizedBox(height: 6),
+                                    OutlinedButton.icon(
+                                      icon: const Icon(Icons.calendar_today),
+                                      label: Text(
+                                        _start == null
+                                            ? 'Pick date & time'
+                                            : _fmtDateTime(_start!),
+                                      ),
+                                      onPressed: _pickStart,
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                TextField(
+                                  controller: _durationCtl,
+                                  keyboardType: TextInputType.number,
+                                  decoration: const InputDecoration(
+                                    labelText: 'Duration (minutes)',
+                                    border: OutlineInputBorder(),
                                   ),
-                                ],
-                              ),
+                                ),
+                              ],
                             ],
                           );
                         },
@@ -267,14 +331,18 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
                           width: double.infinity,
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
-                            color: _isError ? const Color(0xFFFCE4E4) : const Color(0xFFE7F0FE),
+                            color: _isError
+                                ? const Color(0xFFFCE4E4)
+                                : const Color(0xFFE7F0FE),
                             borderRadius: BorderRadius.circular(10),
                           ),
                           child: Text(
                             _msg!,
                             textAlign: TextAlign.center,
                             style: TextStyle(
-                              color: _isError ? const Color(0xFFC62828) : const Color(0xFF1565C0),
+                              color: _isError
+                                  ? const Color(0xFFC62828)
+                                  : const Color(0xFF1565C0),
                               fontWeight: FontWeight.w600,
                             ),
                           ),
@@ -287,23 +355,35 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
                           onPressed: _loading ? null : _create,
                           style: ElevatedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(30),
+                            ),
                           ),
-                          child: Text(_loading ? 'Creating…' : 'Confirm',
-                              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                          child: Text(
+                            _loading ? 'Creating…' : 'Confirm',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ),
                       ),
 
                       const SizedBox(height: 24),
                       Row(
                         children: const [
-                          Text('Your Reminders',
-                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                          Text(
+                            'Your Reminders',
+                            style: TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
 
-                      // list
+                      // Reminders list (upcoming only) + History button
                       StreamBuilder<List<Reminder>>(
                         stream: _svc.subscribeMine(),
                         builder: (context, snap) {
@@ -313,118 +393,214 @@ class _CreateEventRemindersPageState extends State<CreateEventRemindersPage> {
                               child: Center(child: CircularProgressIndicator()),
                             );
                           }
-                          final reminders = snap.data ?? const <Reminder>[];
-                          if (reminders.isEmpty) {
-                            return const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Text('No reminders yet.',
-                                  style: TextStyle(color: Colors.grey)),
-                            );
-                          }
 
-                          return LayoutBuilder(
-                            builder: (context, c) {
-                              final w = c.maxWidth;
-                              final crossAxisCount = w >= 960 ? 3 : (w >= 640 ? 2 : 1);
-                              return GridView.builder(
-                                shrinkWrap: true,
-                                physics: const NeverScrollableScrollPhysics(),
-                                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                                  crossAxisCount: crossAxisCount,
-                                  crossAxisSpacing: 16,
-                                  mainAxisSpacing: 16,
-                                  childAspectRatio: 1.2,
-                                ),
-                                itemCount: reminders.length,
-                                itemBuilder: (context, i) {
-                                  final r = reminders[i];
-                                  final isEditing = _editingId == r.id;
-                                  final startLabel =
-                                      r.start == null ? '—' : DateFormat('y-MM-dd h:mm a').format(r.start!);
+                          final all = snap.data ?? const <Reminder>[];
+                          final now = DateTime.now();
 
-                                  return Card(
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                    elevation: 3,
-                                    child: Padding(
-                                      padding: const EdgeInsets.all(16),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(r.title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: const TextStyle(
-                                                  fontSize: 18, fontWeight: FontWeight.w700)),
-                                          const SizedBox(height: 8),
+                          final upcoming = all
+                              .where((r) =>
+                                  r.start != null &&
+                                  (r.start!.isAfter(now) ||
+                                      r.start!.isAtSameMomentAs(now)))
+                              .toList()
+                            ..sort((a, b) => a.start!.compareTo(b.start!)); // soonest first
 
-                                          if (isEditing) ...[
-                                            OutlinedButton.icon(
-                                              icon: const Icon(Icons.schedule),
-                                              label: Text(_editStart == null
-                                                  ? 'Pick new start'
-                                                  : _fmtDateTime(_editStart!)),
-                                              onPressed: () => _pickEditStart(r.start),
-                                            ),
-                                            const SizedBox(height: 6),
-                                            Text('Duration: ${r.duration} minute${r.duration == 1 ? '' : 's'}',
-                                                style: const TextStyle(color: Colors.black54)),
-                                            const Spacer(),
-                                            Row(
-                                              children: [
-                                                ElevatedButton(
-                                                  onPressed: _loading ? null : () => _saveEdit(r),
-                                                  child: const Text('Save'),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                OutlinedButton(
-                                                  onPressed: _loading
-                                                      ? null
-                                                      : () {
-                                                          setState(() {
-                                                            _editingId = null;
-                                                            _editStart = null;
-                                                          });
-                                                        },
-                                                  child: const Text('Cancel'),
-                                                ),
-                                              ],
-                                            ),
-                                          ] else ...[
-                                            Text('Start: $startLabel',
-                                                style: const TextStyle(color: Colors.black54)),
-                                            Text('Duration: ${r.duration} minute${r.duration == 1 ? '' : 's'}',
-                                                style: const TextStyle(color: Colors.black54)),
-                                            const Spacer(),
-                                            Row(
-                                              children: [
-                                                OutlinedButton(
-                                                  onPressed: () {
-                                                    setState(() {
-                                                      _editingId = r.id;
-                                                      _editStart = r.start;
-                                                    });
-                                                  },
-                                                  child: const Text('Update'),
-                                                ),
-                                                const SizedBox(width: 8),
-                                                ElevatedButton(
-                                                  style: ElevatedButton.styleFrom(
-                                                    backgroundColor: const Color(0xFFEF5350),
-                                                    foregroundColor: Colors.white,
-                                                  ),
-                                                  onPressed: _loading ? null : () => _delete(r.id),
-                                                  child: const Text('Delete'),
-                                                ),
-                                              ],
-                                            ),
-                                          ],
-                                        ],
+                          final past = all
+                              .where((r) =>
+                                  r.start != null && r.start!.isBefore(now))
+                              .toList()
+                            ..sort((a, b) => b.start!.compareTo(a.start!)); // most recent first
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  const Expanded(
+                                    child: Text(
+                                      'Upcoming',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w700,
                                       ),
                                     ),
-                                  );
-                                },
-                              );
-                            },
+                                  ),
+                                  OutlinedButton.icon(
+                                    onPressed: past.isEmpty
+                                        ? null
+                                        : () => _showHistory(past),
+                                    icon: const Icon(Icons.history),
+                                    label: Text(
+                                      'Reminder history (${past.length})',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+
+                              if (upcoming.isEmpty)
+                                const Padding(
+                                  padding: EdgeInsets.all(8.0),
+                                  child: Text(
+                                    'No upcoming reminders.',
+                                    style: TextStyle(color: Colors.grey),
+                                  ),
+                                )
+                              else
+                                LayoutBuilder(
+                                  builder: (context, c) {
+                                    final w = c.maxWidth;
+                                    final crossAxisCount = w >= 960
+                                        ? 3
+                                        : (w >= 640 ? 2 : 1);
+                                    return GridView.builder(
+                                      shrinkWrap: true,
+                                      physics:
+                                          const NeverScrollableScrollPhysics(),
+                                      gridDelegate:
+                                          SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: crossAxisCount,
+                                        crossAxisSpacing: 16,
+                                        mainAxisSpacing: 16,
+                                        childAspectRatio: 1.2,
+                                      ),
+                                      itemCount: upcoming.length,
+                                      itemBuilder: (context, i) {
+                                        final r = upcoming[i];
+                                        final isEditing = _editingId == r.id;
+                                        final startLabel = r.start == null
+                                            ? '—'
+                                            : DateFormat('y-MM-dd h:mm a')
+                                                .format(r.start!);
+
+                                        return Card(
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius:
+                                                BorderRadius.circular(16),
+                                          ),
+                                          elevation: 3,
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(16),
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  r.title,
+                                                  maxLines: 1,
+                                                  overflow:
+                                                      TextOverflow.ellipsis,
+                                                  style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 8),
+
+                                                if (isEditing) ...[
+                                                  OutlinedButton.icon(
+                                                    icon: const Icon(
+                                                        Icons.schedule),
+                                                    label: Text(_editStart ==
+                                                            null
+                                                        ? 'Pick new start'
+                                                        : _fmtDateTime(
+                                                            _editStart!)),
+                                                    onPressed: () =>
+                                                        _pickEditStart(
+                                                            r.start),
+                                                  ),
+                                                  const SizedBox(height: 6),
+                                                  Text(
+                                                    'Duration: ${r.duration} minute${r.duration == 1 ? '' : 's'}',
+                                                    style: const TextStyle(
+                                                        color:
+                                                            Colors.black54),
+                                                  ),
+                                                  const Spacer(),
+                                                  Row(
+                                                    children: [
+                                                      ElevatedButton(
+                                                        onPressed: _loading
+                                                            ? null
+                                                            : () =>
+                                                                _saveEdit(r),
+                                                        child:
+                                                            const Text('Save'),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      OutlinedButton(
+                                                        onPressed: _loading
+                                                            ? null
+                                                            : () {
+                                                                setState(() {
+                                                                  _editingId =
+                                                                      null;
+                                                                  _editStart =
+                                                                      null;
+                                                                });
+                                                              },
+                                                        child: const Text(
+                                                            'Cancel'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ] else ...[
+                                                  Text(
+                                                    'Start: $startLabel',
+                                                    style: const TextStyle(
+                                                        color:
+                                                            Colors.black54),
+                                                  ),
+                                                  Text(
+                                                    'Duration: ${r.duration} minute${r.duration == 1 ? '' : 's'}',
+                                                    style: const TextStyle(
+                                                        color:
+                                                            Colors.black54),
+                                                  ),
+                                                  const Spacer(),
+                                                  Row(
+                                                    children: [
+                                                      OutlinedButton(
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            _editingId = r.id;
+                                                            _editStart =
+                                                                r.start;
+                                                          });
+                                                        },
+                                                        child: const Text(
+                                                            'Update'),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      ElevatedButton(
+                                                        style: ElevatedButton
+                                                            .styleFrom(
+                                                          backgroundColor:
+                                                              const Color(
+                                                                  0xFFEF5350),
+                                                          foregroundColor:
+                                                              Colors.white,
+                                                        ),
+                                                        onPressed: _loading
+                                                            ? null
+                                                            : () =>
+                                                                _delete(r.id),
+                                                        child: const Text(
+                                                            'Delete'),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    );
+                                  },
+                                ),
+                            ],
                           );
                         },
                       ),

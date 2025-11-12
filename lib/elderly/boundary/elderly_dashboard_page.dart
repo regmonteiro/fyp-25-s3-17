@@ -18,23 +18,25 @@ class ElderlyDashboardPage extends StatefulWidget {
 class _ElderlyDashboardPageState extends State<ElderlyDashboardPage> {
   final ElderlyDashboardController _controller = ElderlyDashboardController();
 
-  late final List<GlobalKey<NavigatorState>> _navigatorKeys;
-  late final List<Widget> _rootPages;
 
-  @override
-  void initState() {
-    super.initState();
-    _navigatorKeys = List.generate(5, (_) => GlobalKey<NavigatorState>());
-    _rootPages = [
-      ElderlyHomePage(userProfile: widget.userProfile),
-      const CreateEventRemindersPage(),
-      const ViewActivitiesPage(),
-      const LearningResourcesPageRT(),
-      const AccountPage(),
-    ];
-  }
+late final List<Widget> _rootPages;
+late final List<GlobalKey<NavigatorState>> _navigatorKeys;
 
-  // Build a nested Navigator for each tab
+@override
+void initState() {
+  super.initState();
+
+  _rootPages = [
+    ElderlyHomePage(userProfile: widget.userProfile),
+    const CreateEventRemindersPage(),
+    const ViewActivitiesPage(),
+    const LearningResourcesPageRT(),
+    const AccountPage(),
+  ];
+  _navigatorKeys =
+      List.generate(_rootPages.length, (_) => GlobalKey<NavigatorState>());
+}
+
   Widget _buildTabNavigator({
     required GlobalKey<NavigatorState> key,
     required Widget child,
@@ -94,6 +96,7 @@ class _ElderlyDashboardPageState extends State<ElderlyDashboardPage> {
             BottomNavigationBarItem(icon: Icon(Icons.home_outlined), label: 'Home'),
             BottomNavigationBarItem(icon: Icon(Icons.calendar_today_outlined), label: 'Create Event Reminders'),
             BottomNavigationBarItem(icon: Icon(Icons.volunteer_activism_outlined), label: 'Activities'),
+            BottomNavigationBarItem(icon: Icon(Icons.mic), label: 'AI Assistant'),
             BottomNavigationBarItem(icon: Icon(Icons.book_outlined), label: 'Learning'),
             BottomNavigationBarItem(icon: Icon(Icons.person_outline), label: 'Account'),
           ],

@@ -27,6 +27,44 @@
     },
     {
       "client_info": {
+        "mobilesdk_app_id": "1:598007516552:android:c16b349d17ece95987fe3d",
+        "android_client_info": {
+          "package_name": "com.example.admin_phone_flutter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxf2NywtwXc6jnAIIRBsh0M2dSMexkf-U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:598007516552:android:fbe624de78660c8c87fe3d",
+        "android_client_info": {
+          "package_name": "com.example.allcareandroidphone"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxf2NywtwXc6jnAIIRBsh0M2dSMexkf-U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
         "mobilesdk_app_id": "1:598007516552:android:6f018b60b0ce92c787fe3d",
         "android_client_info": {
           "package_name": "com.example.elderly_aiassistant"

@@ -52,15 +52,19 @@ dependencies:
   font_awesome_flutter: ^10.10.0
   async: ^2.13.0
   shared_preferences: ^2.3.2
-  flutter_webrtc: ^0.11.7
+  flutter_webrtc: ^1.2.0
   speech_to_text: ^7.3.0
   flutter_tts: ^3.6.4
-  permission_handler: ^10.4.0
+  permission_handler: ^12.0.1
   http: ^1.1.0
   characters: ^1.3.2
   pdf: ^3.10.8
   cloud_functions: ^6.0.4
 
+dependency_overrides:
+  permission_handler: ^12.0.1
+  permission_handler_android: ^13.0.1
+  permission_handler_platform_interface: ^4.3.0
 
 
 
@@ -78,14 +82,26 @@ dev_dependencies:
   flutter_launcher_icons: ^0.13.1
 
 flutter_launcher_icons:
+  image_path: allcarelogo.png
   android: true
   ios: true
-  web: true
-  macos: true
-  windows: true
-  linux: true
-  image_path: allcarelogo.png
+  web:
+    generate: true
+    image_path: web/appicon.png
+    background_color: "#FFFFFF"
+    theme_color: "#FFFFFF"
 
+  macos:
+    generate: true
+    image_path: web/appicon.png
+
+  windows:
+    generate: true
+    image_path: web/appicon.png
+
+  linux:
+    generate: true
+    image_path: web/appicon.png
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 

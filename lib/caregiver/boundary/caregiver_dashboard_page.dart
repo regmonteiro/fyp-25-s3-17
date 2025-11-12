@@ -4,7 +4,7 @@ import 'package:provider/provider.dart';
 import '../../models/user_profile.dart';
 import 'caregiver_home_page.dart';
 import 'medicine_reminders_page.dart';
-import 'report_page.dart';
+import 'view_reports_caregiver_page.dart';
 import '../boundary/accounts_pages/cg_account_page.dart';
 import '../controller/caregiver_dashboard_controller.dart';
 
@@ -69,7 +69,7 @@ class _DashboardScaffold extends StatelessWidget {
                 final page = ctx.findAncestorWidgetOfExactType<CaregiverDashboardPage>()!;
                 final userProfile = page.userProfile;
 
-                return ViewReportsCaregiverPage(userProfile: userProfile);
+                return ViewReportsCaregiverPage(caregiverEmail: userProfile.email!);
               },
             ),
           ),
