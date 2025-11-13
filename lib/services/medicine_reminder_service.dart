@@ -89,7 +89,7 @@ class MedicineRemindersService {
   /// Root path: /medicineReminders/{emailKey}/{elderlyId}/...
   CollectionReference<Map<String, dynamic>> _col(String emailKey, String elderlyId) {
     return _db
-        .collection('medicineReminders')
+        .collection('medicationReminders')
         .doc(emailKey)
         .collection(elderlyId);
   }
@@ -178,8 +178,25 @@ class MedicineRemindersService {
     final emailKey = await _currentEmailKey();
     final snap = await _db.collection('Account').doc(emailKey).get();
     final data = snap.data() ?? {};
-    final ids = (data['elderlyIds'] as List?)?.map((e) => e.toString()).toList() ?? <String>[];
-    return ids;
+
+    final List<String> out = [];
+
+    // 1) If there's an array field `elderlyIds`, use that
+    final rawList = data['elderlyIds'];
+    if (rawList is List && rawList.isNotEmpty) {
+      for (final e in rawList) {
+        final v = e?.toString().trim();
+        if (v != null && v.isNotEmpty) out.add(v);
+      }
+    }
+
+    // 2) Also support single `elderlyId` field
+    final single = (data['elderlyId'] ?? '').toString().trim();
+    if (single.isNotEmpty && !out.contains(single)) {
+      out.add(single);
+    }
+
+    return out;
   }
 
   Future<List<Map<String, String>>> elderlyBasicInfo(List<String> uids) async {

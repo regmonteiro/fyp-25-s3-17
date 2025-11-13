@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -46,102 +47,114 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
   }
 
   Future<void> _load() async {
-  try {
-    final auth = FirebaseAuth.instance.currentUser;
-    _uid = auth?.uid ?? '';
+    try {
+      final auth = FirebaseAuth.instance.currentUser;
+      _uid = auth?.uid ?? '';
 
-    final profile = await _ctrl.fetchProfile(); // Map<String, dynamic>? (may be null)
+      final profile =
+          await _ctrl.fetchProfile(); // Map<String, dynamic>? (may be null)
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    // Helper to read multiple possible keys
-    String pickS(Map<String, dynamic>? m, List<String> keys, {String def = ''}) {
-      if (m == null) return def;
-      for (final k in keys) {
-        final v = m[k];
-        if (v is String && v.trim().isNotEmpty) return v.trim();
+      // Helper to read multiple possible keys
+      String pickS(Map<String, dynamic>? m, List<String> keys,
+          {String def = ''}) {
+        if (m == null) return def;
+        for (final k in keys) {
+          final v = m[k];
+          if (v is String && v.trim().isNotEmpty) return v.trim();
+        }
+        return def;
       }
-      return def;
-    }
 
-    // Try to parse DOB from multiple formats
-    DateTime? parseDob(dynamic raw) {
-      if (raw == null) return null;
-      if (raw is DateTime) return raw;
-      if (raw is String) {
-        // Try strict yyyy-MM-dd then fallback to DateTime.tryParse
-        return DateFormat('yyyy-MM-dd').tryParse(raw) ?? DateTime.tryParse(raw);
+      // Try to parse DOB from multiple formats
+      DateTime? parseDob(dynamic raw) {
+        if (raw == null) return null;
+        if (raw is DateTime) return raw;
+        if (raw is String) {
+          // Try strict yyyy-MM-dd then fallback to DateTime.tryParse
+          return DateFormat('yyyy-MM-dd').tryParse(raw) ??
+              DateTime.tryParse(raw);
+        }
+        // Firestore Timestamp?
+        try {
+          final ts = raw as dynamic;
+          if (ts?.toDate != null) return ts.toDate() as DateTime;
+        } catch (_) {}
+        return null;
       }
-      // Firestore Timestamp?
-      try {
-        final ts = raw as dynamic;
-        if (ts?.toDate != null) return ts.toDate() as DateTime;
-      } catch (_) {}
-      return null;
-    }
 
-    // Role / userType normalization
-    String userType = pickS(profile, ['userType', 'role', 'user_type'], def: '').toLowerCase();
+      // Role / userType normalization
+      String userType =
+          pickS(profile, ['userType', 'role', 'user_type'], def: '')
+              .toLowerCase();
 
-    // Fill controllers with tolerant keys; email falls back to Auth
-    setState(() {
-      _firstname.text = pickS(profile, ['firstname', 'firstName', 'first_name']);
-      _lastname.text  = pickS(profile, ['lastname', 'lastName', 'last_name']);
-      _phoneNum.text  = pickS(profile, ['phoneNum', 'phone', 'mobile']);
-      _email.text     = pickS(profile, ['email'], def: (auth?.email ?? ''));
+      // Fill controllers with tolerant keys; email falls back to Auth
+      setState(() {
+        _firstname.text =
+            pickS(profile, ['firstname', 'firstName', 'first_name']);
+        _lastname.text =
+            pickS(profile, ['lastname', 'lastName', 'last_name']);
+        _phoneNum.text = pickS(profile, ['phoneNum', 'phone', 'mobile']);
+        _email.text = pickS(profile, ['email'], def: (auth?.email ?? ''));
 
-      _accountStatus = pickS(profile, ['subscriptionStatus', 'status'], def: 'inactive');
-      _profilePictureUrl = pickS(profile, ['profilePictureUrl', 'photoURL', 'photoUrl']);
+        _accountStatus =
+            pickS(profile, ['subscriptionStatus', 'status'], def: 'inactive');
+        _profilePictureUrl =
+            pickS(profile, ['profilePictureUrl', 'photoURL', 'photoUrl']);
 
-      _userType = userType.isEmpty ? null : userType;
+        _userType = userType.isEmpty ? null : userType;
 
-      _dob = parseDob(profile?['dob']);
+        _dob = parseDob(profile?['dob']);
 
-      // Collect elderly links under multiple possible keys
-      _elderlyIds.clear();
-      final rawKeys = [
-        'elderlyIds', 'linkedElderUids', 'linkedElders',
-      ];
-      final singleKeys = ['elderlyId', 'elderUid'];
+        // Collect elderly links under multiple possible keys (for future caregiver features)
+        _elderlyIds.clear();
+        final rawKeys = [
+          'elderlyIds',
+          'linkedElderUids',
+          'linkedElders',
+        ];
+        final singleKeys = ['elderlyId', 'elderUid'];
 
-      for (final k in rawKeys) {
-        final v = profile?[k];
-        if (v is List) {
-          for (final e in v) {
-            final s = e?.toString().trim();
-            if (s != null && s.isNotEmpty) _elderlyIds.add(s);
+        for (final k in rawKeys) {
+          final v = profile?[k];
+          if (v is List) {
+            for (final e in v) {
+              final s = e?.toString().trim();
+              if (s != null && s.isNotEmpty) _elderlyIds.add(s);
+            }
           }
         }
-      }
-      for (final k in singleKeys) {
-        final v = profile?[k];
-        if (v is String && v.trim().isNotEmpty) _elderlyIds.add(v.trim());
-      }
+        for (final k in singleKeys) {
+          final v = profile?[k];
+          if (v is String && v.trim().isNotEmpty) _elderlyIds.add(v.trim());
+        }
 
-      // de-dupe
-      final set = {..._elderlyIds};
-      _elderlyIds
-        ..clear()
-        ..addAll(set);
-    });
+        // de-dupe
+        final set = {..._elderlyIds};
+        _elderlyIds
+          ..clear()
+          ..addAll(set);
+      });
 
-    // If caregiver, hydrate linked profiles
-    if ((_userType == 'caregiver' || _userType == 'cg') && _elderlyIds.isNotEmpty) {
-      final elderlies = await _ctrl.fetchElderlyProfilesByIds(_elderlyIds);
-      if (mounted) setState(() => _linkedElderlies = elderlies);
+      // If caregiver, hydrate linked profiles
+      if ((_userType == 'caregiver' || _userType == 'cg') &&
+          _elderlyIds.isNotEmpty) {
+        final elderlies =
+            await _ctrl.fetchElderlyProfilesByIds(_elderlyIds);
+        if (mounted) setState(() => _linkedElderlies = elderlies);
+      }
+    } catch (e) {
+      debugPrint('Error loading profile: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Failed to load profile: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
-  } catch (e) {
-    debugPrint('Error loading profile: $e');
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("Failed to load profile: $e")),
-      );
-    }
-  } finally {
-    if (mounted) setState(() => _loading = false);
   }
-}
-
 
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
@@ -201,6 +214,155 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
     }
   }
 
+  // ─────────────── LOGIN HISTORY HELPERS ───────────────
+
+  String _emailKeyFrom(String email) {
+    final lower = email.trim().toLowerCase();
+    final at = lower.indexOf('@');
+    if (at < 0) return lower.replaceAll('.', '_');
+    final local = lower.substring(0, at);
+    final domain = lower.substring(at + 1).replaceAll('.', '_');
+    return '$local@$domain';
+  }
+
+  Future<List<DateTime>> _loadLoginHistory() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.email == null || user.email!.isEmpty) {
+      throw Exception('User not signed in or missing email');
+    }
+
+    final emailKey = _emailKeyFrom(user.email!);
+    final doc = await FirebaseFirestore.instance
+        .collection('Account')
+        .doc(emailKey)
+        .get();
+
+    final data = doc.data() ?? {};
+    final rawLogs = data['loginLogs'];
+
+    if (rawLogs == null || rawLogs is! Map<String, dynamic>) {
+      return [];
+    }
+
+    final List<DateTime> out = [];
+    rawLogs.forEach((_, value) {
+      try {
+        // value is expected to be { date: "2025-11-05T06:26:05.122Z" }
+        String? dateStr;
+        if (value is Map<String, dynamic>) {
+          dateStr = value['date']?.toString();
+        } else {
+          dateStr = value.toString();
+        }
+        if (dateStr != null && dateStr.isNotEmpty) {
+          out.add(DateTime.parse(dateStr));
+        }
+      } catch (_) {
+        // ignore bad entries
+      }
+    });
+
+    // Sort newest first
+    out.sort((a, b) => b.compareTo(a));
+    return out;
+  }
+
+  String _relativeTime(DateTime dt) {
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+
+    if (diff.inDays >= 1) {
+      return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    } else if (diff.inHours >= 1) {
+      return '${diff.inHours} hour${diff.inHours == 1 ? '' : 's'} ago';
+    } else if (diff.inMinutes >= 1) {
+      return '${diff.inMinutes} min${diff.inMinutes == 1 ? '' : 's'} ago';
+    } else {
+      return 'just now';
+    }
+  }
+
+  Future<void> _showLoginHistorySheet() async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: FutureBuilder<List<DateTime>>(
+              future: _loadLoginHistory(),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const SizedBox(
+                    height: 120,
+                    child: Center(child: CircularProgressIndicator()),
+                  );
+                }
+                if (snapshot.hasError) {
+                  return SizedBox(
+                    height: 120,
+                    child: Center(
+                      child: Text(
+                        'Failed to load login history.\n${snapshot.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
+
+                final logs = snapshot.data ?? [];
+                if (logs.isEmpty) {
+                  return const SizedBox(
+                    height: 120,
+                    child:
+                        Center(child: Text('No login history recorded yet.')),
+                  );
+                }
+
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Login History',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Flexible(
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: logs.length,
+                        separatorBuilder: (_, __) =>
+                            const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          final dt = logs[index].toLocal();
+                          final formatted =
+                              DateFormat.yMMMd().add_jm().format(dt);
+                          final rel = _relativeTime(dt);
+                          return ListTile(
+                            leading: const Icon(Icons.login),
+                            title: Text(formatted),
+                            subtitle: Text(rel),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ─────────────────────────────────────────────────────
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -217,11 +379,18 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
                     _buildProfilePictureSection(),
                     const SizedBox(height: 24),
 
-                    // NEW: UID & account status
+                    // UID & account status
                     _readonly("UID", _uid.isEmpty ? '-' : _uid),
                     const SizedBox(height: 8),
-                    _readonly("Account Status",
-                        _accountStatus.toUpperCase()),
+                    _readonly("Account Status", _accountStatus.toUpperCase()),
+                    const SizedBox(height: 8),
+
+                    // NEW: View Login History Button
+                    OutlinedButton.icon(
+                      onPressed: _showLoginHistorySheet,
+                      icon: const Icon(Icons.history),
+                      label: const Text("View Login History"),
+                    ),
 
                     const SizedBox(height: 16),
                     TextFormField(
@@ -238,8 +407,8 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
                     ),
                     TextFormField(
                       controller: _phoneNum,
-                      decoration: const InputDecoration(
-                          labelText: "Phone Number"),
+                      decoration:
+                          const InputDecoration(labelText: "Phone Number"),
                       validator: (v) => v!.isEmpty ? "Required" : null,
                     ),
                     TextFormField(
@@ -273,7 +442,6 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
 
                     const Divider(height: 32),
 
-
                     const SizedBox(height: 8),
                     ElevatedButton(
                       onPressed: _save,
@@ -287,31 +455,32 @@ class _ProfileDetailsPageState extends State<ProfileDetailsPage> {
   }
 
   Widget _buildProfilePictureSection() {
-  ImageProvider? img;
-  final url = _profilePictureUrl?.trim();
-  if (url != null && url.isNotEmpty && (url.startsWith('http://') || url.startsWith('https://'))) {
-    img = NetworkImage(url);
+    ImageProvider? img;
+    final url = _profilePictureUrl?.trim();
+    if (url != null &&
+        url.isNotEmpty &&
+        (url.startsWith('http://') || url.startsWith('https://'))) {
+      img = NetworkImage(url);
+    }
+
+    return Center(
+      child: Column(
+        children: [
+          CircleAvatar(
+            radius: 60,
+            backgroundImage: img,
+            child: img == null ? const Icon(Icons.person, size: 60) : null,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _uploadProfilePicture,
+            icon: const Icon(Icons.camera_alt),
+            label: const Text('Upload Profile Picture'),
+          ),
+        ],
+      ),
+    );
   }
-
-  return Center(
-    child: Column(
-      children: [
-        CircleAvatar(
-          radius: 60,
-          backgroundImage: img,
-          child: img == null ? const Icon(Icons.person, size: 60) : null,
-        ),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(
-          onPressed: _uploadProfilePicture,
-          icon: const Icon(Icons.camera_alt),
-          label: const Text('Upload Profile Picture'),
-        ),
-      ],
-    ),
-  );
-}
-
 
   Widget _readonly(String label, String value) {
     return Container(

@@ -29,7 +29,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import '../../assistant_chat.dart';
 import 'accounts_pages/cg_account_page.dart';
 import 'view_reports_caregiver_page.dart';
-
+import '../../services/medicine_reminder_service.dart';
 
 
 
@@ -74,6 +74,14 @@ class _CaregiverHomePageState extends State<CaregiverHomePage> {
   late final CaregiverHomeController _c;
   String? _selectedElderlyId;
   bool _initializedOnce = false;
+  final _svc = MedicineRemindersService();
+  final List<String> _elderlyIds = [];
+  String _selectedElderly = '__ALL__';
+
+  String _elderlyLabel(String id) {
+    if (id.length > 8) return '${id.substring(0, 8)}…';
+    return id;
+  }
 
   @override
   void initState() {
@@ -1601,7 +1609,7 @@ class _CaregiverMedicalQuickActions extends StatelessWidget {
             ),
             _medicalButton(
               context,
-              title: 'Book Appt',
+              title: 'Book Appointment',
               icon: Icons.calendar_month,
               color: Colors.blue.shade100,
               iconColor: Colors.blue.shade800,
@@ -1721,20 +1729,12 @@ class _ScheduleTodaySection extends StatelessWidget {
     );
   }
 }
-
-
 class MedicationTracker extends StatefulWidget {
-  
   final List<dynamic> reminders;
-
   final Map<String, String> elderlyLookup;
-
   final Future<void> Function(String elderlyId, String reminderId) onMarkDone;
-
-    final String? initialSelectedElderlyId;
-      final ValueChanged<String /* '__ALL__' or elderlyId */ >? onFilterChanged;
-
-
+  final String? initialSelectedElderlyId;
+  final ValueChanged<String /* '__ALL__' or elderlyId */ >? onFilterChanged;
 
   const MedicationTracker({
     super.key,
@@ -1766,7 +1766,6 @@ class MedicationReminderLike {
     required this.isCompleted,
   });
 
-  /// Convert from Map or strongly-typed model.
   factory MedicationReminderLike.fromAny(dynamic v) {
     if (v is MedicationReminderLike) return v;
 
@@ -1794,26 +1793,29 @@ class MedicationReminderLike {
 class _MedicationTrackerState extends State<MedicationTracker> {
   String _selectedElderly = '__ALL__';
 
+  List<MedicationReminderLike> get _all =>
+      widget.reminders.map(MedicationReminderLike.fromAny).toList();
+
+  List<String> get _elderlyIds {
+    final ids = _all
+        .map((e) => e.elderlyId)
+        .where((e) => e.isNotEmpty)
+        .toSet()
+        .toList();
+    ids.sort();
+    return ids;
+  }
+
   @override
   void initState() {
     super.initState();
-    // if parent passed an initial filter AND it's valid, use it; else '__ALL__'
-    final ids = _elderlyIds; // computed from current reminders
+    final ids = _elderlyIds;
     final pref = widget.initialSelectedElderlyId?.trim();
     if (pref != null && pref.isNotEmpty && ids.contains(pref)) {
       _selectedElderly = pref;
     } else {
       _selectedElderly = '__ALL__';
     }
-  }
-
-  List<MedicationReminderLike> get _all =>
-      widget.reminders.map(MedicationReminderLike.fromAny).toList();
-
-  List<String> get _elderlyIds {
-    final ids = _all.map((e) => e.elderlyId).where((e) => e.isNotEmpty).toSet().toList();
-    ids.sort();
-    return ids;
   }
 
   String _elderlyLabel(String id) =>
@@ -1838,7 +1840,7 @@ class _MedicationTrackerState extends State<MedicationTracker> {
     await db.collection('notifications').add({
       'toUid': toUid,
       'fromUid': fromUid,
-      'type': 'medication_prompt',     // NEW type for your rules/handlers
+      'type': 'medication_prompt',
       'title': title,
       'message': msg,
       'reminderId': item.id,
@@ -1871,7 +1873,9 @@ class _MedicationTrackerState extends State<MedicationTracker> {
               const ListTile(
                 contentPadding: EdgeInsets.zero,
                 leading: Icon(Icons.medication_outlined),
-                title: Text('No medications scheduled for the selected elderly'),
+                title: Text(
+                  'No medications scheduled for the selected elderly',
+                ),
               ),
             ],
           ),
@@ -1918,7 +1922,8 @@ class _MedicationTrackerState extends State<MedicationTracker> {
                       spacing: 8,
                       children: [
                         TextButton(
-                          onPressed: () => widget.onMarkDone(m.elderlyId, m.id),
+                          onPressed: () =>
+                              widget.onMarkDone(m.elderlyId, m.id),
                           child: const Text('Mark done'),
                         ),
                         OutlinedButton.icon(
@@ -1935,7 +1940,11 @@ class _MedicationTrackerState extends State<MedicationTracker> {
                   m.isCompleted ? Icons.check_circle : Icons.medication,
                   color: m.isCompleted ? Colors.green : null,
                 ),
-                title: Text(m.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                title: Text(
+                  m.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 subtitle: Text(subtitle),
                 trailing: trailing,
               );
@@ -1956,22 +1965,32 @@ class _MedicationTrackerState extends State<MedicationTracker> {
         const Spacer(),
         DropdownButton<String>(
           value: _selectedElderly,
-          onChanged: (v) => setState(() => _selectedElderly = v ?? '__ALL__'),
+          onChanged: (v) {
+            setState(() {
+              _selectedElderly = v ?? '__ALL__';
+            });
+            if (v != null && widget.onFilterChanged != null) {
+              widget.onFilterChanged!(v);
+            }
+          },
           items: <DropdownMenuItem<String>>[
             const DropdownMenuItem(
               value: '__ALL__',
               child: Text('All elderly'),
             ),
-            ...ids.map((id) => DropdownMenuItem(
-                  value: id,
-                  child: Text(_elderlyLabel(id)),
-                )),
+            ...ids.map(
+              (id) => DropdownMenuItem(
+                value: id,
+                child: Text(_elderlyLabel(id)),
+              ),
+            ),
           ],
         ),
       ],
     );
   }
 }
+
 
 
 class _NotificationsSection extends StatelessWidget {

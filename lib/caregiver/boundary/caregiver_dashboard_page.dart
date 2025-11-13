@@ -7,6 +7,7 @@ import 'medicine_reminders_page.dart';
 import 'view_reports_caregiver_page.dart';
 import '../boundary/accounts_pages/cg_account_page.dart';
 import '../controller/caregiver_dashboard_controller.dart';
+import 'create_appointments_page.dart';
 
 class CaregiverDashboardPage extends StatefulWidget {
   final UserProfile userProfile;
@@ -44,6 +45,13 @@ class _DashboardScaffold extends StatelessWidget {
           onElderlySelected: d.selectElder, // optional
         ),
       ),
+      _TabSpec(
+  title: 'Appointments',
+  icon: Icons.schedule_outlined,
+  content: CreateAppointmentsPage(
+    userProfile: userProfile,
+  ),
+),
       _TabSpec(
           title: 'Create Medicine Reminders',
           icon: Icons.event_available_outlined,

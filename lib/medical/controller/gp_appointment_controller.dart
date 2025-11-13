@@ -12,7 +12,7 @@ class _FS {
   static const String events = 'events';
   static const String config = 'config';
 
-  // added for caregiver + reminders + notifications
+  // caregiver + reminders + notifications
   static const String accountByUid = 'AccountByUid';
   static const String notifications = 'notifications';
   static const String reminders = 'reminders';
@@ -78,13 +78,13 @@ class GpAppointmentController {
   // ───────────────────────── Caregiver linkage / userType ─────────────────────────
 
   Future<String?> userTypeOf(String uid) async {
-    final (ref, data) = await _accountDocAndDataByUid(uid);
+    final (_, data) = await _accountDocAndDataByUid(uid);
     final t = (data[_FS.userType] ?? '').toString().trim();
     return t.isEmpty ? null : t;
   }
 
   Future<List<String>> fetchEldersForCaregiver(String caregiverUid) async {
-    final (ref, data) = await _accountDocAndDataByUid(caregiverUid);
+    final (_, data) = await _accountDocAndDataByUid(caregiverUid);
     final list = data.sList(_FS.elderlyIds);
     return list.map((e) => e.trim()).where((e) => e.isNotEmpty).toSet().toList()..sort();
   }
@@ -172,6 +172,20 @@ class GpAppointmentController {
     await ref.set(payload, SetOptions(merge: true));
   }
 
+  Future<void> _removeReminderForUser({
+    required String uid,
+    required String eventId,
+  }) async {
+    final emailKey = await _emailKeyForUid(uid);
+    if (emailKey == null) return;
+
+    final ref = _db.collection(_FS.reminders).doc(emailKey);
+    await ref.set(
+      {eventId: FieldValue.delete()},
+      SetOptions(merge: true),
+    );
+  }
+
   Future<void> _notify({
     required List<String> toUids,
     required String title,
@@ -195,7 +209,7 @@ class GpAppointmentController {
     await batch.commit();
   }
 
-  // ─────────────────────────── Booking (events + subcollections) ─────────────────
+  // ─────────────────────────── Booking (create) ──────────────────────────────────
 
   Future<BookingResult> bookFutureGpCall({
     required String elderlyId,      // elder uid
@@ -237,7 +251,6 @@ class GpAppointmentController {
         'isAllDay': false,
         'status': 'scheduled',
         'joinUrl': joinUrl,
-
         'createdAt': FieldValue.serverTimestamp(),
       };
 
@@ -322,6 +335,184 @@ class GpAppointmentController {
       return BookingResult(false, e.toString());
     }
   }
+
+  // ─────────────────────────── Appointment listing ───────────────────────────────
+
+  /// Stream appointments for given elder uid (ordered by start time).
+  Stream<QuerySnapshot<Map<String, dynamic>>> appointmentsStreamFor(String elderUid) {
+    return _accountDocRefByUid(elderUid)
+        .asStream()
+        .asyncExpand(
+          (ref) => ref
+              .collection('appointments')
+              .orderBy('dateTime', descending: false)
+              .snapshots(),
+        );
+  }
+
+  // ─────────────────────────── Appointment update ────────────────────────────────
+    Future<BookingResult> updateGpCall({
+    required String elderlyId,
+    required String appointmentId,
+    required DateTime start,
+    required Duration duration,
+    required String reason,
+  }) async {
+    if (reason.trim().isEmpty) {
+      return BookingResult(false, 'Please provide a reason for the appointment.');
+    }
+
+    try {
+      final elderRef = await _accountDocRefByUid(elderlyId);
+      final apptRef = elderRef.collection('appointments').doc(appointmentId);
+      final apptSnap = await apptRef.get();
+
+      if (!apptSnap.exists) {
+        return BookingResult(false, 'Appointment not found.');
+      }
+
+      final apptData = apptSnap.data() ?? <String, dynamic>{};
+      final mirrorEventId = (apptData['mirrorEventId'] ?? '').toString().trim();
+      if (mirrorEventId.isEmpty) {
+        return BookingResult(false, 'Cannot update this appointment (missing event link).');
+      }
+
+      final end = start.add(duration);
+
+      // (1) update flat event
+      final eventRef = _db.collection(_FS.events).doc(mirrorEventId);
+
+      // (2) gather all appointment docs to update (elder + caregivers)
+      final caregivers = await fetchLinkedCaregivers(elderlyId);
+      final List<DocumentReference<Map<String, dynamic>>> apptRefs = [];
+
+      // elder’s appointment (current one)
+      apptRefs.add(apptRef);
+
+      // caregivers’ mirrored appointments (per caregiver account doc)
+      for (final cgUid in caregivers) {
+        final cgRef = await _accountDocRefByUid(cgUid);
+        final cgApptsSnap = await cgRef
+            .collection('appointments')
+            .where('mirrorEventId', isEqualTo: mirrorEventId)
+            .get();
+
+        for (final d in cgApptsSnap.docs) {
+          apptRefs.add(d.reference);
+        }
+      }
+
+      final batch = _db.batch();
+
+      // update event
+      batch.update(eventRef, {
+        'start': Timestamp.fromDate(start),
+        'end': Timestamp.fromDate(end),
+        'description': reason,
+      });
+
+      // update each appointment
+      for (final ref in apptRefs) {
+        batch.update(ref, {
+          'dateTime': Timestamp.fromDate(start),
+          'endDateTime': Timestamp.fromDate(end),
+          'description': reason,
+        });
+      }
+
+      await batch.commit();
+
+      // (3) Update reminders for everyone (elder + caregivers)
+      const preNotifyMinutes = 15;
+      final participants = <String>{elderlyId, ...caregivers};
+      final joinUrl = (apptData['joinUrl'] ?? '').toString();
+
+      for (final uid in participants) {
+        await _addReminderForUser(
+          uid: uid,
+          eventId: mirrorEventId,
+          title: 'GP Consultation (Online)',
+          start: start,
+          duration: duration,
+          preNotifyMinutes: preNotifyMinutes,
+          joinUrl: joinUrl,
+        );
+      }
+
+      return BookingResult(true, 'Appointment updated.');
+    } on FirebaseException catch (e) {
+      return BookingResult(false, e.message ?? e.code);
+    } catch (e) {
+      return BookingResult(false, e.toString());
+    }
+  }
+
+
+  // ─────────────────────────── Appointment cancel ────────────────────────────────
+    Future<BookingResult> cancelGpCall({
+    required String elderlyId,
+    required String appointmentId,
+  }) async {
+    try {
+      final elderRef = await _accountDocRefByUid(elderlyId);
+      final apptRef = elderRef.collection('appointments').doc(appointmentId);
+      final apptSnap = await apptRef.get();
+
+      if (!apptSnap.exists) {
+        return BookingResult(false, 'Appointment not found.');
+      }
+
+      final apptData = apptSnap.data() ?? <String, dynamic>{};
+      final mirrorEventId = (apptData['mirrorEventId'] ?? '').toString().trim();
+
+      final batch = _db.batch();
+
+      // (1) cancel event if we have a mirror id
+      if (mirrorEventId.isNotEmpty) {
+        final eventRef = _db.collection(_FS.events).doc(mirrorEventId);
+        batch.update(eventRef, {'status': 'cancelled'});
+
+        // (2) cancel elder’s appointment
+        batch.update(apptRef, {'status': 'cancelled'});
+
+        // (3) cancel caregivers’ mirrored appointments
+        final caregivers = await fetchLinkedCaregivers(elderlyId);
+        final List<String> participants = <String>{elderlyId, ...caregivers}.toList();
+
+        for (final cgUid in caregivers) {
+          final cgRef = await _accountDocRefByUid(cgUid);
+          final cgApptsSnap = await cgRef
+              .collection('appointments')
+              .where('mirrorEventId', isEqualTo: mirrorEventId)
+              .get();
+
+          for (final d in cgApptsSnap.docs) {
+            batch.update(d.reference, {'status': 'cancelled'});
+          }
+        }
+
+        await batch.commit();
+
+        // (4) remove reminders for all participants
+        for (final uid in participants) {
+          await _removeReminderForUser(uid: uid, eventId: mirrorEventId);
+        }
+      } else {
+        // Fallback: just cancel this appointment
+        batch.update(apptRef, {'status': 'cancelled'});
+        await batch.commit();
+      }
+
+      return BookingResult(true, 'Appointment cancelled.');
+    } on FirebaseException catch (e) {
+      return BookingResult(false, e.message ?? e.code);
+    } catch (e) {
+      return BookingResult(false, e.toString());
+    }
+  }
+
+
+  // ─────────────────────────── Quick reasons config ──────────────────────────────
 
   Stream<List<String>> quickReasonsStream() {
     return _db.collection(_FS.config).doc('quickReasons').snapshots().map((snap) {

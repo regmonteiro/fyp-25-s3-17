@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+
 import '../models/user_profile.dart';
 import 'controller/gp_appointment_controller.dart';
 
@@ -41,6 +43,9 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
   String? _userType;                       // 'elderly' | 'caregiver' | 'admin' | null
   List<String> _linkedElderlyIds = <String>[];
   String? _effectiveElderUid;              // which elder we’re booking for
+
+  // editing existing appointment
+  String? _editingApptId;                  // null = create mode, non-null = editing
 
   @override
   void initState() {
@@ -117,7 +122,8 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
 
     // caregiver must pick a target elder
     final targetElderUid = _effectiveElderUid ?? widget.userProfile.uid;
-    if (_userType == 'caregiver' && (targetElderUid.isEmpty || !_linkedElderlyIds.contains(targetElderUid))) {
+    if (_userType == 'caregiver' &&
+        (targetElderUid.isEmpty || !_linkedElderlyIds.contains(targetElderUid))) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Choose a linked elderly profile to book for.')),
       );
@@ -126,13 +132,18 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
 
     setState(() => _busy = true);
     try {
+      final isEditing = _editingApptId != null;
+
       // confirm
       final ok = await showDialog<bool>(
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          title: const Text('Confirm booking'),
-          content: Text('Book GP consultation on ${DateFormat('EEE, MMM d, h:mm a').format(start)}'),
+          title: Text(isEditing ? 'Confirm changes' : 'Confirm booking'),
+          content: Text(
+            '${isEditing ? 'Update' : 'Book'} GP consultation on '
+            '${DateFormat('EEE, MMM d, h:mm a').format(start)}',
+          ),
           actions: [
             TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
             ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Confirm')),
@@ -141,15 +152,27 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
       );
       if (ok != true || !mounted) return;
 
-      // book
-      final res = await _ctrl.bookFutureGpCall(
-        elderlyId: targetElderUid,
-        elderlyName: widget.userProfile.safeDisplayName,
-        start: start,
-        duration: _duration,
-        reason: _reasonCtrl.text.trim(),
-        invitePrimaryCaregiver: _invitePrimaryCaregiver,
-      );
+      BookingResult res;
+      if (isEditing) {
+        // UPDATE existing appointment
+        res = await _ctrl.updateGpCall(
+          elderlyId: targetElderUid,
+          appointmentId: _editingApptId!,
+          start: start,
+          duration: _duration,
+          reason: _reasonCtrl.text.trim(),
+        );
+      } else {
+        // CREATE new appointment
+        res = await _ctrl.bookFutureGpCall(
+          elderlyId: targetElderUid,
+          elderlyName: widget.userProfile.safeDisplayName,
+          start: start,
+          duration: _duration,
+          reason: _reasonCtrl.text.trim(),
+          invitePrimaryCaregiver: _invitePrimaryCaregiver,
+        );
+      }
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -161,9 +184,15 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
       );
 
       if (res.ok) {
-        Future.microtask(() {
-          if (mounted) Navigator.of(context).maybePop();
+        setState(() {
+          _editingApptId = null; // back to create mode
         });
+        // For creates, you might want to pop. For editing, stay here.
+        if (!isEditing) {
+          Future.microtask(() {
+            if (mounted) Navigator.of(context).maybePop();
+          });
+        }
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -204,7 +233,8 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
                     style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.teal.shade800),
                   ),
                   const SizedBox(height: 8),
-                  const Text('Pick a time and tell us the main reason. We’ll set up a video GP call and remind you and your caregiver.'),
+                  const Text('Pick a time and tell us the main reason. '
+                      'We’ll set up a video GP call and remind you and your caregiver.'),
                 ]),
               ),
             ),
@@ -238,7 +268,12 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
                   items: _linkedElderlyIds
                       .map((id) => DropdownMenuItem(value: id, child: Text(id)))
                       .toList(),
-                  onChanged: (v) => setState(() => _effectiveElderUid = v),
+                  onChanged: (v) {
+                    setState(() {
+                      _effectiveElderUid = v;
+                      _editingApptId = null; // reset editing when switching elder
+                    });
+                  },
                   decoration: const InputDecoration(
                     labelText: 'Linked elderly',
                     border: OutlineInputBorder(),
@@ -355,7 +390,7 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
               width: double.infinity,
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.calendar_month),
-                label: const Text('Confirm Booking'),
+                label: Text(_editingApptId == null ? 'Confirm Booking' : 'Save Changes'),
                 onPressed: _submit,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.pink.shade600,
@@ -364,9 +399,215 @@ class _ConsultationBookingPageState extends State<ConsultationBookingPage> {
                 ),
               ),
             ),
+
+            if (_editingApptId != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Editing existing appointment. Tap "Save Changes" or cancel editing below.',
+                style: TextStyle(color: Colors.orange.shade700, fontSize: 12),
+              ),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton(
+                  onPressed: () {
+                    setState(() {
+                      _editingApptId = null;
+                      _reasonCtrl.clear();
+                      _selectedReasons.clear();
+                    });
+                  },
+                  child: const Text('Cancel editing'),
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 24),
+            const Divider(),
+            const SizedBox(height: 8),
+
+            Text(
+              'Upcoming & past appointments',
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            _appointmentsList(),
           ]),
         ),
       ),
+    );
+  }
+
+  Widget _appointmentsList() {
+    final elderUid = _effectiveElderUid ?? widget.userProfile.uid;
+    if (elderUid.isEmpty) {
+      return const Text('No profile selected.');
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _ctrl.appointmentsStreamFor(elderUid),
+      builder: (context, snap) {
+        if (snap.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        if (snap.hasError) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Text(
+              'Failed to load appointments: ${snap.error}',
+              style: const TextStyle(color: Colors.red),
+            ),
+          );
+        }
+
+        final docs = snap.data?.docs ?? const [];
+        if (docs.isEmpty) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 16),
+            child: Text('No appointments yet.'),
+          );
+        }
+
+        return ListView.separated(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          itemCount: docs.length,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, index) {
+            final doc = docs[index];
+            final data = doc.data();
+            final ts = data['dateTime'] as Timestamp?;
+            final start = ts?.toDate();
+            final status = (data['status'] ?? 'scheduled').toString();
+            final desc = (data['description'] ?? '').toString();
+            final isCancelled = status.toLowerCase() == 'cancelled';
+
+            final whenStr = (start == null)
+                ? '(no time)'
+                : DateFormat('EEE, MMM d, h:mm a').format(start);
+
+            return Card(
+              color: isCancelled ? Colors.grey.shade200 : Colors.white,
+              child: ListTile(
+                leading: Icon(
+                  isCancelled ? Icons.event_busy : Icons.event_available,
+                  color: isCancelled ? Colors.grey : Colors.teal,
+                ),
+                title: Text(
+                  whenStr,
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: isCancelled ? Colors.grey : Colors.black,
+                  ),
+                ),
+                subtitle: Text(
+                  '$status • $desc',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'Edit',
+                      icon: const Icon(Icons.edit),
+                      color: isCancelled ? Colors.grey : Colors.blueGrey,
+                      onPressed: isCancelled
+                          ? null
+                          : () {
+                              final endTs = data['endDateTime'] as Timestamp?;
+                              final startTime = start;
+                              if (startTime != null) {
+                                setState(() {
+                                  _editingApptId = doc.id;
+
+                                  _date = DateTime(
+                                    startTime.year,
+                                    startTime.month,
+                                    startTime.day,
+                                  );
+                                  _time = TimeOfDay(
+                                    hour: startTime.hour,
+                                    minute: startTime.minute,
+                                  );
+
+                                  if (endTs != null) {
+                                    final end = endTs.toDate();
+                                    _duration = end.isAfter(startTime)
+                                        ? end.difference(startTime)
+                                        : const Duration(minutes: 20);
+                                  } else {
+                                    _duration = const Duration(minutes: 20);
+                                  }
+
+                                  _reasonCtrl.text = desc;
+                                  _selectedReasons.clear();
+                                });
+
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Editing selected appointment.'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                              }
+                            },
+                    ),
+                    IconButton(
+                      tooltip: 'Cancel appointment',
+                      icon: const Icon(Icons.delete),
+                      color: Colors.red.shade400,
+                      onPressed: isCancelled
+                          ? null
+                          : () async {
+                              final confirm = await showDialog<bool>(
+                                context: context,
+                                builder: (ctx) => AlertDialog(
+                                  title: const Text('Cancel appointment'),
+                                  content: const Text(
+                                      'Are you sure you want to cancel this appointment?'),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () => Navigator.of(ctx).pop(false),
+                                      child: const Text('No'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () => Navigator.of(ctx).pop(true),
+                                      child: const Text('Yes, cancel'),
+                                    ),
+                                  ],
+                                ),
+                              );
+                              if (confirm != true) return;
+
+                              final res = await _ctrl.cancelGpCall(
+                                elderlyId: elderUid,
+                                appointmentId: doc.id,
+                              );
+                              if (!mounted) return;
+
+                              if (_editingApptId == doc.id) {
+                                setState(() => _editingApptId = null);
+                              }
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(res.message),
+                                  backgroundColor: res.ok ? Colors.green : Colors.red,
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
