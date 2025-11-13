@@ -1,13 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+
 import 'elderly/boundary/elderly_dashboard_page.dart';
 import 'caregiver/boundary/caregiver_dashboard_page.dart';
+import 'admin/admin_dashboard.dart';
 import 'models/user_profile.dart';
-
 
 // Enum to represent the different subscription plans
 enum SubscriptionPlan { monthly, annual, threeYear, none }
+
+/// Same helper as in MainWrapper / Signup
+String emailKeyFrom(String email) {
+  final lower = email.trim().toLowerCase();
+  final at = lower.indexOf('@');
+  if (at < 0) return lower.replaceAll('.', '_');
+  final local  = lower.substring(0, at);
+  final domain = lower.substring(at + 1).replaceAll('.', '_');
+  return '$local@$domain';
+}
 
 class PaymentPage extends StatefulWidget {
   const PaymentPage({Key? key}) : super(key: key);
@@ -31,111 +42,153 @@ class _PaymentPageState extends State<PaymentPage> {
   final _caregiverNameController = TextEditingController();
   final _caregiverEmailController = TextEditingController();
   final _caregiverPhoneController = TextEditingController();
-  
+
   // Form key for payment details
   final _paymentFormKey = GlobalKey<FormState>();
-  
+
   // Form key for additional caregiver details
   final _caregiverFormKey = GlobalKey<FormState>();
 
-Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool isTrial = false}) async {
-  final user = FirebaseAuth.instance.currentUser;
-  if (user == null) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("User not authenticated. Please log in again.")),
-      );
-    }
-    return;
-  }
-
-  try {
-    final userDoc = await FirebaseFirestore.instance.collection('Account').doc(user.uid).get();
-    if (!userDoc.exists) {
+  Future<void> _handleSubscriptionSuccess({
+    required SubscriptionPlan plan,
+    bool isTrial = false,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("User profile not found in database.")),
+          const SnackBar(content: Text("User not authenticated. Please log in again.")),
         );
       }
       return;
     }
-    final userProfileData = userDoc.data()!;
 
-    // Calculate the subscription end date
-    DateTime endDate;
-    switch (plan) {
-      case SubscriptionPlan.monthly:
-        endDate = DateTime.now().add(const Duration(days: 30));
-        break;
-      case SubscriptionPlan.annual:
-        endDate = DateTime.now().add(const Duration(days: 365));
-        break;
-      case SubscriptionPlan.threeYear:
-        endDate = DateTime.now().add(const Duration(days: 3 * 365));
-        break;
-      default:
-        endDate = DateTime.now().add(const Duration(days: 15)); // For free trial
-        break;
-    }
+    try {
+      final email = (user.email ?? '').trim().toLowerCase();
+      final emailKey = emailKeyFrom(email);
+      final coll = FirebaseFirestore.instance.collection('Account');
 
-    // Create an updated map to send to Firestore
-    final Map<String, dynamic> updatedData = {
-      'subscriptionStatus': isTrial ? 'freeTrial' : plan.name,
-      'subscriptionEndDate': endDate.toIso8601String(),
-      'isTrialing': isTrial,
-    };
+      // Fetch both docs: by uid and by emailKey
+      final uidDocFuture   = coll.doc(user.uid).get();
+      final emailDocFuture = coll.doc(emailKey).get();
 
-    // Update the user's profile in Firestore with subscription details
-    await FirebaseFirestore.instance.collection('Account').doc(user.uid).update(updatedData);
+      final uidDoc   = await uidDocFuture;
+      final emailDoc = await emailDocFuture;
 
-    // Save additional caregiver details if provided
-    if (_addCaregiver) {
-      await FirebaseFirestore.instance
-          .collection('Account')
-          .doc(user.uid)
-          .collection('caregivers')
-          .add({
-        'name': _caregiverNameController.text.trim(),
-        'email': _caregiverEmailController.text.trim(),
-        'phone': _caregiverPhoneController.text.trim(),
-        'linkedAt': DateTime.now(),
-      });
-    }
+      Map<String, dynamic>? userProfileData;
 
-    // Show success message and navigate
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(isTrial
-              ? "Free trial activated! Enjoy Allcare."
-              : "Payment successful! Your subscription is now active."
+      if (uidDoc.exists) {
+        userProfileData = uidDoc.data()!;
+      } else if (emailDoc.exists) {
+        userProfileData = emailDoc.data()!;
+      }
+
+      if (userProfileData == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text("User profile not found in database.")),
+          );
+        }
+        return;
+      }
+
+      // Calculate the subscription end date
+      DateTime endDate;
+      switch (plan) {
+        case SubscriptionPlan.monthly:
+          endDate = DateTime.now().add(const Duration(days: 30));
+          break;
+        case SubscriptionPlan.annual:
+          endDate = DateTime.now().add(const Duration(days: 365));
+          break;
+        case SubscriptionPlan.threeYear:
+          endDate = DateTime.now().add(const Duration(days: 3 * 365));
+          break;
+        case SubscriptionPlan.none:
+        default:
+          endDate = DateTime.now().add(const Duration(days: 15)); // For free trial
+          break;
+      }
+
+      // Data to update
+      final Map<String, dynamic> updatedData = {
+        'subscriptionStatus': isTrial ? 'freeTrial' : plan.name,
+        'subscriptionEndDate': endDate.toIso8601String(),
+        'isTrialing': isTrial,
+      };
+
+      // Update both docs if they exist; if not, set with merge
+      if (uidDoc.exists) {
+        await coll.doc(user.uid).set(updatedData, SetOptions(merge: true));
+      }
+      if (emailDoc.exists) {
+        await coll.doc(emailKey).set(updatedData, SetOptions(merge: true));
+      }
+
+      // Save additional caregiver details if provided (under uid doc)
+      if (_addCaregiver) {
+        await coll
+            .doc(user.uid)
+            .collection('caregivers')
+            .add({
+          'name': _caregiverNameController.text.trim(),
+          'email': _caregiverEmailController.text.trim(),
+          'phone': _caregiverPhoneController.text.trim(),
+          'linkedAt': DateTime.now(),
+        });
+      }
+
+      // Merge for navigation (so userProfile sees latest subscription fields)
+      final mergedProfileData = {
+        ...userProfileData,
+        ...updatedData,
+      };
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isTrial
+                  ? "Free trial activated! Enjoy Allcare."
+                  : "Payment successful! Your subscription is now active.",
+            ),
           ),
-        ),
-      );
+        );
 
-      // Now, use the userProfileData variable to create the UserProfile object
-      final UserProfile userProfile = UserProfile.fromMap(userProfileData, user.uid);
-      
-      // Navigate to the main app page, passing the userProfile object
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(builder: (context) => ElderlyDashboardPage(userProfile: userProfile)),
-      );
-    }
+        // Build UserProfile
+        final userProfile = UserProfile.fromMap(mergedProfileData, user.uid);
 
-  } catch (e) {
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text("An unexpected error occurred: ${e.toString()}")),
-      );
-    }
-  } finally {
-    if (mounted) {
-      setState(() {
-        _isProcessingPayment = false;
-      });
+        // Decide where to go based on userType
+        final role = (mergedProfileData['userType'] as String? ?? '').trim().toLowerCase();
+
+        Widget next;
+        if (role == 'caregiver') {
+          next = CaregiverDashboardPage(userProfile: userProfile);
+        } else if (role == 'admin') {
+          next = AdminDashboard(userProfile: userProfile);
+        } else {
+          // default fallback = elderly
+          next = ElderlyDashboardPage(userProfile: userProfile);
+        }
+
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => next),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("An unexpected error occurred: $e")),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessingPayment = false;
+        });
+      }
     }
   }
-}
 
   // Method to simulate a payment process
   Future<void> _processPayment() async {
@@ -147,10 +200,10 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
       );
       return;
     }
-    
+
     // Validate card details form
     if (!_paymentFormKey.currentState!.validate()) return;
-    
+
     // Validate caregiver form if applicable
     if (_addCaregiver && !_caregiverFormKey.currentState!.validate()) return;
 
@@ -162,7 +215,6 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
       // Simulate a network delay for payment processing
       await Future.delayed(const Duration(seconds: 2));
       await _handleSubscriptionSuccess(plan: _selectedPlan);
-
     } finally {
       if (mounted) {
         setState(() {
@@ -171,7 +223,7 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
       }
     }
   }
-  
+
   // Method to handle the free trial option
   Future<void> _startFreeTrial() async {
     FocusManager.instance.primaryFocus?.unfocus();
@@ -179,17 +231,18 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
     setState(() {
       _isProcessingPayment = true;
     });
-    
-    // Caregiver validation is needed for the free trial button
+
+    // Caregiver validation is needed for the free trial button if extra caregiver added
     if (_addCaregiver && !_caregiverFormKey.currentState!.validate()) {
-      setState(() { _isProcessingPayment = false; });
+      setState(() {
+        _isProcessingPayment = false;
+      });
       return;
     }
 
     try {
       await Future.delayed(const Duration(seconds: 1)); // Simulate a short delay
       await _handleSubscriptionSuccess(plan: SubscriptionPlan.none, isTrial: true);
-
     } finally {
       if (mounted) {
         setState(() {
@@ -198,7 +251,7 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
       }
     }
   }
-  
+
   @override
   void dispose() {
     _cardNumberController.dispose();
@@ -272,11 +325,11 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    "Welcome to Allcare! To activate your profile and begin using Allcare's premium features, please select a subscription plan. All subscriptions are auto-deducted from the card provided.",
+                    "Welcome to Allcare! To activate your profile and enjoy Allcare's premium features, please select a subscription plan or start a free trial.",
                     style: TextStyle(fontSize: 16),
                   ),
                   const SizedBox(height: 20),
-                  
+
                   // Subscription Plans
                   _buildPlanCard(
                     plan: SubscriptionPlan.monthly,
@@ -298,9 +351,9 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                     price: "\$3000",
                     duration: "Recurring every 3 years",
                   ),
-                  
+
                   const SizedBox(height: 20),
-                  
+
                   // Payment Form
                   const Text(
                     "Payment Information",
@@ -314,13 +367,14 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                         TextFormField(
                           controller: _cardNameController,
                           decoration: const InputDecoration(labelText: "Cardholder Name"),
-                          validator: (val) => val!.isEmpty ? "Required" : null,
+                          validator: (val) => val == null || val.isEmpty ? "Required" : null,
                         ),
                         TextFormField(
                           controller: _cardNumberController,
                           decoration: const InputDecoration(labelText: "Card Number"),
                           keyboardType: TextInputType.number,
-                          validator: (val) => val!.length != 16 ? "Must be 16 digits" : null,
+                          validator: (val) =>
+                              val == null || val.length != 16 ? "Must be 16 digits" : null,
                         ),
                         Row(
                           children: [
@@ -328,7 +382,8 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                               child: TextFormField(
                                 controller: _expiryDateController,
                                 decoration: const InputDecoration(labelText: "MM/YY"),
-                                validator: (val) => val!.isEmpty ? "Required" : null,
+                                validator: (val) =>
+                                    val == null || val.isEmpty ? "Required" : null,
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -338,7 +393,8 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                                 decoration: const InputDecoration(labelText: "CVC"),
                                 keyboardType: TextInputType.number,
                                 obscureText: true,
-                                validator: (val) => val!.length != 3 ? "Must be 3 digits" : null,
+                                validator: (val) =>
+                                    val == null || val.length != 3 ? "Must be 3 digits" : null,
                               ),
                             ),
                           ],
@@ -346,9 +402,9 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                       ],
                     ),
                   ),
-                  
+
                   const SizedBox(height: 20),
-                  
+
                   // Caregiver Information
                   Row(
                     children: [
@@ -360,13 +416,15 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                           });
                         },
                       ),
-                      const Text(
-                        "Add additional caregiver (+\$25/month)",
-                        style: TextStyle(fontSize: 16),
+                      const Expanded(
+                        child: Text(
+                          "Add additional caregiver (+\$25/month)",
+                          style: TextStyle(fontSize: 16),
+                        ),
                       ),
                     ],
                   ),
-                  
+
                   // Additional caregiver form, only visible if checkbox is checked
                   if (_addCaregiver)
                     Form(
@@ -376,28 +434,34 @@ Future<void> _handleSubscriptionSuccess({required SubscriptionPlan plan, bool is
                           const SizedBox(height: 10),
                           TextFormField(
                             controller: _caregiverNameController,
-                            decoration: const InputDecoration(labelText: "Caregiver's Name"),
-                            validator: (val) => val!.isEmpty ? "Required" : null,
+                            decoration:
+                                const InputDecoration(labelText: "Caregiver's Name"),
+                            validator: (val) => val == null || val.isEmpty ? "Required" : null,
                           ),
                           TextFormField(
                             controller: _caregiverEmailController,
-                            decoration: const InputDecoration(labelText: "Caregiver's Email"),
+                            decoration:
+                                const InputDecoration(labelText: "Caregiver's Email"),
                             keyboardType: TextInputType.emailAddress,
                             validator: (val) =>
-                                val!.isEmpty || !val.contains("@") ? "Valid email" : null,
+                                val == null || val.isEmpty || !val.contains("@")
+                                    ? "Valid email required"
+                                    : null,
                           ),
                           TextFormField(
                             controller: _caregiverPhoneController,
-                            decoration: const InputDecoration(labelText: "Caregiver's Phone Number"),
+                            decoration: const InputDecoration(
+                              labelText: "Caregiver's Phone Number",
+                            ),
                             keyboardType: TextInputType.phone,
-                            validator: (val) => val!.isEmpty ? "Required" : null,
+                            validator: (val) => val == null || val.isEmpty ? "Required" : null,
                           ),
                         ],
                       ),
                     ),
 
                   const SizedBox(height: 30),
-                  
+
                   // Action Buttons
                   ElevatedButton(
                     onPressed: _processPayment,

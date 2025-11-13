@@ -2,7 +2,23 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
+
 import 'payment.dart';
+import 'caregiver/boundary/caregiver_dashboard_page.dart';
+import 'models/user_profile.dart';
+
+/// Same helper as MainWrapper
+String emailKeyFrom(String email) {
+  final lower = email.trim().toLowerCase();
+  final at = lower.indexOf('@');
+  if (at < 0) return lower.replaceAll('.', '_');
+  final local = lower.substring(0, at);
+  final domain = lower.substring(at + 1).replaceAll('.', '_');
+  return '$local@$domain';
+}
+
+// Enum if you ever want to reuse roles, but not required
+// enum UserRole { elderly, caregiver, admin }
 
 class SignupPage extends StatefulWidget {
   const SignupPage({super.key});
@@ -25,7 +41,7 @@ class _SignupPageState extends State<SignupPage> {
   final _adminKeyController = TextEditingController();
 
   DateTime? _dob;
-  String? _role;
+  String? _role; // 'elderly' | 'caregiver' | 'admin'
   bool _isCaregiver = false;
   bool _isAdmin = false;
   bool _acceptedTerms = false;
@@ -43,9 +59,6 @@ class _SignupPageState extends State<SignupPage> {
     super.dispose();
   }
 
-  // Helper functions
-  String _isoNow() => DateTime.now().toUtc().toIso8601String();
-  String _ymd(DateTime d) => DateFormat('yyyy-MM-dd').format(d.toUtc());
   String _randId() => FirebaseFirestore.instance.collection('_ids').doc().id;
 
   Future<void> _selectDOB(BuildContext context) async {
@@ -66,20 +79,22 @@ class _SignupPageState extends State<SignupPage> {
       builder: (context) => AlertDialog(
         title: const Text("Terms and Conditions"),
         content: const SingleChildScrollView(
-          child: Text("""
+          child: Text(
+            """
 Last Updated: August 10, 2025
 
-Welcome to Allcare! These Terms and Conditions govern your access to and use of the Allcare website and mobile application (the "Platform"). By creating an account or using the Platform, you agree to be bound by these terms. If you do not agree, you may not use the Platform.
+Welcome to Allcare! These Terms and Conditions govern your access to and use of the Allcare Platform.
 
-1. Acceptance of Terms: You must be at least 18 years old to create or manage an account.
-2. Platform Purpose: Allcare supports elderly users and caregivers with AI assistance, scheduling, learning, and community features.
-3. Responsibilities: You must provide accurate information and protect your account credentials.
-4. Privacy Policy: Your data is handled per our Privacy Policy.
-5. Limitation of Liability: The Platform is provided “as is”. Allcare is not liable for damages arising from its use.
-6. Governing Law: These Terms are governed by Singapore law.
+1. You must be at least 18 years old to create or manage an account.
+2. Allcare supports elderly users and caregivers with AI assistance and scheduling tools.
+3. You must provide accurate information and protect your login credentials.
+4. Your data is handled according to our Privacy Policy.
+5. The Platform is provided “as is”; Allcare is not liable for indirect damages.
+6. These Terms are governed by Singapore law.
 
 For questions, contact admin@allcare.com.
-"""),
+            """,
+          ),
         ),
         actions: [
           TextButton(
@@ -138,43 +153,88 @@ For questions, contact admin@allcare.com.
     }
 
     try {
+      // 1) Create Firebase Auth user
       final credential = await FirebaseAuth.instance.createUserWithEmailAndPassword(
         email: _emailController.text.trim(),
         password: _passwordController.text.trim(),
       );
 
       final uid = credential.user!.uid;
-      final nowIso = _isoNow();
+      final email = _emailController.text.trim().toLowerCase();
+      final emailKey = emailKeyFrom(email); // main Account doc id
 
+      final role = _role!.toLowerCase();
+      final elderlyId = _isCaregiver ? _elderlyIdController.text.trim() : null;
+
+      final accountColl = FirebaseFirestore.instance.collection('Account');
+
+      // 2) If caregiver, check if there is already a caregiver linked to this elderlyId
+      bool hasExistingCaregiver = false;
+      if (role == 'caregiver' && elderlyId != null && elderlyId.isNotEmpty) {
+        final existingCaregiversSnap = await accountColl
+            .where('userType', isEqualTo: 'caregiver')
+            .where('elderlyId', isEqualTo: elderlyId)
+            .limit(1)
+            .get();
+
+        hasExistingCaregiver = existingCaregiversSnap.docs.isNotEmpty;
+      }
+
+      // 3) Build profile data
       final data = <String, dynamic>{
-  'firstname': _firstNameController.text.trim(),
-  'lastname': _lastNameController.text.trim(),
-  'email': _emailController.text.trim(),
-  'phoneNum': _phoneController.text.trim(),
-  'userType': _role,
-  'dob': Timestamp.fromDate(_dob!), // <— use Timestamp
-  'elderlyId': _isCaregiver ? _elderlyIdController.text.trim() : null,
-  'createdAt': FieldValue.serverTimestamp(),
-  'lastLoginDate': FieldValue.serverTimestamp(),
-  'lastPasswordUpdate': FieldValue.serverTimestamp(),
-  'status': 'Active',
-  'uid': uid,
-  'loginLogs': {
-    _randId(): {'date': FieldValue.serverTimestamp()},
-  },
-  // Optional: record ToS version
-  'tosAccepted': {
-    'version': '2025-08-10',
-    'acceptedAt': FieldValue.serverTimestamp(),
-  },
-};
+        'firstname': _firstNameController.text.trim(),
+        'lastname': _lastNameController.text.trim(),
+        'email': email,
+        'phoneNum': _phoneController.text.trim(),
+        'userType': role,
+        'dob': Timestamp.fromDate(_dob!),
+        'elderlyId': elderlyId,
+        'createdAt': FieldValue.serverTimestamp(),
+        'lastLoginDate': FieldValue.serverTimestamp(),
+        'lastPasswordUpdate': FieldValue.serverTimestamp(),
+        'status': 'Active',
+        'uid': uid,
+        'loginLogs': {
+          _randId(): {'date': FieldValue.serverTimestamp()},
+        },
+        'tosAccepted': {
+          'version': '2025-08-10',
+          'acceptedAt': FieldValue.serverTimestamp(),
+        },
+      };
 
-      await FirebaseFirestore.instance.collection('Account').doc(uid).set(data);
+      // 4) Canonical profile: /Account/{emailKey}
+      await accountColl.doc(emailKey).set(data, SetOptions(merge: true));
+
+      // 5) Mirror profile: /Account/{uid}  (for PaymentPage, etc.)
+      await accountColl.doc(uid).set(data, SetOptions(merge: true));
 
       if (!mounted) return;
-      Navigator.of(context).push(
-        MaterialPageRoute(builder: (_) => const PaymentPage()),
-      );
+
+      // 6) Smart navigation logic
+      if (role == 'caregiver') {
+        if (hasExistingCaregiver) {
+          // Elderly already has at least one caregiver linked
+          // -> new caregiver must pay for additional caregiver subscription
+          Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const PaymentPage()),
+          );
+        } else {
+          // First caregiver for this elderlyId
+          // -> go straight to caregiver dashboard
+          final userProfile = UserProfile.fromMap(data, uid);
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => CaregiverDashboardPage(userProfile: userProfile),
+            ),
+          );
+        }
+      } else {
+        // Elderly or admin accounts go to payment as usual
+        Navigator.of(context).push(
+          MaterialPageRoute(builder: (_) => const PaymentPage()),
+        );
+      }
     } on FirebaseAuthException catch (e) {
       if (!mounted) return;
       String msg;
@@ -211,34 +271,43 @@ For questions, contact admin@allcare.com.
           key: _formKey,
           child: Column(
             children: [
+              // First name
               TextFormField(
                 controller: _firstNameController,
                 decoration: const InputDecoration(labelText: "First Name"),
-                validator: (val) => val!.isEmpty ? "Required" : null,
+                validator: (val) => val == null || val.isEmpty ? "Required" : null,
               ),
+              // Last name
               TextFormField(
                 controller: _lastNameController,
                 decoration: const InputDecoration(labelText: "Last Name"),
-                validator: (val) => val!.isEmpty ? "Required" : null,
+                validator: (val) => val == null || val.isEmpty ? "Required" : null,
               ),
+              // Phone
               TextFormField(
                 controller: _phoneController,
                 decoration: const InputDecoration(labelText: "Phone Number"),
-                validator: (val) => val!.isEmpty ? "Required" : null,
+                validator: (val) => val == null || val.isEmpty ? "Required" : null,
               ),
+              // Email
               TextFormField(
                 controller: _emailController,
                 decoration: const InputDecoration(labelText: "Email"),
                 keyboardType: TextInputType.emailAddress,
                 validator: (val) =>
-                    val!.isEmpty || !val.contains("@") ? "Valid email required" : null,
+                    val == null || val.isEmpty || !val.contains("@")
+                        ? "Valid email required"
+                        : null,
               ),
+              // Password
               TextFormField(
                 controller: _passwordController,
                 decoration: const InputDecoration(labelText: "Password"),
                 obscureText: true,
-                validator: (val) => val!.length < 8 ? "Min 8 characters" : null,
+                validator: (val) =>
+                    val == null || val.length < 8 ? "Min 8 characters" : null,
               ),
+              // Confirm password
               TextFormField(
                 controller: _confirmPasswordController,
                 decoration: const InputDecoration(labelText: "Confirm Password"),
@@ -247,6 +316,8 @@ For questions, contact admin@allcare.com.
                     val != _passwordController.text ? "Passwords do not match" : null,
               ),
               const SizedBox(height: 10),
+
+              // DOB
               Row(
                 children: [
                   Expanded(
@@ -263,14 +334,18 @@ For questions, contact admin@allcare.com.
                 ],
               ),
               const SizedBox(height: 10),
+
+              // Role
               DropdownButtonFormField<String>(
                 value: _role,
                 decoration: const InputDecoration(labelText: "User Type"),
-                items: ["admin", "elderly", "caregiver"]
-                    .map((role) => DropdownMenuItem(
-                          value: role,
-                          child: Text(role),
-                        ))
+                items: const ["admin", "elderly", "caregiver"]
+                    .map(
+                      (role) => DropdownMenuItem(
+                        value: role,
+                        child: Text(role),
+                      ),
+                    )
                     .toList(),
                 onChanged: (val) {
                   setState(() {
@@ -281,23 +356,31 @@ For questions, contact admin@allcare.com.
                 },
                 validator: (val) => val == null ? "Required" : null,
               ),
+
+              // Admin key
               if (_isAdmin)
                 TextFormField(
                   controller: _adminKeyController,
                   decoration: const InputDecoration(labelText: "Admin Key"),
                   obscureText: true,
                   validator: (val) =>
-                      val!.isEmpty ? "Admin key is required" : null,
+                      val == null || val.isEmpty ? "Admin key is required" : null,
                 ),
+
+              // Caregiver elderlyId
               if (_isCaregiver)
                 TextFormField(
                   controller: _elderlyIdController,
-                  decoration:
-                      const InputDecoration(labelText: "Elderly ID (to match with user)"),
+                  decoration: const InputDecoration(
+                    labelText: "Elderly ID (to match with user)",
+                  ),
                   validator: (val) =>
-                      val!.isEmpty ? "Required for caregiver" : null,
+                      val == null || val.isEmpty ? "Required for caregiver" : null,
                 ),
+
               const SizedBox(height: 20),
+
+              // Terms & conditions
               Row(
                 children: [
                   Checkbox(
@@ -319,10 +402,13 @@ For questions, contact admin@allcare.com.
                   ),
                 ],
               ),
+
               const SizedBox(height: 20),
+
+              // Submit
               ElevatedButton(
                 onPressed: _signup,
-                child: const Text("Continue to Payment"),
+                child: const Text("Continue"),
               ),
             ],
           ),

@@ -6,6 +6,7 @@ import 'account/account_page.dart';
 import '../controller/elderly_dashboard_controller.dart';
 import 'create_event_reminders_page.dart';
 import 'view_activties_page.dart';
+import '../../assistant_chat.dart';
 
 class ElderlyDashboardPage extends StatefulWidget {
   final UserProfile userProfile;
@@ -30,6 +31,7 @@ void initState() {
     ElderlyHomePage(userProfile: widget.userProfile),
     const CreateEventRemindersPage(),
     const ViewActivitiesPage(),
+    AssistantChat(userEmail: widget.userProfile.email ?? ''),
     const LearningResourcesPageRT(),
     const AccountPage(),
   ];
