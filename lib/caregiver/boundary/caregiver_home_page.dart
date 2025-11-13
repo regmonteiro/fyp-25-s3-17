@@ -30,6 +30,7 @@ import '../../assistant_chat.dart';
 import 'accounts_pages/cg_account_page.dart';
 import 'view_reports_caregiver_page.dart';
 import '../../services/medicine_reminder_service.dart';
+import 'create_appointments_page.dart';
 
 
 
@@ -602,7 +603,7 @@ Widget _buildCommunicateRow(BuildContext context) {
                   );
                 },
                 icon: const Icon(Icons.add),
-                label: const Text('Create Event'),
+                label: const Text('Create Medicine Reminders'),
               ),
           ],
         ),
@@ -1326,6 +1327,13 @@ class _CaregiverUpcomingRemindersSectionState
   /// uid -> emailKey (for /reminders/{emailKey})
   final Map<String, String> _emailKeyByUid = {};
 
+  String _fmtEnd(DateTime? start, int durationMinutes) {
+    if (start == null || durationMinutes <= 0) return '';
+    final end = start.add(Duration(minutes: durationMinutes));
+    return DateFormat('h:mm a').format(end);
+  }
+
+
   /// Active Firestore subscriptions (one per elderly reminders doc)
   final List<StreamSubscription> _subs = [];
 
@@ -1495,82 +1503,83 @@ class _CaregiverUpcomingRemindersSectionState
     }
 
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            _header(context),
-            const SizedBox(height: 8),
-            ...list.map((o) {
-              final start = o.start;
-              final startStr = start != null
-                  ? DateFormat('EEE, MMM d, h:mm a').format(start)
-                  : '—';
-              final endStr = _fmtEnd(start, o.r.duration);
-
-              return ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: const Icon(Icons.event, color: Colors.orange),
-                title: Text(o.r.title.isEmpty ? 'Reminder' : o.r.title,
-                    maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  endStr.isNotEmpty ? '$startStr – $endStr' : startStr,
-                ),
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    color: Colors.blueGrey.withOpacity(0.1),
-                  ),
-                  child: Text(
-                    o.elderlyLabel,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-                onTap: () {
-                  // Optionally navigate to detail page or edit dialog
-                },
-              );
-            }),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _header(BuildContext context) {
-    final theme = Theme.of(context).textTheme;
-    final items = <DropdownMenuItem<String>>[
-      const DropdownMenuItem(
-        value: '__ALL__',
-        child: Text('All elderly'),
-      ),
-      ...widget.elderlyIds.map((uid) {
-        final label = widget.elderlyNameByUid[uid] ?? uid;
-        return DropdownMenuItem(value: uid, child: Text(label));
-      }),
-    ];
-
-    return Row(
+  child: Padding(
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('Upcoming Event Reminders', style: theme.titleMedium),
-        const Spacer(),
-        DropdownButton<String>(
-          value: _selected,
-          onChanged: (v) => setState(() => _selected = v ?? '__ALL__'),
-          items: items,
-        ),
-      ],
-    );
-  }
+        _header(context),
+        const SizedBox(height: 8),
+        ...list.map((o) {
+          final start = o.start;
+          final startStr = start != null
+              ? DateFormat('EEE, MMM d, h:mm a').format(start)
+              : '—';
+          final endStr = _fmtEnd(start, o.r.duration);
 
-  String _fmtEnd(DateTime? start, int minutes) {
-    if (start == null || minutes <= 0) return '';
-    final end = start.add(Duration(minutes: minutes));
-    return DateFormat('h:mm a').format(end);
-  }
+          return ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: const Icon(Icons.event, color: Colors.orange),
+            title: Text(
+              o.r.title.isEmpty ? 'Reminder' : o.r.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              endStr.isNotEmpty ? '$startStr – $endStr' : startStr,
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                color: Colors.blueGrey.withOpacity(0.1),
+              ),
+              child: Text(
+                o.elderlyLabel,
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+            onTap: () {
+              // Optionally navigate to detail page or edit dialog
+            },
+          );
+        }),
+      ],
+    ),
+  ),
+);
 }
+
+Widget _header(BuildContext context) {
+  final theme = Theme.of(context).textTheme;
+
+  final items = <DropdownMenuItem<String>>[
+    const DropdownMenuItem(
+      value: '__ALL__',
+      child: Text('All elderly'),
+    ),
+    ...widget.elderlyIds.map((uid) {
+      final label = widget.elderlyNameByUid[uid] ?? uid;
+      return DropdownMenuItem(value: uid, child: Text(label));
+    }),
+  ];
+
+  return Row(
+    children: [
+      Text('Upcoming Event Reminders', style: theme.titleMedium),
+      const Spacer(),
+      DropdownButton<String>(
+        value: _selected,
+        onChanged: (v) {
+          final value = v ?? '__ALL__';
+          setState(() => _selected = value);
+        },
+        items: items,
+      ),
+    ],
+  );
+}
+    }
 
 class _CaregiverMedicalQuickActions extends StatelessWidget {
   final UserProfile userProfile;
@@ -1992,12 +2001,10 @@ class _MedicationTrackerState extends State<MedicationTracker> {
 }
 
 
-
 class _NotificationsSection extends StatelessWidget {
   final List<Map<String, dynamic>> notifications;
   final Future<void> Function(String id) onMarkRead;
   final Future<void> Function() onMarkAll;
-
 
   const _NotificationsSection({
     required this.notifications,
@@ -2007,7 +2014,8 @@ class _NotificationsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final unread = notifications.where((n) => !(n['read'] as bool? ?? false)).length;
+    final unread =
+        notifications.where((n) => !(n['read'] as bool? ?? false)).length;
 
     return Card(
       child: Padding(
@@ -2017,7 +2025,10 @@ class _NotificationsSection extends StatelessWidget {
           children: [
             Row(
               children: [
-                Text('Recent Notifications', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Recent Notifications',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
                 const Spacer(),
                 if (unread > 0)
                   FilledButton.tonal(
@@ -2034,12 +2045,16 @@ class _NotificationsSection extends StatelessWidget {
               )
             else
               ...notifications.take(5).map((n) {
+                final id = (n['id'] ?? '').toString();
                 final title = (n['title'] ?? 'Notification').toString();
                 final msg = (n['message'] ?? '').toString();
                 final read = (n['read'] ?? false) as bool;
                 final priority = (n['priority'] ?? 'low') as String;
                 final type = (n['type'] ?? '').toString();
                 final kind = (n['kind'] ?? '').toString();
+                final ts = n['timestamp'];
+
+                // Priority colour
                 Color dot;
                 switch (priority) {
                   case 'critical':
@@ -2056,124 +2071,281 @@ class _NotificationsSection extends StatelessWidget {
                     dot = const Color(0xFF28a745);
                 }
 
+                // Optional timestamp text
+                String? tsLabel;
+                if (ts is Timestamp) {
+                  final dt = ts.toDate();
+                  tsLabel =
+                      '${dt.year}-${dt.month.toString().padLeft(2, '0')}-${dt.day.toString().padLeft(2, '0')} '
+                      '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+                }
+
+                // Extra widgets per type/kind
+                final List<Widget> extra = [];
+
+                // ───────── Appointments ─────────
+                if (type == 'Appointments') {
+                  String badge;
+                  IconData icon;
+                  Color color;
+                  switch (kind) {
+                    case 'created':
+                      badge = 'New appointment';
+                      icon = Icons.event_available;
+                      color = Colors.blue;
+                      break;
+                    case 'updated':
+                      badge = 'Appointment updated';
+                      icon = Icons.edit_calendar;
+                      color = Colors.orange;
+                      break;
+                    case 'deleted':
+                      badge = 'Appointment cancelled';
+                      icon = Icons.event_busy;
+                      color = Colors.red;
+                      break;
+                    default:
+                      badge = 'Appointment';
+                      icon = Icons.event_note;
+                      color = Colors.blueGrey;
+                  }
+                  extra.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Chip(
+                        avatar: Icon(icon, size: 18, color: color),
+                        label: Text(badge),
+                      ),
+                    ),
+                  );
+
+                  // You can later replace this with real navigation
+                  extra.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 4),
+                      child: Text(
+                        'Tap to review in Appointments page.',
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ),
+                  );
+                }
+
+                // ───────── Reminders ─────────
+                if (type == 'reminders') {
+                  String badge;
+                  IconData icon;
+                  Color color;
+                  switch (kind) {
+                    case 'created':
+                      badge = 'Reminder created';
+                      icon = Icons.alarm_add;
+                      color = Colors.blue;
+                      break;
+                    case 'updated':
+                      badge = 'Reminder updated';
+                      icon = Icons.alarm_on;
+                      color = Colors.orange;
+                      break;
+                    case 'deleted':
+                      badge = 'Reminder cancelled';
+                      icon = Icons.alarm_off;
+                      color = Colors.red;
+                      break;
+                    default:
+                      badge = 'Reminder';
+                      icon = Icons.alarm;
+                      color = Colors.blueGrey;
+                  }
+                  extra.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: Chip(
+                        avatar: Icon(icon, size: 18, color: color),
+                        label: Text(badge),
+                      ),
+                    ),
+                  );
+                }
+
+                // ───────── Payment required ─────────
+                if (type == 'payment_required') {
+                  extra.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.payment),
+                        label: const Text('Pay Now'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Navigate to Payment Page…'),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                }
+
+                // ───────── GP invite ─────────
+                if (type == 'gp_invite') {
+                  extra.add(
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: ElevatedButton.icon(
+                        icon: const Icon(Icons.video_call),
+                        label: const Text('Join Call'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.teal,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 8,
+                          ),
+                        ),
+                        onPressed: () {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content:
+                                  Text('Join Consultation Video Call (TBD)…'),
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  );
+                }
+
+                // ───────── OK ping flow ─────────
+                if (type == 'ok_ping') {
+                  if (kind == 'are_you_ok') {
+                    extra.add(const SizedBox(height: 6));
+                    extra.add(
+                      Row(
+                        children: [
+                          ElevatedButton.icon(
+                            icon: const Icon(Icons.check),
+                            label: const Text("I'm OK"),
+                            onPressed: () async {
+                              await FirebaseFirestore.instance
+                                  .collection('notifications')
+                                  .add({
+                                'toUid': n['fromUid'],
+                                'fromUid': n['toUid'],
+                                'type': 'ok_ping',
+                                'kind': 'im_ok',
+                                'title': 'I am OK',
+                                'message': '',
+                                'timestamp': FieldValue.serverTimestamp(),
+                                'read': false,
+                                'priority': 'low',
+                              });
+                              await onMarkRead(id);
+                            },
+                          ),
+                          const SizedBox(width: 8),
+                          ElevatedButton.icon(
+                            icon:
+                                const Icon(Icons.warning_amber_rounded),
+                            label: const Text('Need Help'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.red,
+                              foregroundColor: Colors.white,
+                            ),
+                            onPressed: () async {
+                              await FirebaseFirestore.instance
+                                  .collection('notifications')
+                                  .add({
+                                'toUid': n['fromUid'],
+                                'fromUid': n['toUid'],
+                                'type': 'ok_ping',
+                                'kind': 'need_help',
+                                'title': 'I need help',
+                                'message': '',
+                                'timestamp': FieldValue.serverTimestamp(),
+                                'read': false,
+                                'priority': 'high',
+                              });
+                              await onMarkRead(id);
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  } else if (kind == 'im_ok') {
+                    extra.add(
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Chip(
+                          avatar: const Icon(
+                            Icons.check_circle,
+                            color: Colors.green,
+                          ),
+                          label: const Text("Elder replied: I'm OK"),
+                        ),
+                      ),
+                    );
+                  } else if (kind == 'need_help') {
+                    extra.add(
+                      Padding(
+                        padding: const EdgeInsets.only(top: 6),
+                        child: Chip(
+                          avatar: const Icon(
+                            Icons.warning_amber_rounded,
+                            color: Colors.red,
+                          ),
+                          label: const Text("Elder needs help!"),
+                        ),
+                      ),
+                    );
+                  }
+                }
+
                 return ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: Container(
                     width: 10,
                     height: 10,
-                    decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
+                    decoration: BoxDecoration(
+                      color: dot,
+                      shape: BoxShape.circle,
+                    ),
                   ),
                   title: Text(title),
                   subtitle: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(msg),
-                      if (type == 'payment_required')
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.payment),
-                            label: const Text('Pay Now'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            ),
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Navigate to Payment Page')),
-                              );
-                            },
+                      if (tsLabel != null)
+                        Text(
+                          tsLabel,
+                          style: const TextStyle(
+                            color: Colors.grey,
+                            fontSize: 11,
                           ),
                         ),
-                      if (type == 'gp_invite')
-                        Padding(
-                          padding: const EdgeInsets.only(top: 6),
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.video_call),
-                            label: const Text('Join Call'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.teal,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            ),
-                            onPressed: () {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Join Consultation Video Call')),
-                              );
-                            },
-                          ),
-                        ),
-                        if (type == 'ok_ping') ...[
-  const SizedBox(height: 6),
-  if (kind == 'are_you_ok')
-    Row(
-      children: [
-        ElevatedButton.icon(
-          icon: const Icon(Icons.check),
-          label: const Text("I'm OK"),
-          onPressed: () async {
-            await FirebaseFirestore.instance.collection('notifications').add({
-              'toUid': n['fromUid'],
-              'fromUid': n['toUid'],
-              'type': 'ok_ping',
-              'kind': 'im_ok',
-              'title': 'I am OK',
-              'message': '',
-              'timestamp': FieldValue.serverTimestamp(),
-              'read': false,
-              'priority': 'low',
-            });
-            await onMarkRead(n['id'] as String);
-          },
-        ),
-        const SizedBox(width: 8),
-        ElevatedButton.icon(
-          icon: const Icon(Icons.warning_amber_rounded),
-          label: const Text('Need Help'),
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-          onPressed: () async {
-            await FirebaseFirestore.instance.collection('notifications').add({
-              'toUid': n['fromUid'],
-              'fromUid': n['toUid'],
-              'type': 'ok_ping',
-              'kind': 'need_help',
-              'title': 'I need help',
-              'message': '',
-              'timestamp': FieldValue.serverTimestamp(),
-              'read': false,
-              'priority': 'high',
-            });
-            await onMarkRead(n['id'] as String);
-          },
-        ),
-      ],
-    ),
-  if (kind == 'im_ok')
-    Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Chip(
-        label: const Text("Elder replied: I'm OK"),
-        avatar: const Icon(Icons.check_circle, color: Colors.green),
-      ),
-    ),
-  if (kind == 'need_help')
-    Padding(
-      padding: const EdgeInsets.only(top: 6),
-      child: Chip(
-        label: const Text("Elder needs help!"),
-        avatar: const Icon(Icons.warning_amber_rounded, color: Colors.red),
-      ),
-    ),
-],
+                      if (msg.isNotEmpty) Text(msg),
+                      ...extra,
                     ],
                   ),
                   trailing: read
                       ? const Icon(Icons.check, color: Colors.green, size: 18)
                       : IconButton(
                           icon: const Icon(Icons.mark_email_read),
-                          onPressed: () => onMarkRead(n['id'] as String),
+                          onPressed: () => onMarkRead(id),
                         ),
+                  onTap: () async {
+                    // Generic tap behaviour – for now just mark as read.
+                    if (!read) await onMarkRead(id);
+                  },
                 );
               }),
           ],
@@ -2183,92 +2355,6 @@ class _NotificationsSection extends StatelessWidget {
   }
 }
 
-class _CommunityFeedPreview extends StatelessWidget {
-  final int limit;
-  const _CommunityFeedPreview({this.limit = 3});
-
-  @override
-  Widget build(BuildContext context) {
-    final q = FirebaseFirestore.instance
-        .collection('SharedExperiences')            // same as ElderlyHomePage
-        .orderBy('sharedAt', descending: true)
-        .limit(limit);
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: q.snapshots(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting) {
-          return const Card(child: ListTile(title: Text('Loading community…')));
-        }
-        if (snapshot.hasError) {
-          return const Card(child: ListTile(title: Text('Error loading community feed.')));
-        }
-
-        final docs = snapshot.data?.docs ?? [];
-        if (docs.isEmpty) {
-          return Card(
-            child: ListTile(
-              leading: const Icon(Icons.groups_2_outlined),
-              title: const Text('Be the first to share in the community!'),
-              trailing: TextButton.icon(
-                onPressed: () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => ShareExperiencePage()),
-                ),
-                icon: const Icon(Icons.add),
-                label: const Text('Share now'),
-              ),
-            ),
-          );
-        }
-
-        return Card(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  Text('Community Feed', style: Theme.of(context).textTheme.titleMedium),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => ShareExperiencePage()),
-                    ),
-                    icon: const Icon(Icons.add),
-                    label: const Text('Share'),
-                  ),
-                ]),
-                const SizedBox(height: 6),
-                ...docs.map((d) {
-                  final m = d.data();
-                  final title = (m['title'] ?? '').toString().trim();
-                  final description = (m['description'] ?? '').toString().trim();
-                  final content = description.isEmpty
-                      ? (title.isEmpty ? 'Untitled' : title)
-                      : (description.length > 100 ? '${description.substring(0, 100)}…' : description);
-
-                  return ListTile(
-                    leading: const Icon(Icons.forum_outlined),
-                    title: Text(content),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                    onTap: () {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => ShareExperiencePage()),
-                      );
-                    },
-                  );
-                }),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-}
 
 
 
@@ -2409,4 +2495,30 @@ class _EmptyHint extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         child: Center(child: Text(text)),
       );
+}
+
+class _CommunityFeedPreview extends StatelessWidget {
+  const _CommunityFeedPreview({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    // Simple placeholder for community feed; replace with real feed implementation as needed.
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.forum_outlined),
+        title: const Text('Community Feed'),
+        subtitle: const Text('See recent posts from the community'),
+        trailing: TextButton(
+          onPressed: () {
+            // Navigate to community / share experience page
+            Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => ShareExperiencePage()),
+            );
+          },
+          child: const Text('View'),
+        ),
+      ),
+    );
+  }
 }

@@ -8,6 +8,7 @@ import 'view_reports_caregiver_page.dart';
 import '../boundary/accounts_pages/cg_account_page.dart';
 import '../controller/caregiver_dashboard_controller.dart';
 import 'create_appointments_page.dart';
+import 'care_routine_template_page.dart';
 
 class CaregiverDashboardPage extends StatefulWidget {
   final UserProfile userProfile;
@@ -18,6 +19,8 @@ class CaregiverDashboardPage extends StatefulWidget {
 }
 
 class _CaregiverDashboardPageState extends State<CaregiverDashboardPage> {
+  String _selectedElderFilter = '__ALL__'; // in dashboard State
+
 
   @override
   Widget build(BuildContext context) {
@@ -52,6 +55,10 @@ class _DashboardScaffold extends StatelessWidget {
     userProfile: userProfile,
   ),
 ),
+      _TabSpec(
+  title: 'Care Routine',
+  icon: Icons.help_outline_outlined,
+  content: CareRoutineTemplatePage()  ),
       _TabSpec(
           title: 'Create Medicine Reminders',
           icon: Icons.event_available_outlined,

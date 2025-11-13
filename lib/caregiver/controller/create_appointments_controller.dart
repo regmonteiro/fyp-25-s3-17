@@ -1,7 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:intl/intl.dart';
 
-/// Helper to derive the canonical emailKey used under `/reminders/{emailKey}`
+/// Keep this helper exactly the same everywhere you use it.
 String emailKeyFrom(String email) {
   final lower = email.trim().toLowerCase();
   final at = lower.indexOf('@');
@@ -17,260 +16,233 @@ class CreateAppointmentsController {
   CreateAppointmentsController({FirebaseFirestore? firestore})
       : _firestore = firestore ?? FirebaseFirestore.instance;
 
-  // ─── Collection names (match Firestore exactly) ───
-  static const String _appointmentsCol = 'Appointments';   // /Appointments
-  static const String _remindersCol = 'reminders';         // /reminders
-  static const String _notificationsCol = 'notifications'; // /notifications
-  static const String _accountCol = 'Account';             // /Account (user profiles)
+  static const String _appointmentsCol = 'Appointments';
+  static const String _accountByUidCol = 'AccountByUid';
+  static const String _remindersCol = 'reminders';
+  static const String _notificationsCol = 'notifications';
 
   // ─────────────────────── Helpers ───────────────────────
 
-  /// Look up user's email from /Account/{uid} and convert to emailKey.
+  /// Look up emailKey for a given uid from /AccountByUid/{uid},
+  /// falling back to Account/{uid}.email → emailKeyFrom(email).
   Future<String?> _emailKeyForUid(String uid) async {
-    final snap = await _firestore.collection(_accountCol).doc(uid).get();
-    if (!snap.exists) return null;
-
-    final data = snap.data() ?? <String, dynamic>{};
-
-    // Try a few possible email fields you might be using
-    final rawEmail = (data['email'] ??
-            data['elderEmail'] ??
-            data['caregiverEmail'] ??
-            '')
-        .toString()
-        .trim();
-
-    if (rawEmail.isEmpty) return null;
-    return emailKeyFrom(rawEmail);
-  }
-
-  Future<void> _addReminderForUser({
-    required String uid,
-    required String eventId,
-    required String title,
-    required DateTime start,
-    required Duration duration,
-    required int preNotifyMinutes,
-    required String type, // 'appointment' | 'task' | 'reminder'
-  }) async {
-    final emailKey = await _emailKeyForUid(uid);
-    if (emailKey == null) return;
-
-    final ref = _firestore.collection(_remindersCol).doc(emailKey);
-
-    await ref.set({
-      eventId: {
-        // Shape expected by CaregiverUpcomingRemindersSection.EventReminder
-        'title': title,
-        'startTime': start.toIso8601String(),
-        'duration': duration.inMinutes,
-
-        // Extra metadata (safe to ignore in UI)
-        'createdAt': DateTime.now().toIso8601String(),
-        'preNotifyMinutes': preNotifyMinutes,
-        'type': type,
-      }
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _removeReminderForUser({
-    required String uid,
-    required String eventId,
-  }) async {
-    final emailKey = await _emailKeyForUid(uid);
-    if (emailKey == null) return;
-
-    final ref = _firestore.collection(_remindersCol).doc(emailKey);
-    await ref.set({
-      eventId: FieldValue.delete(),
-    }, SetOptions(merge: true));
-  }
-
-  Future<void> _notify({
-    required List<String> toUids,
-    required String title,
-    required String message,
-    required String type, // 'appointment_create' | 'appointment_update' | 'appointment_delete'
-    required Map<String, dynamic> extra,
-  }) async {
-    final batch = _firestore.batch();
-    for (final uid in toUids.toSet()) {
-      final nref = _firestore.collection(_notificationsCol).doc();
-      batch.set(nref, {
-        'toUid': uid,
-        'title': title,
-        'message': message,
-        'type': type,
-        'priority': 'low',
-        'data': extra,
-        'timestamp': FieldValue.serverTimestamp(),
-        'read': false,
-      });
+    // 1) Try mirror doc in /AccountByUid
+    final byUid = await _firestore.collection(_accountByUidCol).doc(uid).get();
+    if (byUid.exists) {
+      final ek = (byUid.data()?['emailKey'] as String?)?.trim();
+      if (ek != null && ek.isNotEmpty) return ek;
     }
-    await batch.commit();
+
+    // 2) Fallback: Account/{uid}.email
+    final acc = await _firestore.collection('Account').doc(uid).get();
+    if (acc.exists) {
+      final email = (acc.data()?['email'] as String?)?.trim();
+      if (email != null && email.isNotEmpty) {
+        return emailKeyFrom(email);
+      }
+    }
+    return null;
   }
 
-  // ─────────────────────── Create / Update / Delete ───────────────────────
+  // ─────────────────────── Create ───────────────────────
 
-  /// If [appointmentId] is null → create.
-  /// Otherwise → update existing /Appointments/{appointmentId}.
+  /// Main entry used by CreateAppointmentsPage.
+  ///
+  /// - Writes a document in /Appointments
+  /// - Adds/merges a reminder under /reminders/{elderEmailKey}
+  ///   so CaregiverUpcomingRemindersSection can display it.
+  /// - (Optional) Adds a notification in /notifications
   Future<void> createAppointment({
-    String? appointmentId,
     required String elderlyId,
     required String caregiverId,
     required String title,
-    required String description,
+    String? description,
     required DateTime dateTime,
-    required String type,
+    required String type,          // 'appointment' | 'task' | 'reminder'
     required bool isAllDay,
-    Duration? duration,
+    required Duration duration,
   }) async {
-    final sanitizedTitle = title.trim();
-    if (sanitizedTitle.isEmpty) {
-      throw ArgumentError('Title cannot be empty');
-    }
+    final now = DateTime.now();
+    final start = dateTime;
+    final durationMinutes =
+        isAllDay ? const Duration(hours: 24).inMinutes : duration.inMinutes;
 
-    final effectiveDuration = duration ?? const Duration(minutes: 30);
-    final durationMinutes = effectiveDuration.inMinutes;
+    // Lookup emailKey for the elder so we can write to /reminders/{emailKey}
+    final elderEmailKey = await _emailKeyForUid(elderlyId);
 
-    final dateStr = DateFormat('yyyy-MM-dd').format(dateTime);
-    final timeStr = DateFormat('HH:mm').format(dateTime);
+    await _firestore.runTransaction((tx) async {
+      // 1) Create appointment doc
+      final apptRef = _firestore.collection(_appointmentsCol).doc();
 
-    final col = _firestore.collection(_appointmentsCol);
-    final docRef = appointmentId == null ? col.doc() : col.doc(appointmentId);
-
-    final payload = <String, dynamic>{
-      'id': docRef.id,
-      'elderlyId': elderlyId,
-      'caregiverId': caregiverId,
-      'title': sanitizedTitle,
-      'notes': description.trim(),
-      'type': type, // 'appointment' | 'task' | 'reminder'
-      'isAllDay': isAllDay,
-      'durationMinutes': isAllDay ? 1440 : durationMinutes,
-      'date': dateStr,
-      'time': timeStr,
-      'createdBy': 'caregiver',
-      'updatedAt': FieldValue.serverTimestamp(),
-    };
-
-    if (appointmentId == null) {
-      payload['createdAt'] = FieldValue.serverTimestamp();
-    }
-
-    await docRef.set(payload, SetOptions(merge: true));
-
-    // Reminders + notifications for both elder + caregiver
-    const preNotifyMinutes = 30;
-    final participants = <String>{elderlyId, caregiverId};
-
-    for (final uid in participants) {
-      await _addReminderForUser(
-        uid: uid,
-        eventId: docRef.id,
-        title: sanitizedTitle,
-        start: dateTime,
-        duration: effectiveDuration,
-        preNotifyMinutes: preNotifyMinutes,
-        type: type,
-      );
-    }
-
-    final whenFmt = DateFormat('EEE, MMM d, h:mm a').format(dateTime);
-    await _notify(
-      toUids: participants.toList(),
-      title: 'Appointment ${appointmentId == null ? 'created' : 'updated'}',
-      message: '$sanitizedTitle on $whenFmt',
-      type: appointmentId == null ? 'appointment_create' : 'appointment_update',
-      extra: {
-        'appointmentId': docRef.id,
+      tx.set(apptRef, {
+        'id': apptRef.id,
         'elderlyId': elderlyId,
         'caregiverId': caregiverId,
+        'title': title,
+        'description': description ?? '',
         'type': type,
-        'dateTime': dateTime.toIso8601String(),
         'isAllDay': isAllDay,
+        'start': Timestamp.fromDate(start),
         'durationMinutes': durationMinutes,
-      },
-    );
+        'status': 'scheduled',
+        'createdAt': Timestamp.fromDate(now),
+        'updatedAt': Timestamp.fromDate(now),
+      });
+
+      // 2) Mirror to /reminders/{elderEmailKey} so the caregiver dashboard can show it
+      if (elderEmailKey != null && elderEmailKey.isNotEmpty) {
+        final remRef =
+            _firestore.collection(_remindersCol).doc(elderEmailKey);
+
+        // We store each reminder as a field keyed by appointmentId
+        tx.set(
+          remRef,
+          {
+            apptRef.id: {
+              'title': title,
+              'startTime': start.toIso8601String(),
+              'duration': durationMinutes,
+              'createdAt': now.toIso8601String(),
+              'type': type,
+              'appointmentId': apptRef.id,
+              'elderlyId': elderlyId,
+              'caregiverId': caregiverId,
+              'isAllDay': isAllDay,
+            },
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      // 3) Optional: basic notification to elder (and/or caregiver)
+      // You can extend this later if you want richer flows.
+      final notifRef = _firestore.collection(_notificationsCol).doc();
+      tx.set(notifRef, {
+        'toUid': elderlyId,
+        'fromUid': caregiverId,
+        'type': 'Appointments',
+        'kind': 'created', // used in _NotificationsSection for badge
+        'title': 'New appointment',
+        'message': title,
+        'appointmentId': apptRef.id,
+        'timestamp': Timestamp.fromDate(now),
+        'read': false,
+        'priority': 'low',
+      });
+    });
   }
+
+  // ─────────────────────── Update (optional, for later) ───────────────────────
 
   Future<void> updateAppointment({
     required String appointmentId,
     required String elderlyId,
     required String caregiverId,
     required String title,
-    required String description,
+    String? description,
     required DateTime dateTime,
     required String type,
     required bool isAllDay,
-    Duration? duration,
+    required Duration duration,
   }) async {
-    await createAppointment(
-      appointmentId: appointmentId,
-      elderlyId: elderlyId,
-      caregiverId: caregiverId,
-      title: title,
-      description: description,
-      dateTime: dateTime,
-      type: type,
-      isAllDay: isAllDay,
-      duration: duration,
-    );
+    final now = DateTime.now();
+    final durationMinutes =
+        isAllDay ? const Duration(hours: 24).inMinutes : duration.inMinutes;
+    final elderEmailKey = await _emailKeyForUid(elderlyId);
+
+    await _firestore.runTransaction((tx) async {
+      final apptRef = _firestore.collection(_appointmentsCol).doc(appointmentId);
+
+      tx.update(apptRef, {
+        'elderlyId': elderlyId,
+        'caregiverId': caregiverId,
+        'title': title,
+        'description': description ?? '',
+        'type': type,
+        'isAllDay': isAllDay,
+        'start': Timestamp.fromDate(dateTime),
+        'durationMinutes': durationMinutes,
+        'status': 'scheduled',
+        'updatedAt': Timestamp.fromDate(now),
+      });
+
+      if (elderEmailKey != null && elderEmailKey.isNotEmpty) {
+        final remRef =
+            _firestore.collection(_remindersCol).doc(elderEmailKey);
+        tx.set(
+          remRef,
+          {
+            appointmentId: {
+              'title': title,
+              'startTime': dateTime.toIso8601String(),
+              'duration': durationMinutes,
+              'createdAt': now.toIso8601String(),
+              'type': type,
+              'appointmentId': appointmentId,
+              'elderlyId': elderlyId,
+              'caregiverId': caregiverId,
+              'isAllDay': isAllDay,
+            },
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      final notifRef = _firestore.collection(_notificationsCol).doc();
+      tx.set(notifRef, {
+        'toUid': elderlyId,
+        'fromUid': caregiverId,
+        'type': 'Appointments',
+        'kind': 'updated',
+        'title': 'Appointment updated',
+        'message': title,
+        'appointmentId': appointmentId,
+        'timestamp': Timestamp.fromDate(now),
+        'read': false,
+        'priority': 'low',
+      });
+    });
   }
+
+  // ─────────────────────── Delete (optional, for later) ───────────────────────
 
   Future<void> deleteAppointment({
     required String appointmentId,
     required String elderlyId,
     required String caregiverId,
   }) async {
-    final docRef = _firestore.collection(_appointmentsCol).doc(appointmentId);
-    final snap = await docRef.get();
-    if (!snap.exists) return;
+    final now = DateTime.now();
+    final elderEmailKey = await _emailKeyForUid(elderlyId);
 
-    final data = snap.data() ?? <String, dynamic>{};
-    final title = (data['title'] ?? '').toString();
-    final type = (data['type'] ?? 'appointment').toString();
-    final dateStr = (data['date'] ?? '').toString();
-    final timeStr = (data['time'] ?? '').toString();
+    await _firestore.runTransaction((tx) async {
+      final apptRef = _firestore.collection(_appointmentsCol).doc(appointmentId);
+      tx.delete(apptRef);
 
-    // Delete the appointment doc
-    await docRef.delete();
+      if (elderEmailKey != null && elderEmailKey.isNotEmpty) {
+        final remRef =
+            _firestore.collection(_remindersCol).doc(elderEmailKey);
+        tx.set(
+          remRef,
+          {
+            appointmentId: FieldValue.delete(),
+          },
+          SetOptions(merge: true),
+        );
+      }
 
-    // Remove reminders for both participants
-    final participants = <String>{elderlyId, caregiverId};
-    for (final uid in participants) {
-      await _removeReminderForUser(uid: uid, eventId: appointmentId);
-    }
-
-    // Send delete notification
-    final msg = title.isEmpty
-        ? 'An appointment was deleted ($type on $dateStr $timeStr).'
-        : 'Appointment "$title" on $dateStr $timeStr was deleted.';
-
-    await _notify(
-      toUids: participants.toList(),
-      title: 'Appointment deleted',
-      message: msg,
-      type: 'appointment_delete',
-      extra: {
+      final notifRef = _firestore.collection(_notificationsCol).doc();
+      tx.set(notifRef, {
+        'toUid': elderlyId,
+        'fromUid': caregiverId,
+        'type': 'Appointments',
+        'kind': 'deleted',
+        'title': 'Appointment cancelled',
+        'message': '',
         'appointmentId': appointmentId,
-        'elderlyId': elderlyId,
-        'caregiverId': caregiverId,
-        'type': type,
-        'date': dateStr,
-        'time': timeStr,
-      },
-    );
-  }
-
-  // ─────────────────────── Stream for bottom list ───────────────────────
-
-  /// Stream all appointments ordered by createdAt desc.
-  /// (Filter by caregiverId / elderlyId in the UI query if needed.)
-  Stream<QuerySnapshot<Map<String, dynamic>>> appointmentsStreamOrdered() {
-    return _firestore
-        .collection(_appointmentsCol)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
+        'timestamp': Timestamp.fromDate(now),
+        'read': false,
+        'priority': 'medium',
+      });
+    });
   }
 }

@@ -257,12 +257,63 @@ class CareRoutineTemplateService {
 
   /// Checks across all elderly via a collectionGroup on 'templates'.
   Future<bool> isTemplateAssigned(String templateId) async {
-    final qs = await _fs
-        .collectionGroup('templates')
-        .where('templateId', isEqualTo: templateId)
-        .limit(1)
-        .get();
-    return qs.docs.isNotEmpty;
+    final uid = _currentUid;
+    if (uid == null) {
+      throw Exception('No logged-in user.');
+    }
+
+    final acc = await _fetchAccountDocByUid(uid);
+    if (acc == null) {
+      throw Exception('User not found in Account.');
+    }
+
+    final type = (acc['userType'] as String?) ?? 'elderly';
+
+    // Collect all elderly IDs we care about (for this user)
+    final ids = <String>{};
+
+    if (type == 'elderly') {
+      // Elderly → just their own uid
+      final me = (acc['uid']?.toString().trim().isNotEmpty == true)
+          ? acc['uid'].toString().trim()
+          : uid;
+      ids.add(me);
+    } else {
+      // Caregiver → all linked elderly IDs
+      void addList(dynamic v) {
+        if (v is List) {
+          for (final e in v) {
+            final s = e?.toString().trim();
+            if (s != null && s.isNotEmpty) ids.add(s);
+          }
+        }
+      }
+
+      addList(acc['elderlyIds']);
+      final single = (acc['elderlyId'] as String?)?.trim();
+      if (single != null && single.isNotEmpty) ids.add(single);
+    }
+
+    if (ids.isEmpty) {
+      // No elderly linked – nothing can be assigned
+      return false;
+    }
+
+    // For each elderly, check if doc AssignedRoutines/{elderlyUid}/templates/{templateId} exists
+    for (final elderlyUid in ids) {
+      final doc = await _fs
+          .collection(_assigned)
+          .doc(elderlyUid)
+          .collection('templates')
+          .doc(templateId)
+          .get();
+
+      if (doc.exists) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   // ---------- utils ----------

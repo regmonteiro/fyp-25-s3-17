@@ -15,7 +15,7 @@ String emailKeyFrom(String email) {
   final lower = email.trim().toLowerCase();
   final at = lower.indexOf('@');
   if (at < 0) return lower.replaceAll('.', '_');
-  final local  = lower.substring(0, at);
+  final local = lower.substring(0, at);
   final domain = lower.substring(at + 1).replaceAll('.', '_');
   return '$local@$domain';
 }
@@ -31,6 +31,9 @@ class _PaymentPageState extends State<PaymentPage> {
   SubscriptionPlan _selectedPlan = SubscriptionPlan.none;
   bool _isProcessingPayment = false;
   bool _addCaregiver = false;
+
+  int _existingCaregiverCount = 0;
+  bool _loadingCaregiverCount = true;
 
   // Controllers for the simulated card details
   final _cardNumberController = TextEditingController();
@@ -48,6 +51,66 @@ class _PaymentPageState extends State<PaymentPage> {
 
   // Form key for additional caregiver details
   final _caregiverFormKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadExistingCaregiverCount();
+  }
+
+  Future<void> _loadExistingCaregiverCount() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        setState(() {
+          _existingCaregiverCount = 0;
+          _loadingCaregiverCount = false;
+        });
+        return;
+      }
+
+      final coll = FirebaseFirestore.instance.collection('Account');
+
+      // Prefer uid doc, fall back to emailKey if needed
+      final uidDocFuture = coll.doc(user.uid).get();
+      final email = (user.email ?? '').trim().toLowerCase();
+      final emailKey = emailKeyFrom(email);
+      final emailDocFuture = coll.doc(emailKey).get();
+
+      final uidDoc = await uidDocFuture;
+      final emailDoc = await emailDocFuture;
+
+      String accountDocId;
+      if (uidDoc.exists) {
+        accountDocId = user.uid;
+      } else if (emailDoc.exists) {
+        accountDocId = emailKey;
+      } else {
+        // No account doc yet
+        setState(() {
+          _existingCaregiverCount = 0;
+          _loadingCaregiverCount = false;
+        });
+        return;
+      }
+
+      // Count caregivers in the subcollection
+      final cgSnap =
+          await coll.doc(accountDocId).collection('caregivers').get();
+      setState(() {
+        _existingCaregiverCount = cgSnap.docs.length;
+        _loadingCaregiverCount = false;
+      });
+    } catch (_) {
+      // On error, just treat as 0; UI can still work
+      if (mounted) {
+        setState(() {
+          _existingCaregiverCount = 0;
+          _loadingCaregiverCount = false;
+        });
+      }
+    }
+  }
 
   Future<void> _handleSubscriptionSuccess({
     required SubscriptionPlan plan,
@@ -69,10 +132,10 @@ class _PaymentPageState extends State<PaymentPage> {
       final coll = FirebaseFirestore.instance.collection('Account');
 
       // Fetch both docs: by uid and by emailKey
-      final uidDocFuture   = coll.doc(user.uid).get();
+      final uidDocFuture = coll.doc(user.uid).get();
       final emailDocFuture = coll.doc(emailKey).get();
 
-      final uidDoc   = await uidDocFuture;
+      final uidDoc = await uidDocFuture;
       final emailDoc = await emailDocFuture;
 
       Map<String, dynamic>? userProfileData;
@@ -127,14 +190,13 @@ class _PaymentPageState extends State<PaymentPage> {
 
       // Save additional caregiver details if provided (under uid doc)
       if (_addCaregiver) {
-        await coll
-            .doc(user.uid)
-            .collection('caregivers')
-            .add({
+        await coll.doc(user.uid).collection('caregivers').add({
           'name': _caregiverNameController.text.trim(),
           'email': _caregiverEmailController.text.trim(),
           'phone': _caregiverPhoneController.text.trim(),
           'linkedAt': DateTime.now(),
+          // You can also store pricing flags if you want:
+          // 'isFreeFirstCaregiver': _existingCaregiverCount == 0,
         });
       }
 
@@ -159,7 +221,8 @@ class _PaymentPageState extends State<PaymentPage> {
         final userProfile = UserProfile.fromMap(mergedProfileData, user.uid);
 
         // Decide where to go based on userType
-        final role = (mergedProfileData['userType'] as String? ?? '').trim().toLowerCase();
+        final role =
+            (mergedProfileData['userType'] as String? ?? '').trim().toLowerCase();
 
         Widget next;
         if (role == 'caregiver') {
@@ -242,7 +305,10 @@ class _PaymentPageState extends State<PaymentPage> {
 
     try {
       await Future.delayed(const Duration(seconds: 1)); // Simulate a short delay
-      await _handleSubscriptionSuccess(plan: SubscriptionPlan.none, isTrial: true);
+      await _handleSubscriptionSuccess(
+        plan: SubscriptionPlan.none,
+        isTrial: true,
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -313,6 +379,11 @@ class _PaymentPageState extends State<PaymentPage> {
 
   @override
   Widget build(BuildContext context) {
+    // Label for caregiver checkbox based on whether user already has caregivers
+    final caregiverLabel = _existingCaregiverCount == 0
+        ? "Add first caregiver (included in your plan)"
+        : "Add additional caregiver (+\$25/month)";
+
     return Scaffold(
       appBar: AppBar(
         title: const Text("Subscription"),
@@ -366,22 +437,28 @@ class _PaymentPageState extends State<PaymentPage> {
                       children: [
                         TextFormField(
                           controller: _cardNameController,
-                          decoration: const InputDecoration(labelText: "Cardholder Name"),
-                          validator: (val) => val == null || val.isEmpty ? "Required" : null,
+                          decoration:
+                              const InputDecoration(labelText: "Cardholder Name"),
+                          validator: (val) =>
+                              val == null || val.isEmpty ? "Required" : null,
                         ),
                         TextFormField(
                           controller: _cardNumberController,
-                          decoration: const InputDecoration(labelText: "Card Number"),
+                          decoration:
+                              const InputDecoration(labelText: "Card Number"),
                           keyboardType: TextInputType.number,
                           validator: (val) =>
-                              val == null || val.length != 16 ? "Must be 16 digits" : null,
+                              val == null || val.length != 16
+                                  ? "Must be 16 digits"
+                                  : null,
                         ),
                         Row(
                           children: [
                             Expanded(
                               child: TextFormField(
                                 controller: _expiryDateController,
-                                decoration: const InputDecoration(labelText: "MM/YY"),
+                                decoration:
+                                    const InputDecoration(labelText: "MM/YY"),
                                 validator: (val) =>
                                     val == null || val.isEmpty ? "Required" : null,
                               ),
@@ -390,11 +467,14 @@ class _PaymentPageState extends State<PaymentPage> {
                             Expanded(
                               child: TextFormField(
                                 controller: _cvcController,
-                                decoration: const InputDecoration(labelText: "CVC"),
+                                decoration:
+                                    const InputDecoration(labelText: "CVC"),
                                 keyboardType: TextInputType.number,
                                 obscureText: true,
                                 validator: (val) =>
-                                    val == null || val.length != 3 ? "Must be 3 digits" : null,
+                                    val == null || val.length != 3
+                                        ? "Must be 3 digits"
+                                        : null,
                               ),
                             ),
                           ],
@@ -410,16 +490,20 @@ class _PaymentPageState extends State<PaymentPage> {
                     children: [
                       Checkbox(
                         value: _addCaregiver,
-                        onChanged: (val) {
-                          setState(() {
-                            _addCaregiver = val ?? false;
-                          });
-                        },
+                        onChanged: _loadingCaregiverCount
+                            ? null
+                            : (val) {
+                                setState(() {
+                                  _addCaregiver = val ?? false;
+                                });
+                              },
                       ),
-                      const Expanded(
+                      Expanded(
                         child: Text(
-                          "Add additional caregiver (+\$25/month)",
-                          style: TextStyle(fontSize: 16),
+                          _loadingCaregiverCount
+                              ? "Loading caregiver options..."
+                              : caregiverLabel,
+                          style: const TextStyle(fontSize: 16),
                         ),
                       ),
                     ],
@@ -434,17 +518,22 @@ class _PaymentPageState extends State<PaymentPage> {
                           const SizedBox(height: 10),
                           TextFormField(
                             controller: _caregiverNameController,
-                            decoration:
-                                const InputDecoration(labelText: "Caregiver's Name"),
-                            validator: (val) => val == null || val.isEmpty ? "Required" : null,
+                            decoration: const InputDecoration(
+                              labelText: "Caregiver's Name",
+                            ),
+                            validator: (val) =>
+                                val == null || val.isEmpty ? "Required" : null,
                           ),
                           TextFormField(
                             controller: _caregiverEmailController,
-                            decoration:
-                                const InputDecoration(labelText: "Caregiver's Email"),
+                            decoration: const InputDecoration(
+                              labelText: "Caregiver's Email",
+                            ),
                             keyboardType: TextInputType.emailAddress,
                             validator: (val) =>
-                                val == null || val.isEmpty || !val.contains("@")
+                                val == null ||
+                                        val.isEmpty ||
+                                        !val.contains("@")
                                     ? "Valid email required"
                                     : null,
                           ),
@@ -454,7 +543,8 @@ class _PaymentPageState extends State<PaymentPage> {
                               labelText: "Caregiver's Phone Number",
                             ),
                             keyboardType: TextInputType.phone,
-                            validator: (val) => val == null || val.isEmpty ? "Required" : null,
+                            validator: (val) =>
+                                val == null || val.isEmpty ? "Required" : null,
                           ),
                         ],
                       ),
