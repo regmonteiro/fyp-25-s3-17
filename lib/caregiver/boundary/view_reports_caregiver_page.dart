@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../controller/view_reports_caregiver_controller.dart';
+import '../../assistant_chat.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 const _pieColors = <Color>[
   Color(0xFF4ECDC4),
@@ -205,12 +207,38 @@ class _ViewReportsCaregiverPageState extends State<ViewReportsCaregiverPage> {
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        heroTag: 'caregiverReportsFab',
-        onPressed: () async => _controller.exportReportsAsPdf(active),
-        icon: const Icon(Icons.picture_as_pdf),
-        label: const Text('Export PDF'),
-      ),
+      floatingActionButton: Column(
+  mainAxisSize: MainAxisSize.min,
+  crossAxisAlignment: CrossAxisAlignment.end,
+  children: [
+    // ─── AI Assistant FAB ───
+    FloatingActionButton(
+      heroTag: 'assistant_reports_fab', // unique hero tag
+      backgroundColor: Colors.deepPurple,
+      onPressed: () {
+        final email =
+            FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AssistantChat(userEmail: email),
+          ),
+        );
+      },
+      child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+    ),
+
+    const SizedBox(height: 12),
+
+    // ─── Existing Export PDF FAB ───
+    FloatingActionButton.extended(
+      heroTag: 'caregiverReportsFab',
+      onPressed: () async => _controller.exportReportsAsPdf(active),
+      icon: const Icon(Icons.picture_as_pdf),
+      label: const Text('Export PDF'),
+    ),
+  ],
+),
     );
   }
 }

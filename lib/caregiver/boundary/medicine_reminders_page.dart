@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../../services/medicine_reminder_service.dart';
 import '../../models/user_profile.dart';
+import '../../assistant_chat.dart';
+
 
 class CreateMedicationReminderPage extends StatefulWidget {
   final UserProfile userProfile;
@@ -230,33 +232,60 @@ class _CreateMedicationReminderPageState extends State<CreateMedicationReminderP
       return Scaffold(body: Center(child: Text(_error!)));
     }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Create Medication Reminder')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ListView(
-          children: [
-            // Elderly selector for caregivers (hidden for elderly)
-            if (_elderlyChoices.length > 1) ...[
-              const Text('Select Elderly', style: TextStyle(fontWeight: FontWeight.w600)),
-              const SizedBox(height: 8),
-              DropdownButtonFormField<String>(
-                value: _selectedElderlyUid,
-                items: _elderlyChoices.map((e) {
-                  final name = '${e['firstname'] ?? ''} ${e['lastname'] ?? ''}'.trim();
-                  return DropdownMenuItem(
-                    value: e['uid'],
-                    child: Text(name.isEmpty ? (e['email'] ?? e['uid']!) : name),
-                  );
-                }).toList(),
-                onChanged: (v) {
-                  setState(() => _selectedElderlyUid = v);
-                  _attachStream();
-                },
-                decoration: const InputDecoration(border: OutlineInputBorder()),
-              ),
-              const SizedBox(height: 16),
-            ],
+    final isCaregiver =
+      (widget.userProfile.userType ?? '').toLowerCase() == 'caregiver';
+
+return Scaffold(
+    appBar: AppBar(title: const Text('Create Medication Reminder')),
+
+    floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+    floatingActionButton: FloatingActionButton(
+      heroTag: 'assistant_medrem_fab',
+      backgroundColor: Colors.deepPurple,
+      onPressed: () {
+        final email =
+            FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => AssistantChat(userEmail: email),
+          ),
+        );
+      },
+      child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+    ),
+  body: Padding(
+      padding: const EdgeInsets.all(16),
+      child: ListView(
+        children: [
+          // 🔹 Elderly selector: show for *any* caregiver with choices
+          if (isCaregiver && _elderlyChoices.isNotEmpty) ...[
+            const Text(
+              'Select Elderly',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: _selectedElderlyUid,
+              items: _elderlyChoices.map((e) {
+                final name =
+                    '${e['firstname'] ?? ''} ${e['lastname'] ?? ''}'.trim();
+                return DropdownMenuItem(
+                  value: e['uid'],
+                  child: Text(
+                    name.isEmpty ? (e['email'] ?? e['uid']!) : name,
+                  ),
+                );
+              }).toList(),
+              onChanged: (v) {
+                setState(() => _selectedElderlyUid = v);
+                _attachStream();
+              },
+              decoration:
+                  const InputDecoration(border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 16),
+          ],
 
             Card(
               elevation: 2,

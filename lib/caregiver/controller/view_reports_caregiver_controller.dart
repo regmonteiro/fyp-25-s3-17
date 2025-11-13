@@ -263,55 +263,86 @@ class ViewReportsCaregiverController {
     return ElderlyReportBundle(elderly: elderly, reports: reports, alerts: alerts);
   }
 
-  /// Fetch only the elderly linked to this caregiver (from Account/{caregiverKey}.elderlyIds)
+  /// Fetch only the elderly linked to this caregiver (from Account/{caregiverKey}.elderlyIds
   Future<List<ElderlySummary>> fetchLinkedElderlies(String caregiverEmail) async {
-    try {
-      final db = FirebaseFirestore.instance;
-      final caregiverKey = emailKeyFrom(caregiverEmail);
-      final caregiverDoc = await db.collection('Account').doc(caregiverKey).get();
+  try {
+    final db = FirebaseFirestore.instance;
+    final caregiverKey = emailKeyFrom(caregiverEmail);
 
-      if (!caregiverDoc.exists) throw Exception('Caregiver not found');
+    // 1. Load caregiver profile
+    final caregiverDoc = await db.collection('Account').doc(caregiverKey).get();
+    if (!caregiverDoc.exists) {
+      throw Exception('Caregiver not found');
+    }
 
-      final data = caregiverDoc.data() ?? {};
-      final linkedIds = List<String>.from(data['elderlyIds'] ?? []);
+    final data = caregiverDoc.data() ?? {};
 
-      if (linkedIds.isEmpty) {
-        throw Exception('No elderly linked to this caregiver.');
+    // Support both elderlyIds (array) and legacy elderlyId (single)
+    final linkedIds = <String>[
+      ...List<String>.from(data['elderlyIds'] ?? const []),
+      if (data['elderlyId'] is String && (data['elderlyId'] as String).trim().isNotEmpty)
+        (data['elderlyId'] as String).trim(),
+    ];
+
+    if (linkedIds.isEmpty) {
+      throw Exception('No elderly linked to this caregiver.');
+    }
+
+    // 2. For each linked ID:
+    //    - treat it as a UID -> lookup AccountByUid/{uid}.emailKey
+    //    - fallback: if it's an email, convert to emailKey
+    //    - fallback: use it directly as docId in Account
+    final results = await Future.wait(linkedIds.map((id) async {
+      String? emailKey;
+
+      // Try AccountByUid first (most likely case since your elderlyIds are UIDs)
+      try {
+        final byUid = await db.collection('AccountByUid').doc(id).get();
+        if (byUid.exists) {
+          emailKey = (byUid.data()?['emailKey'] as String?)?.trim();
+        }
+      } catch (_) {
+        // ignore & fallback
       }
 
-      // Fetch each elderly account by ID or email key
-      final results = await Future.wait(linkedIds.map((id) async {
-        // If it's an email, convert to key; otherwise assume it's a key/UID docId
-        final docId = id.contains('@') ? emailKeyFrom(id) : id.toLowerCase();
-        final doc = await db.collection('Account').doc(docId).get();
-        if (!doc.exists) return null;
+      // Fallback: if value looks like an email
+      emailKey ??= id.contains('@') ? emailKeyFrom(id) : null;
 
-        final d = doc.data()!;
-        final name = [
-          (d['firstname'] ?? '').toString().trim(),
-          (d['lastname'] ?? '').toString().trim()
-        ].where((s) => s.isNotEmpty).join(' ');
-        final display = name.isNotEmpty ? name : (d['displayName'] ?? 'elderly').toString();
+      // Final fallback: use the id directly
+      emailKey ??= id;
 
-        return ElderlySummary(
-          id: doc.id,
-          identifier: d['email']?.toString().trim().isNotEmpty == true
-              ? d['email'].toString()
-              : (d['uid']?.toString() ?? doc.id),
-          name: display,
-          age: _calculateAge(d['dob']),
-          email: (d['email'] ?? '').toString(),
-          uid: (d['uid'] ?? '').toString(),
-        );
-      }));
+      final doc = await db.collection('Account').doc(emailKey).get();
+      if (!doc.exists) return null;
 
-      return results.whereType<ElderlySummary>().toList();
-    } catch (e) {
-      // ignore: avoid_print
-      print('Error fetching linked elderly: $e');
-      rethrow;
-    }
+      final d = doc.data()!;
+      final name = [
+        (d['firstname'] ?? '').toString().trim(),
+        (d['lastname'] ?? '').toString().trim(),
+      ].where((s) => s.isNotEmpty).join(' ');
+
+      final display = name.isNotEmpty
+          ? name
+          : (d['displayName'] ?? 'elderly').toString();
+
+      return ElderlySummary(
+        id: doc.id,
+        identifier: d['email']?.toString().trim().isNotEmpty == true
+            ? d['email'].toString()
+            : (d['uid']?.toString() ?? doc.id),
+        name: display,
+        age: _calculateAge(d['dob']),
+        email: (d['email'] ?? '').toString(),
+        uid: (d['uid'] ?? '').toString(),
+      );
+    }));
+
+    return results.whereType<ElderlySummary>().toList();
+  } catch (e) {
+    // ignore: avoid_print
+    print('Error fetching linked elderly: $e');
+    rethrow;
   }
+}
 
   Future<void> exportReportsAsPdf(ElderlyReportBundle bundle) async {
     final doc = pw.Document();

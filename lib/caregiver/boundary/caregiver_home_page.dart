@@ -32,6 +32,7 @@ import 'view_reports_caregiver_page.dart';
 
 
 
+
 Stream<List<DocumentSnapshot<Map<String, dynamic>>>> _streamElderlyId(
   List<String> uids,
 ) {
@@ -518,7 +519,6 @@ Widget _buildCommunicateRow(BuildContext context) {
 
                   _NotificationsSection(
                     notifications: vm.notifications,
-                    
                     onMarkRead: _c.markNotificationRead,
                     onMarkAll: () => _c.markAllNotificationsRead(
                       vm.notifications
@@ -555,23 +555,49 @@ Widget _buildCommunicateRow(BuildContext context) {
               ],
             ),
           ),
-          floatingActionButton: (_selectedElderlyId != null)
-              ? FloatingActionButton.extended(
-                  onPressed: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => CreateMedicationReminderPage(
-                          userProfile: widget.userProfile,
-                          elderlyId: _selectedElderlyId,
-                        ),
+                  floatingActionButton: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            // ───── AI Assistant FAB (always visible) ─────
+            FloatingActionButton(
+              heroTag: 'assistant_caregiver_fab',
+              backgroundColor: Colors.deepPurple,
+              onPressed: () {
+                final email =
+                    FirebaseAuth.instance.currentUser?.email ?? 'guest@allcare.ai';
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => AssistantChat(userEmail: email),
+                  ),
+                );
+              },
+              child: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+            ),
+
+            const SizedBox(height: 12),
+
+            // ───── Create Event FAB (only when an elder is selected) ─────
+            if (_selectedElderlyId != null)
+              FloatingActionButton.extended(
+                heroTag: 'caregiver_create_event_fab',
+                onPressed: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => CreateMedicationReminderPage(
+                        userProfile: widget.userProfile,
+                        elderlyId: _selectedElderlyId,
                       ),
-                    );
-                  },
-                  icon: const Icon(Icons.add),
-                  label: const Text('Create Event'),
-                )
-              : null,
+                    ),
+                  );
+                },
+                icon: const Icon(Icons.add),
+                label: const Text('Create Event'),
+              ),
+          ],
+        ),
         );
       },
     );

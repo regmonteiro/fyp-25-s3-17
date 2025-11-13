@@ -182,23 +182,59 @@ class MedicineRemindersService {
     return ids;
   }
 
-  /// Fetch basic display info for a list of elderly UIDs
-  /// We map UID -> AccountByUid[uid] => emailKey => Account[emailKey] (firstname, lastname, email)
   Future<List<Map<String, String>>> elderlyBasicInfo(List<String> uids) async {
     final List<Map<String, String>> out = [];
-    for (final uid in uids) {
-      final byUid = await _db.collection('AccountByUid').doc(uid).get();
-      final ek = (byUid.data()?['emailKey'] as String?)?.trim();
-      if (ek == null || ek.isEmpty) continue;
-      final acct = await _db.collection('Account').doc(ek).get();
-      final m = acct.data() ?? {};
-      out.add({
-        'uid': uid,
-        'firstname': (m['firstname'] ?? '').toString(),
-        'lastname': (m['lastname'] ?? '').toString(),
-        'email': (m['email'] ?? '').toString(),
-      });
+
+    for (final raw in uids) {
+      final uid = raw.trim();
+      if (uid.isEmpty) continue;
+
+      try {
+        DocumentSnapshot<Map<String, dynamic>>? acct;
+        String? resolvedUid = uid;
+
+        // 1) Try mapping via AccountByUid/{uid}
+        final byUid =
+            await _db.collection('AccountByUid').doc(uid).get();
+        final ek = (byUid.data()?['emailKey'] as String?)?.trim();
+
+        if (ek != null && ek.isNotEmpty) {
+          // 2) Fetch Account using emailKey
+          acct = await _db.collection('Account').doc(ek).get();
+        } else {
+          // 3) Fallback: search Account where uid == this uid
+          final q = await _db
+              .collection('Account')
+              .where('uid', isEqualTo: uid)
+              .limit(1)
+              .get();
+          if (q.docs.isNotEmpty) {
+            acct = q.docs.first;
+            resolvedUid = (acct.data()?['uid'] ?? uid).toString();
+          }
+        }
+
+        if (acct == null || !acct.exists) {
+          continue;
+        }
+
+        final m = acct.data() ?? {};
+        final first = (m['firstname'] ?? '').toString().trim();
+        final last  = (m['lastname']  ?? '').toString().trim();
+        final email = (m['email']     ?? '').toString().trim();
+
+        out.add({
+          'uid'      : resolvedUid,
+          'firstname': first,
+          'lastname' : last,
+          'email'    : email,
+        });
+      } catch (e) {
+        continue;
+      }
     }
+
     return out;
   }
+
 }
