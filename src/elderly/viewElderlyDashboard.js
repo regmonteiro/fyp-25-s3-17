@@ -1237,8 +1237,8 @@ export default function ViewElderlyDashboard() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: "15px",
-            marginBottom: "20px"
+            gap: "35px",
+            marginBottom: "20px",
           }}
         >
           <div
@@ -1483,6 +1483,8 @@ export default function ViewElderlyDashboard() {
         <p style={{ color: colorPalette.foregrounds.slate, margin: 0 }}>
           Your personalized care dashboard
         </p>
+         
+        
 
         {caregivers.length > 0 && (
           <div style={{ marginTop: "10px" }}>
@@ -1519,12 +1521,36 @@ export default function ViewElderlyDashboard() {
           >
             <UserCheck size={24} color={colorPalette.accents.primary} />
             Your Caregivers
+            <Link to="/elderly/additionalCaregiver" style={{ textDecoration: 'none' }}>
+  <button style={{
+    background: "#3962cbff",
+    color: "white",
+    border: "none",
+    padding: "10px 20px",
+    borderRadius: "25px",
+    fontSize: "14px",
+    fontWeight: "500",
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    transition: "all 0.3s ease",
+    marginLeft: "150px"
+  }}>
+    <UserCheck size={16} />
+    Add Caregiver
+  </button>
+</Link><br/><br/>
           </h2>
+           
+          
           <div
             style={{
               display: "grid",
               gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
-              gap: "20px"
+              gap: "65px",
+              maxHeight: caregivers.length > 3 ? "calc(2 * 1fr + 30px)" : "auto",
+              overflow: caregivers.length > 3 ? "hidden" : "visible"
             }}
           >
             {caregivers.map((caregiver, index) => (
