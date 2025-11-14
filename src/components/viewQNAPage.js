@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import "./viewQNAPage.css";
-
+import Footer from '../footer';
 const qnaList = [
   {
     id: 1,
@@ -12,7 +12,7 @@ const qnaList = [
   {
     id: 2,
     question: "How AllCare Platform work?",
-    answer: "How it works?"
+    answer: "The platform uses AI to learn your preferences and habits, providing personalized suggestions and reminders to enhance your daily life."
   },
   {
     id: 3,
@@ -28,6 +28,16 @@ const qnaList = [
     id: 5,
     question: "Can I connect with other users?",
     answer: "You can share experiences, find local social activities, and join community chats designed for older adults."
+  },
+  {
+    id: 6,
+    question: "What are the available membership plans?",
+    answer: "We offer Free trial, Monthly Care, Annual Wellness and 3-Year plans, each with different features and benefits."
+  },
+  {
+    id: 7,
+    question: "How much you need to pay for additional caregivers?",
+    answer: "Each additional caregiver costs $25 per month."
   }
 ];
 
@@ -39,6 +49,7 @@ function ViewQNAPage() {
   };
 
   return (
+    <div>
     <div className="qna-page">
       <h1>Frequently Asked Questions (QNA)</h1>
       <p>Find answers to common questions about the AllCare platform.</p>
@@ -62,6 +73,8 @@ function ViewQNAPage() {
           </div>
         ))}
       </div>
+    </div>
+      <Footer />  
     </div>
   );
 }
