@@ -1,4 +1,7 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> dc2a12f3851555562b3a4c62aece96e6277fc83c
 # elderly_aiassistant
 
 A new Flutter project.
@@ -15,6 +18,7 @@ A few resources to get you started if this is your first Flutter project:
 For help getting started with Flutter development, view the
 [online documentation](https://docs.flutter.dev/), which offers tutorials,
 samples, guidance on mobile development, and a full API reference.
+<<<<<<< HEAD
 =======
 # Getting Started with Create React App
 
@@ -87,3 +91,5 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
 >>>>>>> 24e7672 (Initial commit to AllCareWebsite branch)
+=======
+>>>>>>> dc2a12f3851555562b3a4c62aece96e6277fc83c
