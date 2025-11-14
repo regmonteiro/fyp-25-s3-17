@@ -1,23 +1,154 @@
 const functions = require("firebase-functions");
 const admin = require("firebase-admin");
 const { getDatabase } = require("firebase-admin/database");
+const { getFirestore } = require("firebase-admin/firestore"); // Add Firestore
 const { onRequest } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
+const { onValueWritten } = require('firebase-functions/v2/database');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
+
 const { setGlobalOptions } = require("firebase-functions/v2");
+
+// Track recent syncs to prevent loops
+const recentSyncs = new Set();
+const SYNC_TIMEOUT = 5000; // 5 seconds
 
 // Set global options for all functions
 setGlobalOptions({
   timeoutSeconds: 60,
   memory: "256MiB",
-  region: "us-central1",
+  region: "asia-southeast1", // Make sure this is asia-southeast1
 });
-// ✅ Initialize Firebase Admin
+
+// âœ… Initialize Firebase Admin with both databases
 if (!admin.apps.length) admin.initializeApp();
-const rtdb = getDatabase();
+
+// Initialize both databases
+const rtdb = getDatabase(); // Realtime Database
+const firestore = getFirestore(); // Firestore Database
+
 const VERSION = "1.0.7";
 
 /* ---------------------------------------------------
- 🔧 Helper Functions
+ ðŸ”„ Hybrid Data Fetching Functions
+--------------------------------------------------- */
+
+// Enhanced getUserData that tries both databases
+async function getUserDataHybrid(userId, intent = { type: 'both', dateQuery: 'upcoming' }) {
+  const start = Date.now();
+  
+  if (!validateEmail(userId)) return null;
+
+  let userData = null;
+  let dataSource = 'unknown';
+
+  // Try Firestore first
+  try {
+    userData = await getUserDataFromFirestore(userId);
+    if (userData) {
+      dataSource = 'firestore';
+      console.log(`âœ… Found user data in Firestore for: ${userId}`);
+    }
+  } catch (firestoreError) {
+    console.log('Firestore user lookup failed, trying Realtime Database...');
+  }
+
+  // If Firestore fails, try Realtime Database
+  if (!userData) {
+    userData = await getUserData(userId, intent); // Your existing RTDB function
+    if (userData) {
+      dataSource = 'realtime-db';
+      console.log(`âœ… Found user data in Realtime Database for: ${userId}`);
+    }
+  }
+
+  if (!userData) {
+    console.log(`âŒ User not found in either database: ${userId}`);
+    return null;
+  }
+
+  const userInfo = extractUserInfo(userData);
+  const { uid, email } = userInfo;
+
+  if (intent.type === 'user_info' || intent.type === 'caregiver_info' || 
+      intent.type === 'learning_resources' || intent.type === 'routines') {
+    return { 
+      userInfo, 
+      appointments: [],
+      consultations: [],
+      intent,
+      dataSource,
+      timestamp: new Date().toISOString() 
+    };
+  }
+
+  let appointments = [];
+  let consultations = [];
+
+  // Try to get appointments from both databases
+  if (intent.type === 'appointments' || intent.type === 'both') {
+    try {
+      // Try Firestore first
+      appointments = await getAppointmentsFromFirestore(userId, intent.dateQuery);
+      if (appointments.length > 0) {
+        console.log(`âœ… Found ${appointments.length} appointments in Firestore`);
+      } else {
+        // Fall back to Realtime Database
+        appointments = await getAppointmentsFromRTDB(userId, intent); // You'll need to create this from your existing code
+      }
+    } catch (error) {
+      console.error('Error getting appointments from both databases:', error);
+      appointments = await getAppointmentsFromRTDB(userId, intent);
+    }
+  }
+
+  // Similar approach for consultations, medications, etc.
+
+  return { 
+    userInfo, 
+    appointments, 
+    consultations,
+    intent,
+    dataSource,
+    timestamp: new Date().toISOString() 
+  };
+}
+
+// Helper function to extract appointments from RTDB (from your existing code)
+async function getAppointmentsFromRTDB(userId, intent) {
+  // Extract the appointment logic from your existing getUserData function
+  const appointmentsSnap = await rtdb.ref("Appointments").get();
+  if (!appointmentsSnap.exists()) {
+    return [];
+  }
+
+  const allAppointments = appointmentsSnap.val();
+  const appointmentList = Object.keys(allAppointments).map(key => ({
+    id: key,
+    type: 'appointment',
+    ...allAppointments[key]
+  }));
+
+  const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+  if (!userData) return [];
+
+  const identifiers = [userData.userInfo.uid, userData.userInfo.email];
+  const matchedAppointments = appointmentList.filter((appt) => {
+    if (!appt || typeof appt !== "object") return false;
+
+    const matches = 
+      matchesAnyIdentifier(appt.elderlyId, identifiers) ||
+      matchesAnyIdentifier(appt.elderlyIds, identifiers) ||
+      matchesAnyIdentifier(appt.assignedTo, identifiers);
+
+    return matches;
+  });
+
+  return filterItemsByDate(matchedAppointments, intent.dateQuery, 'date');
+}
+
+/* ---------------------------------------------------
+ ðŸ”§ Helper Functions
 --------------------------------------------------- */
 const normalizeEmailForFirebase = (email) =>
   email?.toLowerCase().replace(/\./g, "_") || "";
@@ -204,13 +335,12 @@ function parseUserIntent(message) {
     return { type: 'caregiver_elderly_appointments', dateQuery: 'upcoming' };
   }
 
-  // SPECIFIC "ALL APPOINTMENTS" HANDLERS
-  if (lowerMessage.includes('elderly all appointments') ||
-      lowerMessage.includes('all elderly appointments') ||
-      lowerMessage.includes('my elderly all appointments')) {
-    return { type: 'caregiver_elderly_appointments', dateQuery: 'all' };
-  }
-  
+  // In parseUserIntent function, update this section:
+if (lowerMessage.includes('elderly all appointments') ||
+    lowerMessage.includes('all elderly appointments') ||
+    lowerMessage.includes('my elderly all appointments')) {
+  return { type: 'caregiver_elderly_appointments', dateQuery: 'all' };
+}
 // In the parseUserIntent function, update the caregiver consultation section:
 if (lowerMessage.includes('my consultations') || 
     lowerMessage.includes('my consultation') ||
@@ -346,7 +476,61 @@ if (lowerMessage.includes('register for activity') ||
   return { type: 'activity_registration', dateQuery: parseDateQuery(message) };
 }
   
-  
+  // HEALTH RECOMMENDATIONS INTENTS - ADD THESE
+  if (lowerMessage.includes('health recommendation') ||
+      lowerMessage.includes('health advice') ||
+      lowerMessage.includes('wellness recommendation') ||
+      lowerMessage.includes('what should i do for my health') ||
+      lowerMessage.includes('health suggestion') ||
+      lowerMessage.includes('give me health tips') ||
+      lowerMessage.includes('health tips for me')) {
+    return { type: 'health_recommendations' };
+  }
+
+  if (lowerMessage.includes('health tip') ||
+      lowerMessage.includes('wellness tip') ||
+      lowerMessage.includes('fitness tip') ||
+      lowerMessage.includes('nutrition tip') ||
+      lowerMessage.includes('exercise tip') ||
+      lowerMessage.includes('mental health tip') ||
+      lowerMessage.includes('diet tip') ||
+      lowerMessage.includes('eating tip')) {
+    
+    // Determine category from message
+    let category = 'general';
+    if (lowerMessage.includes('exercise') || lowerMessage.includes('fitness')) category = 'exercise';
+    if (lowerMessage.includes('nutrition') || lowerMessage.includes('diet') || lowerMessage.includes('eating')) category = 'nutrition';
+    if (lowerMessage.includes('mental') || lowerMessage.includes('stress')) category = 'mental_health';
+    if (lowerMessage.includes('medication')) category = 'medication';
+    
+    return { type: 'health_tips', category: category };
+  }
+
+  // SPECIFIC NUTRITION REQUESTS
+  if (lowerMessage.includes('what should i eat') ||
+      lowerMessage.includes('healthy food') ||
+      lowerMessage.includes('eating healthy') ||
+      lowerMessage.includes('nutrition advice') ||
+      lowerMessage.includes('diet advice')) {
+    return { type: 'health_tips', category: 'nutrition' };
+  }
+
+  // EXERCISE SPECIFIC REQUESTS
+  if (lowerMessage.includes('exercise advice') ||
+      lowerMessage.includes('workout tip') ||
+      lowerMessage.includes('physical activity') ||
+      lowerMessage.includes('how to exercise')) {
+    return { type: 'health_tips', category: 'exercise' };
+  }
+
+  // MENTAL HEALTH SPECIFIC REQUESTS
+  if (lowerMessage.includes('mental health advice') ||
+      lowerMessage.includes('reduce stress') ||
+      lowerMessage.includes('feel better') ||
+      lowerMessage.includes('anxiety tips')) {
+    return { type: 'health_tips', category: 'mental_health' };
+  }
+
   // LEARNING RESOURCES - FIXED SECTION
   const learningKeywords = [
     'learning resource', 'education material', 'study guide', 'learn about',
@@ -538,7 +722,7 @@ function formatDisplayDate(dateStr) {
     
     // Check if date is valid
     if (isNaN(date.getTime())) {
-      console.log(`❌ Invalid date: ${dateStr}`);
+      console.log(`âŒ Invalid date: ${dateStr}`);
       return 'Unknown date';
     }
     
@@ -549,7 +733,7 @@ function formatDisplayDate(dateStr) {
       day: 'numeric' 
     });
   } catch (error) {
-    console.error(`❌ Error formatting date: ${dateStr}`, error);
+    console.error(`âŒ Error formatting date: ${dateStr}`, error);
     return 'Unknown date';
   }
 }
@@ -609,7 +793,7 @@ function calculateAge(birthDate) {
 }
 
 /* ---------------------------------------------------
- 👤 Extract User Info
+ ðŸ‘¤ Extract User Info
 --------------------------------------------------- */
 function extractUserInfo(userData) {
   if (!userData) return { 
@@ -676,7 +860,7 @@ function extractUserInfo(userData) {
 }
 
 /* ---------------------------------------------------
- 📅 COMPREHENSIVE SCHEDULE FUNCTIONS
+ ðŸ“… COMPREHENSIVE SCHEDULE FUNCTIONS
 --------------------------------------------------- */
 async function getComprehensiveSchedule(userId, dateQuery = 'today') {
   try {
@@ -854,7 +1038,7 @@ async function getElderlyUserData(elderlyId) {
 }
 
 /* ---------------------------------------------------
- 💊 Medication Reminder Functions
+ ðŸ’Š Medication Reminder Functions
 --------------------------------------------------- */
 async function getMedicationReminders(userId, dateQuery = 'today') {
   try {
@@ -976,17 +1160,17 @@ function generateMedicationResponse(userInfo, medications, dateQuery) {
   let response = `Here are your ${timeContext}, ${userInfo.name}:\n\n`;
   
   medications.forEach((med, index) => {
-    const status = med.isCompleted ? '✅ Taken' : '⏰ Pending';
+    const status = med.isCompleted ? 'âœ… Taken' : 'â° Pending';
     const dosage = med.dosage ? ` (${med.dosage})` : '';
     const quantity = med.quantity ? `, ${med.quantity} pill${med.quantity > 1 ? 's' : ''}` : '';
     const medicationName = med.medicationName || 'Unnamed Medication';
     const reminderTime = med.reminderTime ? formatDisplayTime(med.reminderTime) : 'No time specified';
     
-    response += `${index + 1}. 💊 **${medicationName}**${dosage}${quantity}\n`;
-    response += `   ⏰ ${reminderTime} • ${status}\n`;
+    response += `${index + 1}. ðŸ’Š **${medicationName}**${dosage}${quantity}\n`;
+    response += `   â° ${reminderTime} â€¢ ${status}\n`;
     
     if (med.notes) {
-      response += `   📝 ${med.notes}\n`;
+      response += `   ðŸ“ ${med.notes}\n`;
     }
     
     response += `\n`;
@@ -1001,7 +1185,7 @@ function generateMedicationResponse(userInfo, medications, dateQuery) {
 }
 
 /* ---------------------------------------------------
- ⏰ Event Reminder Functions
+ â° Event Reminder Functions
 --------------------------------------------------- */
 async function getEventReminders(userId, dateQuery = 'upcoming') {
   try {
@@ -1064,11 +1248,11 @@ function generateEventRemindersResponse(userInfo, reminders, dateQuery) {
     const displayTime = formatDisplayTime(reminder.startTime);
     const duration = reminder.duration ? ` (${reminder.duration} min)` : '';
     
-    response += `${index + 1}. ⏰ **${reminder.title}**${duration}\n`;
-    response += `   ⏰ ${displayTime}\n`;
+    response += `${index + 1}. â° **${reminder.title}**${duration}\n`;
+    response += `   â° ${displayTime}\n`;
     
     if (reminder.description) {
-      response += `   📝 ${reminder.description}\n`;
+      response += `   ðŸ“ ${reminder.description}\n`;
     }
     
     response += `\n`;
@@ -1078,7 +1262,7 @@ function generateEventRemindersResponse(userInfo, reminders, dateQuery) {
 }
 
 /* ---------------------------------------------------
- 👨‍⚕️ Caregiver Functions
+ ðŸ‘¨â€âš•ï¸ Caregiver Functions
 --------------------------------------------------- */
 function getCaregiversForElderly(elderlyEmail, elderlyUid, accounts) {
   const caregivers = [];
@@ -1185,7 +1369,7 @@ function generateCaregiverResponse(userInfo, caregivers) {
     response += `${index + 1}. ${caregiver.firstname} ${caregiver.lastname}\n`;
     response += `    ${caregiver.email}\n`;
     if (caregiver.phoneNum) {
-      response += `   📞 ${caregiver.phoneNum}\n`;
+      response += `   ðŸ“ž ${caregiver.phoneNum}\n`;
     }
     response += `\n`;
   });
@@ -1193,7 +1377,7 @@ function generateCaregiverResponse(userInfo, caregivers) {
   return response;
 }
 /* ---------------------------------------------------
- 👨‍⚕️ CAREGIVER-SPECIFIC FUNCTIONS
+ ðŸ‘¨â€âš•ï¸ CAREGIVER-SPECIFIC FUNCTIONS
 --------------------------------------------------- */
 
 // Enhanced function to get elderly data from various identifier types
@@ -1443,12 +1627,12 @@ async function getLastCheckupDate(elderlyIdentifier) {
 // CORRECTED: Get caregiver consultations with proper elderly matching
 async function getCaregiverConsultations(caregiverUserId, dateQuery = 'upcoming') {
   try {
-    console.log("👨‍⚕️ Getting consultations for caregiver:", caregiverUserId, "Date query:", dateQuery);
+    console.log("ðŸ‘¨â€âš•ï¸ Getting consultations for caregiver:", caregiverUserId, "Date query:", dateQuery);
     
     // Get caregiver's assigned elderly first
     const elderlyData = await getCaregiverAssignedElderly(caregiverUserId);
     if (!elderlyData.success || elderlyData.elderly.length === 0) {
-      console.log("❌ No elderly assigned to caregiver");
+      console.log("âŒ No elderly assigned to caregiver");
       return [];
     }
 
@@ -1463,7 +1647,7 @@ async function getCaregiverConsultations(caregiverUserId, dateQuery = 'upcoming'
       elderly.email?.toLowerCase()
     ]).filter(id => id && id !== 'Unknown');
 
-    console.log("🔍 Elderly identifiers for consultation matching:", elderlyIdentifiers);
+    console.log("ðŸ” Elderly identifiers for consultation matching:", elderlyIdentifiers);
 
     // Get all consultations from both consultations and appointments nodes
     const consultationsRef = rtdb.ref("consultations");
@@ -1513,7 +1697,7 @@ async function getCaregiverConsultations(caregiverUserId, dateQuery = 'upcoming'
       });
     }
 
-    console.log(`✅ Found ${allConsultations.length} consultations for caregiver's elderly`);
+    console.log(`âœ… Found ${allConsultations.length} consultations for caregiver's elderly`);
 
     // Filter based on date query
     const filteredConsultations = filterConsultationsByDate(allConsultations, dateQuery);
@@ -1529,12 +1713,12 @@ async function getCaregiverConsultations(caregiverUserId, dateQuery = 'upcoming'
       }
     });
 
-    console.log(`📅 Filtered consultations for ${dateQuery}: ${sortedConsultations.length}`);
+    console.log(`ðŸ“… Filtered consultations for ${dateQuery}: ${sortedConsultations.length}`);
 
     return sortedConsultations;
 
   } catch (error) {
-    console.error("💥 Error getting caregiver consultations:", error);
+    console.error("ðŸ’¥ Error getting caregiver consultations:", error);
     return [];
   }
 }
@@ -1543,7 +1727,7 @@ async function getCaregiverConsultations(caregiverUserId, dateQuery = 'upcoming'
 function isConsultationForElderly(consultation, elderlyIdentifiers) {
   if (!consultation) return false;
 
-  console.log(`🔍 Checking consultation for elderly match:`, {
+  console.log(`ðŸ” Checking consultation for elderly match:`, {
     id: consultation.id,
     elderlyId: consultation.elderlyId,
     elderlyEmail: consultation.elderlyEmail,
@@ -1578,7 +1762,7 @@ function isConsultationForElderly(consultation, elderlyIdentifiers) {
         elderlyIdentifiers.some(identifier => {
           const match = matchesIdentifier(item, identifier);
           if (match) {
-            console.log(`✅ Consultation array match: ${item} === ${identifier}`);
+            console.log(`âœ… Consultation array match: ${item} === ${identifier}`);
           }
           return match;
         })
@@ -1589,13 +1773,13 @@ function isConsultationForElderly(consultation, elderlyIdentifiers) {
     return elderlyIdentifiers.some(identifier => {
       const match = matchesIdentifier(field, identifier);
       if (match) {
-        console.log(`✅ Consultation field match: ${field} === ${identifier}`);
+        console.log(`âœ… Consultation field match: ${field} === ${identifier}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Consultation match result: ${isMatch}`);
+  console.log(`ðŸ“Š Consultation match result: ${isMatch}`);
   return isMatch;
 }
 
@@ -1649,16 +1833,16 @@ function generateCaregiverConsultationsResponse(caregiverInfo, consultations, da
     const doctor = consult.doctor || consult.provider || 'Healthcare Provider';
     const status = consult.status || 'Scheduled';
     
-    response += `${index + 1}. 🏥 **${reason}**\n`;
-    response += `   👤 Patient: ${patient}\n`;
-    response += `   🩺 Doctor: ${doctor}\n`;
-    response += `   📅 ${formatDisplayDate(date)}\n`;
-    if (time) response += `   ⏰ ${formatDisplayTime(time)}\n`;
-    response += `   📍 ${location}\n`;
-    response += `   📊 Status: ${status}\n`;
+    response += `${index + 1}. ðŸ¥ **${reason}**\n`;
+    response += `   ðŸ‘¤ Patient: ${patient}\n`;
+    response += `   ðŸ©º Doctor: ${doctor}\n`;
+    response += `   ðŸ“… ${formatDisplayDate(date)}\n`;
+    if (time) response += `   â° ${formatDisplayTime(time)}\n`;
+    response += `   ðŸ“ ${location}\n`;
+    response += `   ðŸ“Š Status: ${status}\n`;
     
     if (consult.notes) {
-      response += `   📝 ${consult.notes}\n`;
+      response += `   ðŸ“ ${consult.notes}\n`;
     }
     
     response += `\n`;
@@ -1711,7 +1895,7 @@ function isConsultationMatch(consultation, elderlyIdentifiers) {
         elderlyIdentifiers.some(identifier => {
           const match = String(identifier).toLowerCase() === String(item).toLowerCase();
           if (match) {
-            console.log(`✅ Consultation array match: ${item} === ${identifier}`);
+            console.log(`âœ… Consultation array match: ${item} === ${identifier}`);
           }
           return match;
         })
@@ -1731,13 +1915,13 @@ function isConsultationMatch(consultation, elderlyIdentifiers) {
       );
       
       if (match) {
-        console.log(`✅ Consultation field match: ${fieldStr} === ${identifierStr}`);
+        console.log(`âœ… Consultation field match: ${fieldStr} === ${identifierStr}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Consultation match result: ${isMatch}`);
+  console.log(`ðŸ“Š Consultation match result: ${isMatch}`);
   return isMatch;
 }
 
@@ -1784,7 +1968,7 @@ function filterConsultationsByDate(consultations, dateQuery) {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   
-  console.log(`📅 Filtering consultations for: ${dateQuery}, Today: ${today.toISOString()}`);
+  console.log(`ðŸ“… Filtering consultations for: ${dateQuery}, Today: ${today.toISOString()}`);
   
   switch (dateQuery) {
     case 'today':
@@ -1794,10 +1978,10 @@ function filterConsultationsByDate(consultations, dateQuery) {
           const consultDate = new Date(consult.appointmentDate || consult.date);
           consultDate.setHours(0, 0, 0, 0);
           const isToday = consultDate.getTime() === today.getTime();
-          console.log(`🔍 Checking if ${consult.appointmentDate || consult.date} is today: ${isToday}`);
+          console.log(`ðŸ” Checking if ${consult.appointmentDate || consult.date} is today: ${isToday}`);
           return isToday;
         } catch (error) {
-          console.log(`❌ Error parsing date: ${consult.appointmentDate || consult.date}`);
+          console.log(`âŒ Error parsing date: ${consult.appointmentDate || consult.date}`);
           return false;
         }
       });
@@ -1875,16 +2059,16 @@ function generateCaregiverConsultationsResponse(caregiverInfo, consultations, da
     const doctor = consult.doctor || consult.provider || 'Healthcare Provider';
     const status = consult.status || 'Scheduled';
     
-    response += `${index + 1}. 🏥 **${reason}**\n`;
-    response += `   👤 Patient: ${patient}\n`;
-    response += `   🩺 Doctor: ${doctor}\n`;
-    response += `   📅 ${formatDisplayDate(date)}\n`;
-    if (time) response += `   ⏰ ${formatDisplayTime(time)}\n`;
-    response += `   📍 ${location}\n`;
-    response += `   📊 Status: ${status}\n`;
+    response += `${index + 1}. ðŸ¥ **${reason}**\n`;
+    response += `   ðŸ‘¤ Patient: ${patient}\n`;
+    response += `   ðŸ©º Doctor: ${doctor}\n`;
+    response += `   ðŸ“… ${formatDisplayDate(date)}\n`;
+    if (time) response += `   â° ${formatDisplayTime(time)}\n`;
+    response += `   ðŸ“ ${location}\n`;
+    response += `   ðŸ“Š Status: ${status}\n`;
     
     if (consult.notes) {
-      response += `   📝 ${consult.notes}\n`;
+      response += `   ðŸ“ ${consult.notes}\n`;
     }
     
     response += `\n`;
@@ -1896,11 +2080,11 @@ function generateCaregiverConsultationsResponse(caregiverInfo, consultations, da
 // IMPROVED: Better appointment matching with null checks and case handling
 function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
   if (!appointment || typeof appointment !== 'object') {
-    console.log('❌ Invalid appointment object');
+    console.log('âŒ Invalid appointment object');
     return false;
   }
 
-  console.log(`🔍 Checking appointment:`, {
+  console.log(`ðŸ” Checking appointment:`, {
     id: appointment.id || 'undefined',
     elderlyId: appointment.elderlyId || 'undefined',
     assignedTo: appointment.assignedTo || 'undefined',
@@ -1912,7 +2096,7 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
       !appointment.elderlyEmail && 
       !appointment.assignedTo && 
       (!appointment.elderlyIds || !Array.isArray(appointment.elderlyIds))) {
-    console.log('📊 Match result: false (no elderly identifiers found)');
+    console.log('ðŸ“Š Match result: false (no elderly identifiers found)');
     return false;
   }
 
@@ -1931,8 +2115,8 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
     fieldsToCheck.push(...validElderlyIds);
   }
 
-  console.log('📋 Fields to check:', fieldsToCheck);
-  console.log('👵 Elderly identifiers:', elderlyIdentifiers);
+  console.log('ðŸ“‹ Fields to check:', fieldsToCheck);
+  console.log('ðŸ‘µ Elderly identifiers:', elderlyIdentifiers);
 
   // Enhanced matching with better logging
   const isMatch = fieldsToCheck.some(field => {
@@ -1944,7 +2128,7 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
         elderlyIdentifiers.some(identifier => {
           const match = matchesIdentifier(item, identifier);
           if (match) {
-            console.log(`✅ Array match: ${item} === ${identifier}`);
+            console.log(`âœ… Array match: ${item} === ${identifier}`);
           }
           return match;
         })
@@ -1966,13 +2150,13 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
       );
       
       if (match) {
-        console.log(`✅ Field match: ${fieldStr} === ${identifierStr}`);
+        console.log(`âœ… Field match: ${fieldStr} === ${identifierStr}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Match result for ${appointment.id || 'undefined'}: ${isMatch}`);
+  console.log(`ðŸ“Š Match result for ${appointment.id || 'undefined'}: ${isMatch}`);
   return isMatch;
 }
 // IMPROVED: Universal identifier matching function
@@ -2057,7 +2241,7 @@ async function getCaregiverUid(caregiverEmail) {
 function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
   if (!appointment) return false;
 
-  console.log(`🔍 Checking appointment:`, {
+  console.log(`ðŸ” Checking appointment:`, {
     id: appointment.id,
     elderlyId: appointment.elderlyId,
     assignedTo: appointment.assignedTo,
@@ -2088,7 +2272,7 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
         elderlyIdentifiers.some(identifier => {
           const match = String(identifier).toLowerCase() === String(item).toLowerCase();
           if (match) {
-            console.log(`✅ Array match: ${item} === ${identifier}`);
+            console.log(`âœ… Array match: ${item} === ${identifier}`);
           }
           return match;
         })
@@ -2109,13 +2293,13 @@ function isElderlyMatchEnhanced(appointment, elderlyIdentifiers) {
       );
       
       if (match) {
-        console.log(`✅ Field match: ${fieldStr} === ${identifierStr}`);
+        console.log(`âœ… Field match: ${fieldStr} === ${identifierStr}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Match result for ${appointment.id}: ${isMatch}`);
+  console.log(`ðŸ“Š Match result for ${appointment.id}: ${isMatch}`);
   return isMatch;
 }
 
@@ -2127,7 +2311,7 @@ function normalizeEmailForComparison(email) {
 // ENHANCED: Better appointment discovery with proper debugging
 async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQuery = 'upcoming') {
   try {
-    console.log("🔄 ENHANCED: Getting elderly appointments for:", caregiverUserId, "Date query:", dateQuery);
+    console.log("ðŸ”„ ENHANCED: Getting elderly appointments for:", caregiverUserId, "Date query:", dateQuery);
     
     if (!caregiverUserId) {
       throw new Error("Caregiver user ID is required");
@@ -2137,7 +2321,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
     const elderlyData = await getCaregiverAssignedElderly(caregiverUserId);
     
     if (!elderlyData.success || elderlyData.elderly.length === 0) {
-      console.log("❌ No elderly assigned to caregiver");
+      console.log("âŒ No elderly assigned to caregiver");
       return {
         success: true,
         appointments: [],
@@ -2146,7 +2330,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
       };
     }
 
-    console.log("👵 Elderly assigned:", elderlyData.elderly.map(e => ({
+    console.log("ðŸ‘µ Elderly assigned:", elderlyData.elderly.map(e => ({
       name: `${e.firstname} ${e.lastname}`,
       email: e.email,
       uid: e.uid
@@ -2163,7 +2347,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
       elderly.email?.toLowerCase()
     ]).filter(id => id && id !== 'Unknown' && id !== 'undefined');
 
-    console.log("🔍 Elderly identifiers for appointment matching:", elderlyIdentifiers);
+    console.log("ðŸ” Elderly identifiers for appointment matching:", elderlyIdentifiers);
 
     // Step 2: Get all appointments from database
     const appointmentsRef = rtdb.ref("Appointments");
@@ -2194,12 +2378,12 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
         }
       });
       
-      console.log(`✅ Checked ${totalChecked} appointments, found ${totalMatched} matches`);
+      console.log(`âœ… Checked ${totalChecked} appointments, found ${totalMatched} matches`);
     }
 
-    console.log(`📊 Total appointments found: ${allAppointments.length}`);
+    console.log(`ðŸ“Š Total appointments found: ${allAppointments.length}`);
 
-    // Step 4: Filter appointments based on date query
+    // Step 4: Filter appointments based on date query - FIXED FOR 'ALL'
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     
@@ -2233,7 +2417,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
         break;
         
       case 'all':
-        // Show all appointments - past, present, and future
+        // Show all appointments - past, present, and future (NO FILTERING)
         filteredAppointments = allAppointments;
         break;
         
@@ -2264,7 +2448,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
       }
     });
 
-    console.log(`✅ ENHANCED: Found ${sortedAppointments.length} appointments for date query: ${dateQuery}`);
+    console.log(`âœ… ENHANCED: Found ${sortedAppointments.length} appointments for date query: ${dateQuery}`);
 
     // Debug: Show which elderly have appointments
     const elderlyWithAppointments = {};
@@ -2275,7 +2459,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
       elderlyWithAppointments[apt.elderlyEmail]++;
     });
     
-    console.log("📋 Appointments by elderly:", elderlyWithAppointments);
+    console.log("ðŸ“‹ Appointments by elderly:", elderlyWithAppointments);
 
     return {
       success: true,
@@ -2298,7 +2482,7 @@ async function getElderlyAppointmentsForCaregiverEnhanced(caregiverUserId, dateQ
     };
 
   } catch (error) {
-    console.error("💥 CRITICAL ERROR in enhanced function:", error);
+    console.error("ðŸ’¥ CRITICAL ERROR in enhanced function:", error);
     return {
       success: false,
       error: error.message,
@@ -2377,7 +2561,7 @@ function normalizeEmailForFirebase1(email) {
   
   let normalized = email.toString().toLowerCase().trim();
   
-  console.log(`🔄 Normalizing: "${email}"`);
+  console.log(`ðŸ”„ Normalizing: "${email}"`);
   
   // Your database uses: "elderlyfive_at_gmail,com" (with COMMAS)
   // But the current function is creating: "elderlyfive@gmail_com" (with UNDERSCORES)
@@ -2429,7 +2613,7 @@ function isElderlyMatch(appointment, elderlyIdentifiers) {
 // ENHANCED: Main caregiver schedule function with proper reminder handling
 async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
   try {
-    console.log("📅 Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
+    console.log("ðŸ“… Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
     
     // Get ALL schedule components in parallel
     const [
@@ -2471,7 +2655,7 @@ async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
       })
     ]);
 
-    console.log("📊 COMPLETE Schedule results:", {
+    console.log("ðŸ“Š COMPLETE Schedule results:", {
       consultations: caregiverConsultations.length,
       caregiverSpecificConsultations: caregiverSpecificConsultations.length,
       elderlyAppointments: elderlyAppointments.appointments?.length || 0,
@@ -2588,7 +2772,7 @@ async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
     };
 
   } catch (error) {
-    console.error("💥 Error in fetchCaregiverSchedule:", error);
+    console.error("ðŸ’¥ Error in fetchCaregiverSchedule:", error);
     return { 
       success: false, 
       error: error.message, 
@@ -2610,7 +2794,7 @@ async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
  */
 async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'upcoming') {
   try {
-    console.log("👨‍⚕️ Getting caregiver-specific consultations for:", caregiverUserId);
+    console.log("ðŸ‘¨â€âš•ï¸ Getting caregiver-specific consultations for:", caregiverUserId);
     
     // Get caregiver data to get UID
     const caregiverData = await getUserData(caregiverUserId, { type: 'user_info', subType: 'all' });
@@ -2630,7 +2814,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
       caregiverEmail?.toLowerCase()
     ].filter(id => id && id !== 'Unknown');
 
-    console.log("🔍 Caregiver identifiers for consultation matching:", caregiverIdentifiers);
+    console.log("ðŸ” Caregiver identifiers for consultation matching:", caregiverIdentifiers);
 
     // Get all consultations from both consultations and appointments nodes
     const consultationsRef = rtdb.ref("consultations");
@@ -2679,7 +2863,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
       });
     }
 
-    console.log(`✅ Found ${caregiverSpecificConsultations.length} caregiver-specific consultations`);
+    console.log(`âœ… Found ${caregiverSpecificConsultations.length} caregiver-specific consultations`);
 
     // Filter based on date query
     const filteredConsultations = filterConsultationsByDate(caregiverSpecificConsultations, dateQuery);
@@ -2687,7 +2871,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
     return filteredConsultations;
 
   } catch (error) {
-    console.error("💥 Error getting caregiver-specific consultations:", error);
+    console.error("ðŸ’¥ Error getting caregiver-specific consultations:", error);
     return [];
   }
 }
@@ -2711,7 +2895,7 @@ function isCaregiverSpecificMatch(consultation, caregiverIdentifiers) {
     consultation.assignedProvider
   ].filter(field => field !== undefined && field !== null && field !== '');
 
-  console.log(`🔍 Checking caregiver-specific match:`, {
+  console.log(`ðŸ” Checking caregiver-specific match:`, {
     caregiverFields: caregiverFields,
     caregiverIdentifiers: caregiverIdentifiers
   });
@@ -2732,13 +2916,13 @@ function isCaregiverSpecificMatch(consultation, caregiverIdentifiers) {
       );
       
       if (match) {
-        console.log(`✅ Caregiver-specific match: ${fieldStr} === ${identifierStr}`);
+        console.log(`âœ… Caregiver-specific match: ${fieldStr} === ${identifierStr}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Caregiver-specific match result: ${isMatch}`);
+  console.log(`ðŸ“Š Caregiver-specific match result: ${isMatch}`);
   return isMatch;
 }
 
@@ -2748,7 +2932,7 @@ function isCaregiverSpecificMatch(consultation, caregiverIdentifiers) {
 // CORRECTED: Main caregiver schedule function
 async function getCaregiverSchedule(userId, dateQuery = 'upcoming') {
   try {
-    console.log("📅 Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
+    console.log("ðŸ“… Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
     
     // Get ALL schedule components in parallel with better error handling
     const [
@@ -2790,7 +2974,7 @@ async function getCaregiverSchedule(userId, dateQuery = 'upcoming') {
       })
     ]);
 
-    console.log("📊 COMPLETE Schedule results:", {
+    console.log("ðŸ“Š COMPLETE Schedule results:", {
       consultations: caregiverConsultations.length,
       caregiverSpecificConsultations: caregiverSpecificConsultations.length,
       elderlyAppointments: elderlyAppointments.appointments?.length || 0,
@@ -2907,7 +3091,7 @@ async function getCaregiverSchedule(userId, dateQuery = 'upcoming') {
     };
 
   } catch (error) {
-    console.error("💥 Error in getCaregiverSchedule:", error);
+    console.error("ðŸ’¥ Error in getCaregiverSchedule:", error);
     return { 
       success: false, 
       error: error.message, 
@@ -2990,11 +3174,11 @@ function filterCaregiverEventsByDate(events, dateQuery) {
 // COMPLETELY REWRITTEN: Get elderly medications - FIXED VERSION
 async function getElderlyMedicationsForCaregiver(caregiverUserId, dateQuery = 'today') {
   try {
-    console.log("💊 FIXED VERSION: Getting medications for caregiver:", caregiverUserId);
+    console.log("ðŸ’Š FIXED VERSION: Getting medications for caregiver:", caregiverUserId);
     
     const elderlyData = await getCaregiverAssignedElderly(caregiverUserId);
     if (!elderlyData.success || elderlyData.elderly.length === 0) {
-      console.log("❌ No elderly assigned to caregiver");
+      console.log("âŒ No elderly assigned to caregiver");
       return [];
     }
 
@@ -3005,39 +3189,39 @@ async function getElderlyMedicationsForCaregiver(caregiverUserId, dateQuery = 't
     const medsSnapshot = await medsRef.get();
     
     if (!medsSnapshot.exists()) {
-      console.log("❌ No medication reminders found in database");
+      console.log("âŒ No medication reminders found in database");
       return [];
     }
 
     const medsData = medsSnapshot.val();
-    console.log("📊 Found medication keys in database:", Object.keys(medsData));
+    console.log("ðŸ“Š Found medication keys in database:", Object.keys(medsData));
     
     // Create mapping of elderly normalized emails
     const elderlyNormalizedMap = {};
     elderlyData.elderly.forEach(elderly => {
       const normalizedEmail = normalizeEmailForFirebase1(elderly.email);
       elderlyNormalizedMap[normalizedEmail] = elderly;
-      console.log(`👵 Elderly mapping: "${elderly.email}" -> "${normalizedEmail}"`);
+      console.log(`ðŸ‘µ Elderly mapping: "${elderly.email}" -> "${normalizedEmail}"`);
     });
 
     // DIRECT MATCHING: Check each medication user key
     for (const [userKey, userMeds] of Object.entries(medsData)) {
       if (!userMeds || typeof userMeds !== 'object') continue;
       
-      console.log(`\n🔍 Processing medication user key: "${userKey}"`);
+      console.log(`\nðŸ” Processing medication user key: "${userKey}"`);
       
       // Check if this userKey matches any elderly normalized email
       const normalizedUserKey = normalizeEmailForFirebase(userKey);
       const matchingElderly = elderlyNormalizedMap[normalizedUserKey];
       
       if (matchingElderly) {
-        console.log(`✅ DIRECT MATCH: "${userKey}" -> "${matchingElderly.email}"`);
+        console.log(`âœ… DIRECT MATCH: "${userKey}" -> "${matchingElderly.email}"`);
         
         // Process all medications for this user
         for (const [medKey, medication] of Object.entries(userMeds)) {
           if (!medication || typeof medication !== 'object') continue;
           
-          console.log(`💊 Adding: ${medication.medicationName} for ${matchingElderly.email} on ${medication.date}`);
+          console.log(`ðŸ’Š Adding: ${medication.medicationName} for ${matchingElderly.email} on ${medication.date}`);
           
           allElderlyMeds.push({
             id: medKey,
@@ -3059,7 +3243,7 @@ async function getElderlyMedicationsForCaregiver(caregiverUserId, dateQuery = 't
           });
         }
       } else {
-        console.log(`❌ No match for: "${userKey}" (normalized: "${normalizedUserKey}")`);
+        console.log(`âŒ No match for: "${userKey}" (normalized: "${normalizedUserKey}")`);
         console.log(`   Available elderly: ${Object.keys(elderlyNormalizedMap).join(', ')}`);
       }
     }
@@ -3074,10 +3258,10 @@ async function getElderlyMedicationsForCaregiver(caregiverUserId, dateQuery = 't
       return timeA.localeCompare(timeB);
     });
 
-    console.log(`\n📊 FINAL RESULT: Found ${sortedMeds.length} medications`);
+    console.log(`\nðŸ“Š FINAL RESULT: Found ${sortedMeds.length} medications`);
     
     if (sortedMeds.length > 0) {
-      console.log("🎯 SUCCESS - Medications found:");
+      console.log("ðŸŽ¯ SUCCESS - Medications found:");
       sortedMeds.forEach((med, index) => {
         console.log(`${index + 1}. ${med.elderlyName} - ${med.medicationName} on ${med.date} at ${med.reminderTime}`);
       });
@@ -3085,7 +3269,7 @@ async function getElderlyMedicationsForCaregiver(caregiverUserId, dateQuery = 't
     
     return sortedMeds;
   } catch (error) {
-    console.error("💥 Error in medication function:", error);
+    console.error("ðŸ’¥ Error in medication function:", error);
     return [];
   }
 }
@@ -3103,7 +3287,7 @@ function isMedicationMatch(medication, elderlyIdentifiers, userKey = '') {
     });
     
     if (isUserKeyMatch) {
-      console.log(`✅ Medication userKey match: ${userKey}`);
+      console.log(`âœ… Medication userKey match: ${userKey}`);
       return true;
     }
   }
@@ -3119,7 +3303,7 @@ function isMedicationMatch(medication, elderlyIdentifiers, userKey = '') {
       );
       
       if (match) {
-        console.log(`✅ Medication elderlyId match: ${medication.elderlyId} === ${identifier}`);
+        console.log(`âœ… Medication elderlyId match: ${medication.elderlyId} === ${identifier}`);
       }
       return match;
     });
@@ -3133,7 +3317,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
   try {
     const elderlyData = await getCaregiverAssignedElderly(caregiverUserId);
     if (!elderlyData.success || elderlyData.elderly.length === 0) {
-      console.log("❌ No elderly assigned to caregiver");
+      console.log("âŒ No elderly assigned to caregiver");
       return [];
     }
 
@@ -3144,12 +3328,12 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
     const activitiesSnapshot = await activitiesRef.get();
     
     if (!activitiesSnapshot.exists()) {
-      console.log("❌ No activities found in database");
+      console.log("âŒ No activities found in database");
       return [];
     }
 
     const allActivities = activitiesSnapshot.val();
-    console.log(`📊 Found ${Object.keys(allActivities).length} total activities in database`);
+    console.log(`ðŸ“Š Found ${Object.keys(allActivities).length} total activities in database`);
     
     // Process each elderly and find their activities
     for (const elderly of elderlyData.elderly) {
@@ -3164,7 +3348,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
         elderly.idKey
       ].filter(id => id && id !== 'Unknown');
 
-      console.log(`🔍 Searching activities for elderly: ${elderly.email}`, {
+      console.log(`ðŸ” Searching activities for elderly: ${elderly.email}`, {
         name: `${elderly.firstname} ${elderly.lastname}`,
         identifiers: elderlyIdentifiers
       });
@@ -3176,7 +3360,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
         if (!activity || typeof activity !== 'object') continue;
         
         // DEBUG: Log activity structure
-        console.log(`📝 Activity ${activityId}:`, {
+        console.log(`ðŸ“ Activity ${activityId}:`, {
           title: activity.title,
           hasRegistrations: !!activity.registrations,
           registrationCount: activity.registrations ? Object.keys(activity.registrations).length : 0
@@ -3187,7 +3371,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
           for (const [registrationId, registration] of Object.entries(activity.registrations)) {
             if (!registration || typeof registration !== 'object') continue;
             
-            console.log(`📋 Registration ${registrationId}:`, {
+            console.log(`ðŸ“‹ Registration ${registrationId}:`, {
               registeredEmail: registration.registeredEmail,
               status: registration.status,
               date: registration.date
@@ -3219,7 +3403,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
             });
             
             if (isMatch) {
-              console.log(`✅ FOUND MATCH: Elderly ${elderly.email} registered for activity ${activity.title}`);
+              console.log(`âœ… FOUND MATCH: Elderly ${elderly.email} registered for activity ${activity.title}`);
               foundActivities++;
               
               allElderlyActivities.push({
@@ -3252,7 +3436,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
         // Activities are assigned through registrations, not direct elderly assignment
       }
       
-      console.log(`✅ Found ${foundActivities} registered activities for ${elderly.email}`);
+      console.log(`âœ… Found ${foundActivities} registered activities for ${elderly.email}`);
     }
 
     // Filter based on date query
@@ -3265,11 +3449,11 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
       return timeA.localeCompare(timeB);
     });
 
-    console.log(`📊 Final elderly activities count: ${sortedActivities.length}`);
+    console.log(`ðŸ“Š Final elderly activities count: ${sortedActivities.length}`);
     
     // DEBUG: Show what we found
     if (sortedActivities.length > 0) {
-      console.log("🎯 Found elderly activities:");
+      console.log("ðŸŽ¯ Found elderly activities:");
       sortedActivities.forEach((activity, index) => {
         console.log(`${index + 1}. ${activity.elderlyName} - ${activity.activityTitle} on ${activity.registrationDate}`);
       });
@@ -3277,7 +3461,7 @@ async function getElderlyActivitiesForCaregiver(caregiverUserId, dateQuery = 'to
     
     return sortedActivities;
   } catch (error) {
-    console.error("💥 Error getting elderly activities:", error);
+    console.error("ðŸ’¥ Error getting elderly activities:", error);
     return [];
   }
 }
@@ -3296,7 +3480,7 @@ function isActivityRegistrationMatch(registration, elderlyIdentifiers) {
     
     // Direct match
     if (identifierStr === registeredEmail) {
-      console.log(`✅ Direct email match: ${identifierStr} === ${registeredEmail}`);
+      console.log(`âœ… Direct email match: ${identifierStr} === ${registeredEmail}`);
       return true;
     }
     
@@ -3304,13 +3488,13 @@ function isActivityRegistrationMatch(registration, elderlyIdentifiers) {
     const normalizedIdentifier = normalizeEmailForFirebase(identifierStr);
     const normalizedRegistered = normalizeEmailForFirebase(registeredEmail);
     if (normalizedIdentifier === normalizedRegistered) {
-      console.log(`✅ Normalized email match: ${normalizedIdentifier} === ${normalizedRegistered}`);
+      console.log(`âœ… Normalized email match: ${normalizedIdentifier} === ${normalizedRegistered}`);
       return true;
     }
     
     // Handle email variations
     if (registeredEmail.includes(identifierStr) || identifierStr.includes(registeredEmail)) {
-      console.log(`✅ Partial email match: ${identifierStr} <-> ${registeredEmail}`);
+      console.log(`âœ… Partial email match: ${identifierStr} <-> ${registeredEmail}`);
       return true;
     }
     
@@ -3320,11 +3504,11 @@ function isActivityRegistrationMatch(registration, elderlyIdentifiers) {
 // FIXED: Get elderly reminders for caregiver
 async function getElderlyRemindersForCaregiver(caregiverUserId, dateQuery = 'upcoming') {
   try {
-    console.log("⏰ FIXED: Getting reminders for caregiver:", caregiverUserId);
+    console.log("â° FIXED: Getting reminders for caregiver:", caregiverUserId);
     
     const elderlyData = await getCaregiverAssignedElderly(caregiverUserId);
     if (!elderlyData.success || elderlyData.elderly.length === 0) {
-      console.log("❌ No elderly assigned to caregiver");
+      console.log("âŒ No elderly assigned to caregiver");
       return [];
     }
 
@@ -3335,39 +3519,39 @@ async function getElderlyRemindersForCaregiver(caregiverUserId, dateQuery = 'upc
     const remindersSnapshot = await remindersRef.get();
     
     if (!remindersSnapshot.exists()) {
-      console.log("❌ No reminders found in database");
+      console.log("âŒ No reminders found in database");
       return [];
     }
 
     const remindersData = remindersSnapshot.val();
-    console.log("📊 Found reminder keys:", Object.keys(remindersData));
+    console.log("ðŸ“Š Found reminder keys:", Object.keys(remindersData));
     
     // Create mapping of elderly normalized emails
     const elderlyNormalizedMap = {};
     elderlyData.elderly.forEach(elderly => {
       const normalizedEmail = normalizeEmailForFirebase(elderly.email);
       elderlyNormalizedMap[normalizedEmail] = elderly;
-      console.log(`👵 Elderly mapping: "${elderly.email}" -> "${normalizedEmail}"`);
+      console.log(`ðŸ‘µ Elderly mapping: "${elderly.email}" -> "${normalizedEmail}"`);
     });
 
     // DIRECT MATCHING: Check each reminder user key
     for (const [userKey, userReminders] of Object.entries(remindersData)) {
       if (!userReminders || typeof userReminders !== 'object') continue;
       
-      console.log(`\n🔍 Processing reminder user key: "${userKey}"`);
+      console.log(`\nðŸ” Processing reminder user key: "${userKey}"`);
       
       // Check if this userKey matches any elderly normalized email
       const normalizedUserKey = normalizeEmailForFirebase(userKey);
       const matchingElderly = elderlyNormalizedMap[normalizedUserKey];
       
       if (matchingElderly) {
-        console.log(`✅ DIRECT MATCH: "${userKey}" -> "${matchingElderly.email}"`);
+        console.log(`âœ… DIRECT MATCH: "${userKey}" -> "${matchingElderly.email}"`);
         
         // Process all reminders for this user
         for (const [reminderKey, reminder] of Object.entries(userReminders)) {
           if (!reminder || typeof reminder !== 'object') continue;
           
-          console.log(`⏰ Adding: ${reminder.title} for ${matchingElderly.email} on ${reminder.startTime}`);
+          console.log(`â° Adding: ${reminder.title} for ${matchingElderly.email} on ${reminder.startTime}`);
           
           allElderlyReminders.push({
             id: reminderKey,
@@ -3385,7 +3569,7 @@ async function getElderlyRemindersForCaregiver(caregiverUserId, dateQuery = 'upc
           });
         }
       } else {
-        console.log(`❌ No match for: "${userKey}" (normalized: "${normalizedUserKey}")`);
+        console.log(`âŒ No match for: "${userKey}" (normalized: "${normalizedUserKey}")`);
         console.log(`   Available elderly: ${Object.keys(elderlyNormalizedMap).join(', ')}`);
       }
     }
@@ -3400,10 +3584,10 @@ async function getElderlyRemindersForCaregiver(caregiverUserId, dateQuery = 'upc
       return new Date(timeA) - new Date(timeB);
     });
 
-    console.log(`📊 FINAL: Found ${sortedReminders.length} reminders`);
+    console.log(`ðŸ“Š FINAL: Found ${sortedReminders.length} reminders`);
     
     if (sortedReminders.length > 0) {
-      console.log("🎯 SUCCESS - Reminders found:");
+      console.log("ðŸŽ¯ SUCCESS - Reminders found:");
       sortedReminders.forEach((reminder, index) => {
         console.log(`${index + 1}. ${reminder.elderlyName} - ${reminder.title} on ${reminder.startTime}`);
       });
@@ -3411,7 +3595,7 @@ async function getElderlyRemindersForCaregiver(caregiverUserId, dateQuery = 'upc
     
     return sortedReminders;
   } catch (error) {
-    console.error("💥 Error getting elderly reminders:", error);
+    console.error("ðŸ’¥ Error getting elderly reminders:", error);
     return [];
   }
 }
@@ -3427,7 +3611,7 @@ function filterItemsByDateforEvent(items, dateQuery, dateField = 'date') {
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
   
-  console.log(`📅 Filtering ${items.length} items by date: ${dateQuery}, field: ${dateField}`);
+  console.log(`ðŸ“… Filtering ${items.length} items by date: ${dateQuery}, field: ${dateField}`);
   
   switch (dateQuery) {
     case 'today':
@@ -3491,7 +3675,7 @@ function getItemDateforEvent(item, dateField) {
       return isNaN(date.getTime()) ? null : date;
     }
   } catch (error) {
-    console.error(`❌ Error parsing date: ${item[dateField]}`, error);
+    console.error(`âŒ Error parsing date: ${item[dateField]}`, error);
     return null;
   }
 }
@@ -3518,7 +3702,7 @@ function formatReminderDateTime(startTime) {
     }
 
     if (isNaN(date.getTime())) {
-      console.log("❌ Invalid reminder date:", startTime);
+      console.log("âŒ Invalid reminder date:", startTime);
       return { date: "Unknown date", time: "Unknown time" };
     }
 
@@ -3546,7 +3730,7 @@ function formatReminderDateTime(startTime) {
       isAllDay: !hasTime,
     };
   } catch (err) {
-    console.error("❌ Error formatting reminder:", startTime, err);
+    console.error("âŒ Error formatting reminder:", startTime, err);
     return { date: "Unknown date", time: "Unknown time" };
   }
 }
@@ -3569,7 +3753,7 @@ function getElderlyNameFromReminder(reminder, elderlyList) {
 // NEW FUNCTION: Get consultations specifically assigned to caregiver
 async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'upcoming') {
   try {
-    console.log("👨‍⚕️ Getting caregiver-specific consultations for:", caregiverUserId);
+    console.log("ðŸ‘¨â€âš•ï¸ Getting caregiver-specific consultations for:", caregiverUserId);
     
     // Get caregiver data to get UID
     const caregiverData = await getUserData(caregiverUserId, { type: 'user_info', subType: 'all' });
@@ -3589,7 +3773,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
       caregiverEmail?.toLowerCase()
     ].filter(id => id && id !== 'Unknown');
 
-    console.log("🔍 Caregiver identifiers for consultation matching:", caregiverIdentifiers);
+    console.log("ðŸ” Caregiver identifiers for consultation matching:", caregiverIdentifiers);
 
     // Get all consultations from both consultations and appointments nodes
     const consultationsRef = rtdb.ref("consultations");
@@ -3638,7 +3822,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
       });
     }
 
-    console.log(`✅ Found ${caregiverSpecificConsultations.length} caregiver-specific consultations`);
+    console.log(`âœ… Found ${caregiverSpecificConsultations.length} caregiver-specific consultations`);
 
     // Filter based on date query
     const filteredConsultations = filterConsultationsByDate(caregiverSpecificConsultations, dateQuery);
@@ -3646,7 +3830,7 @@ async function getCaregiverSpecificConsultations(caregiverUserId, dateQuery = 'u
     return filteredConsultations;
 
   } catch (error) {
-    console.error("💥 Error getting caregiver-specific consultations:", error);
+    console.error("ðŸ’¥ Error getting caregiver-specific consultations:", error);
     return [];
   }
 }
@@ -3668,7 +3852,7 @@ function isCaregiverSpecificMatch(consultation, caregiverIdentifiers) {
     consultation.assignedProvider
   ].filter(field => field !== undefined && field !== null && field !== '');
 
-  console.log(`🔍 Checking caregiver-specific match:`, {
+  console.log(`ðŸ” Checking caregiver-specific match:`, {
     caregiverFields: caregiverFields,
     caregiverIdentifiers: caregiverIdentifiers
   });
@@ -3689,13 +3873,13 @@ function isCaregiverSpecificMatch(consultation, caregiverIdentifiers) {
       );
       
       if (match) {
-        console.log(`✅ Caregiver-specific match: ${fieldStr} === ${identifierStr}`);
+        console.log(`âœ… Caregiver-specific match: ${fieldStr} === ${identifierStr}`);
       }
       return match;
     });
   });
 
-  console.log(`📊 Caregiver-specific match result: ${isMatch}`);
+  console.log(`ðŸ“Š Caregiver-specific match result: ${isMatch}`);
   return isMatch;
 }
 
@@ -3795,7 +3979,7 @@ function getElderlyNameFromActivity(activity, elderlyList) {
 }
 
 /* ---------------------------------------------------
- 👨‍⚕️ CAREGIVER RESPONSE GENERATORS
+ ðŸ‘¨â€âš•ï¸ CAREGIVER RESPONSE GENERATORS
 --------------------------------------------------- */
 
 function generateCaregiverElderlyResponse(caregiverInfo, elderlyData) {
@@ -3960,15 +4144,15 @@ function generateEnhancedCaregiverScheduleResponse(caregiverInfo, scheduleData) 
 
   // SUMMARY
   response += `Summary:\n`;
-  response += `• Your consultations: ${scheduleData.summary?.totalConsultations || 0}\n`;
-  response += `• Elderly appointments: ${scheduleData.summary?.totalElderlyAppointments || 0}\n`;
-  response += `• Elderly medications: ${scheduleData.summary?.totalElderlyMedications || 0}\n`;
-  response += `• Elderly activities: ${scheduleData.summary?.totalElderlyActivities || 0}\n`;
-  response += `• Elderly reminders: ${scheduleData.summary?.totalElderlyReminders || 0}\n`;
-  response += `• Total events: ${scheduleData.totalEvents}\n`;
+  response += `â€¢ Your consultations: ${scheduleData.summary?.totalConsultations || 0}\n`;
+  response += `â€¢ Elderly appointments: ${scheduleData.summary?.totalElderlyAppointments || 0}\n`;
+  response += `â€¢ Elderly medications: ${scheduleData.summary?.totalElderlyMedications || 0}\n`;
+  response += `â€¢ Elderly activities: ${scheduleData.summary?.totalElderlyActivities || 0}\n`;
+  response += `â€¢ Elderly reminders: ${scheduleData.summary?.totalElderlyReminders || 0}\n`;
+  response += `â€¢ Total events: ${scheduleData.totalEvents}\n`;
   
   if (scheduleData.summary?.totalElderly > 0) {
-    response += `• Elderly patients: ${scheduleData.summary.totalElderly}\n`;
+    response += `â€¢ Elderly patients: ${scheduleData.summary.totalElderly}\n`;
   }
 
   return response;
@@ -3991,17 +4175,17 @@ function getEventIcon(eventType) {
     case 'caregiver_consultation':
     case 'caregiver_specific_consultation':
     case 'elderly_consultation': 
-      return '🏥';
+      return 'ðŸ¥';
     case 'elderly_appointment': 
-      return '📅';
+      return 'ðŸ“…';
     case 'elderly_medication': 
-      return '💊';
+      return 'ðŸ’Š';
     case 'elderly_activity': 
-      return '🎯';
+      return 'ðŸŽ¯';
     case 'elderly_reminder': 
-      return '⏰';
+      return 'â°';
     default: 
-      return '📌';
+      return 'ðŸ“Œ';
   }
 }
 // ENHANCED: Better response formatting
@@ -4017,9 +4201,9 @@ function generateElderlyAppointmentsNotification(caregiverInfo, appointmentsData
     }
     
     response += `\n**Note:** This could mean:\n`;
-    response += `• No appointments are currently scheduled\n`;
-    response += `• Appointments might be in different format in database\n`;
-    response += `• Check if appointments exist in Appointments node\n`;
+    response += `â€¢ No appointments are currently scheduled\n`;
+    response += `â€¢ Appointments might be in different format in database\n`;
+    response += `â€¢ Check if appointments exist in Appointments node\n`;
     
     return response;
   }
@@ -4039,19 +4223,19 @@ function generateElderlyAppointmentsNotification(caregiverInfo, appointmentsData
   Object.entries(appointmentsByElderly).forEach(([elderlyEmail, elderlyAppointments]) => {
     const elderly = appointmentsData.elderlyList?.find(e => e.email === elderlyEmail) || { name: 'Unknown Elderly' };
     
-    response += `👵 **${elderly.name}**\n`;
+    response += `ðŸ‘µ **${elderly.name}**\n`;
     
     elderlyAppointments.forEach((apt, index) => {
       const dateField = apt.date || apt.appointmentDate;
       const timeField = apt.time || apt.appointmentTime;
       
       response += `${index + 1}. ${apt.title || apt.reason || 'Appointment'}\n`;
-      response += `   📅 ${formatDisplayDate(dateField)}\n`;
-      if (timeField) response += `   ⏰ ${formatDisplayTime(timeField)}\n`;
-      if (apt.location) response += `   📍 ${apt.location}\n`;
-      if (apt.doctor || apt.provider) response += `   👨‍⚕️ ${apt.doctor || apt.provider}\n`;
-      if (apt.notes) response += `   📝 ${apt.notes}\n`;
-      response += `   🔧 Type: ${apt.appointmentType || apt.type || 'appointment'}\n`;
+      response += `   ðŸ“… ${formatDisplayDate(dateField)}\n`;
+      if (timeField) response += `   â° ${formatDisplayTime(timeField)}\n`;
+      if (apt.location) response += `   ðŸ“ ${apt.location}\n`;
+      if (apt.doctor || apt.provider) response += `   ðŸ‘¨â€âš•ï¸ ${apt.doctor || apt.provider}\n`;
+      if (apt.notes) response += `   ðŸ“ ${apt.notes}\n`;
+      response += `   ðŸ”§ Type: ${apt.appointmentType || apt.type || 'appointment'}\n`;
       response += `\n`;
     });
     
@@ -4064,7 +4248,7 @@ function generateElderlyAppointmentsNotification(caregiverInfo, appointmentsData
 }
 
 /* ---------------------------------------------------
- 📚 Learning Resources Functions
+ ðŸ“š Learning Resources Functions
 --------------------------------------------------- */
 async function getLearningResources(category = null, searchQuery = null) {
   try {
@@ -4243,38 +4427,38 @@ function generatePointsResponse(userInfo, learningData) {
     resourcesClicked = []
   } = learningData || {};
   
-  let response = `🎯 **Your Learning Progress**, ${userInfo.name}!\n\n`;
-  response += `🟣 **Current Points:** ${currentPoints}\n`;
-  response += `🏆 **Total Points Earned:** ${totalEarned}\n`;
-  response += `🔥 **Daily Streak:** ${dailyStreak} day${dailyStreak !== 1 ? 's' : ''}\n`;
-  response += `📚 **Resources Viewed:** ${resourcesClicked.length}\n\n`;
+  let response = `ðŸŽ¯ **Your Learning Progress**, ${userInfo.name}!\n\n`;
+  response += `ðŸŸ£ **Current Points:** ${currentPoints}\n`;
+  response += `ðŸ† **Total Points Earned:** ${totalEarned}\n`;
+  response += `ðŸ”¥ **Daily Streak:** ${dailyStreak} day${dailyStreak !== 1 ? 's' : ''}\n`;
+  response += `ðŸ“š **Resources Viewed:** ${resourcesClicked.length}\n\n`;
   
   if (currentPoints >= 50) {
     const vouchers = Math.floor(currentPoints / 50);
     const remainingPoints = currentPoints % 50;
-    response += `🎁 **Reward Available!** You can redeem ${vouchers} voucher${vouchers > 1 ? 's' : ''} ($${vouchers * 5})\n`;
-    response += `💰 You have ${currentPoints} points (${remainingPoints} points toward next voucher)\n`;
-    response += `🔔 *Say "redeem points" to get your voucher!*\n`;
+    response += `ðŸŽ **Reward Available!** You can redeem ${vouchers} voucher${vouchers > 1 ? 's' : ''} ($${vouchers * 5})\n`;
+    response += `ðŸ’° You have ${currentPoints} points (${remainingPoints} points toward next voucher)\n`;
+    response += `ðŸ”” *Say "redeem points" to get your voucher!*\n`;
   } else {
     const pointsNeeded = 50 - currentPoints;
-    response += `📈 You need ${pointsNeeded} more points to redeem your first $5 voucher!\n`;
-    response += `🌱 *Earn points by exploring learning resources!*\n`;
+    response += `ðŸ“ˆ You need ${pointsNeeded} more points to redeem your first $5 voucher!\n`;
+    response += `ðŸŒ± *Earn points by exploring learning resources!*\n`;
   }
   
   if (pointHistory && pointHistory.length > 0) {
     const recentHistory = pointHistory.slice(-3).reverse();
-    response += `\n📝 **Recent Activity:**\n`;
+    response += `\nðŸ“ **Recent Activity:**\n`;
     recentHistory.forEach(entry => {
       const date = new Date(entry.timestamp).toLocaleDateString();
-      response += `• +${entry.points} pts: ${entry.reason} (${date})\n`;
+      response += `â€¢ +${entry.points} pts: ${entry.reason} (${date})\n`;
     });
   }
   
-  response += `\n🔔 **How to Earn Points:**\n`;
-  response += `• Click on learning resources to earn 1 point each\n`;
-  response += `• Learn daily to build your streak and earn bonuses\n`;
-  response += `• Complete resources for extra rewards\n`;
-  response += `• 50 points = $5 voucher reward!\n`;
+  response += `\nðŸ”” **How to Earn Points:**\n`;
+  response += `â€¢ Click on learning resources to earn 1 point each\n`;
+  response += `â€¢ Learn daily to build your streak and earn bonuses\n`;
+  response += `â€¢ Complete resources for extra rewards\n`;
+  response += `â€¢ 50 points = $5 voucher reward!\n`;
   
   return response;
 }
@@ -4282,31 +4466,31 @@ function generatePointsResponse(userInfo, learningData) {
 function generateStreakResponse(userInfo, learningData) {
   const { dailyStreak = 0, lastLearningDate = null, currentPoints = 0 } = learningData || {};
   
-  let response = `🔥 **Your Learning Streak**, ${userInfo.name}!\n\n`;
-  response += `📅 **Current Streak:** ${dailyStreak} day${dailyStreak !== 1 ? 's' : ''}\n`;
+  let response = `ðŸ”¥ **Your Learning Streak**, ${userInfo.name}!\n\n`;
+  response += `ðŸ“… **Current Streak:** ${dailyStreak} day${dailyStreak !== 1 ? 's' : ''}\n`;
   
   if (lastLearningDate) {
     const lastDate = new Date(lastLearningDate).toLocaleDateString();
-    response += `⏰ **Last Learning Activity:** ${lastDate}\n`;
+    response += `â° **Last Learning Activity:** ${lastDate}\n`;
   }
   
-  response += `🟣 **Current Points:** ${currentPoints}\n\n`;
+  response += `ðŸŸ£ **Current Points:** ${currentPoints}\n\n`;
   
   if (dailyStreak === 0) {
-    response += `🔔 **Start your streak today!** Learn something new to begin building your daily learning habit.\n`;
+    response += `ðŸ”” **Start your streak today!** Learn something new to begin building your daily learning habit.\n`;
   } else if (dailyStreak < 7) {
-    response += `🔔 **Keep going!** Continue learning daily to earn streak bonuses and unlock rewards!\n`;
+    response += `ðŸ”” **Keep going!** Continue learning daily to earn streak bonuses and unlock rewards!\n`;
   } else if (dailyStreak < 30) {
-    response += `🎉 **Great consistency!** You're building a strong learning habit. Keep it up!\n`;
+    response += `ðŸŽ‰ **Great consistency!** You're building a strong learning habit. Keep it up!\n`;
   } else {
-    response += `🏆 **Amazing dedication!** You've maintained your learning streak for over a month!\n`;
+    response += `ðŸ† **Amazing dedication!** You've maintained your learning streak for over a month!\n`;
   }
   
-  response += `\n🌱 **Streak Benefits:**\n`;
-  response += `• Daily learning builds better memory retention\n`;
-  response += `• Consistent streaks earn bonus points\n`;
-  response += `• Unlock achievement badges for milestones\n`;
-  response += `• Improve overall wellbeing through continuous learning\n`;
+  response += `\nðŸŒ± **Streak Benefits:**\n`;
+  response += `â€¢ Daily learning builds better memory retention\n`;
+  response += `â€¢ Consistent streaks earn bonus points\n`;
+  response += `â€¢ Unlock achievement badges for milestones\n`;
+  response += `â€¢ Improve overall wellbeing through continuous learning\n`;
   
   return response;
 }
@@ -4319,11 +4503,11 @@ function generateResourcesListResponse(userInfo, learningData, resources, query)
   if (resources.length === 0) {
     response += `No learning resources found matching "${query}".\n\n`;
     response += `**Try searching for:**\n`;
-    response += `• "health" - Health and wellness resources\n`;
-    response += `• "exercise" - Physical activity guides\n`;
-    response += `• "technology" - Digital literacy and safety\n`;
-    response += `• "safety" - Home safety and fraud prevention\n`;
-    response += `• "mental health" - Emotional wellbeing resources\n`;
+    response += `â€¢ "health" - Health and wellness resources\n`;
+    response += `â€¢ "exercise" - Physical activity guides\n`;
+    response += `â€¢ "technology" - Digital literacy and safety\n`;
+    response += `â€¢ "safety" - Home safety and fraud prevention\n`;
+    response += `â€¢ "mental health" - Emotional wellbeing resources\n`;
     return response;
   }
 
@@ -4331,22 +4515,22 @@ function generateResourcesListResponse(userInfo, learningData, resources, query)
 
   resources.slice(0, 8).forEach((resource, index) => {
     const isViewed = resourcesClicked.includes(resource.id);
-    const status = isViewed ? "✅ Viewed" : "🔔 New";
+    const status = isViewed ? "âœ… Viewed" : "ðŸ”” New";
     const category = resource.category || "General";
 
     response += `${index + 1}. **${resource.title}**\n`;
     response += `   ${resource.description || "No description available"}\n`;
-    response += `   ${category} • ${status}\n\n`;
+    response += `   ${category} â€¢ ${status}\n\n`;
   });
 
   if (resources.length > 8) {
     response += `... and ${resources.length - 8} more resources available!\n\n`;
   }
 
-  response += `🔔 **How to earn points:**\n`;
-  response += `• Click on resources to earn 1 point each\n`;
-  response += `• Learn daily for streak bonuses\n`;
-  response += `• Complete resources for extra rewards\n\n`;
+  response += `ðŸ”” **How to earn points:**\n`;
+  response += `â€¢ Click on resources to earn 1 point each\n`;
+  response += `â€¢ Learn daily for streak bonuses\n`;
+  response += `â€¢ Complete resources for extra rewards\n\n`;
   response += ` You currently have **${currentPoints}** learning points.`;
 
   return response;
@@ -4425,7 +4609,7 @@ function generateLearningResourcesResponse(userInfo, learningData, resources, us
 }
 
 /* ---------------------------------------------------
- 👤 getUserData() — Enhanced with Personal Info, Appointments & Consultations
+ ðŸ‘¤ getUserData() â€” Enhanced with Personal Info, Appointments & Consultations
 --------------------------------------------------- */
 async function getUserData(userId, intent = { type: 'both', dateQuery: 'upcoming' }) {
   const start = Date.now();
@@ -4549,7 +4733,7 @@ async function getUserData(userId, intent = { type: 'both', dateQuery: 'upcoming
 }
 
 /* ---------------------------------------------------
- 👤 Generate Personal Info Response
+ ðŸ‘¤ Generate Personal Info Response
 --------------------------------------------------- */
 function generatePersonalInfoResponse(userInfo, intent) {
   const { name, firstName, lastName, age, medicalConditions, phone, address, emergencyContact } = userInfo;
@@ -4603,16 +4787,16 @@ function generatePersonalInfoResponse(userInfo, intent) {
     case 'all':
     default:
       let response = `Here's your information:\n\n`;
-      response += `• Name: ${firstName && lastName ? `${firstName} ${lastName}` : name}\n`;
-      response += `• Age: ${age !== null ? `${age} years old` : 'Not specified'}\n`;
+      response += `â€¢ Name: ${firstName && lastName ? `${firstName} ${lastName}` : name}\n`;
+      response += `â€¢ Age: ${age !== null ? `${age} years old` : 'Not specified'}\n`;
       
       if (medicalConditions && medicalConditions.length > 0) {
-        response += `• Medical Conditions: ${medicalConditions.join(', ')}\n`;
+        response += `â€¢ Medical Conditions: ${medicalConditions.join(', ')}\n`;
       }
       
-      if (phone) response += `• Phone: ${phone}\n`;
-      if (address) response += `• Address: ${address}\n`;
-      if (emergencyContact) response += `• Emergency Contact: ${emergencyContact}\n`;
+      if (phone) response += `â€¢ Phone: ${phone}\n`;
+      if (address) response += `â€¢ Address: ${address}\n`;
+      if (emergencyContact) response += `â€¢ Emergency Contact: ${emergencyContact}\n`;
       
       response += `\nIs there anything specific you'd like to know or update?`;
       return response;
@@ -4620,7 +4804,7 @@ function generatePersonalInfoResponse(userInfo, intent) {
 }
 
 /* ---------------------------------------------------
- 📋 Generate Routines Response
+ ðŸ“‹ Generate Routines Response
 --------------------------------------------------- */
 function generateRoutinesResponse(userInfo, routines, dateQuery) {
   const timeContext = getTimeContext(dateQuery).replace('appointments', 'care routines');
@@ -4634,19 +4818,19 @@ function generateRoutinesResponse(userInfo, routines, dateQuery) {
   routines.forEach((routine, index) => {
     const displayTime = routine.time ? formatDisplayTime(routine.time) : 'All day';
     
-    response += `${index + 1}. 📋 **${routine.title}**\n`;
-    response += `   ⏰ ${displayTime}`;
+    response += `${index + 1}. ðŸ“‹ **${routine.title}**\n`;
+    response += `   â° ${displayTime}`;
     
     if (routine.duration) {
-      response += ` • ⏱️ ${routine.duration}`;
+      response += ` â€¢ â±ï¸ ${routine.duration}`;
     }
     
     if (routine.description && routine.description !== routine.title) {
-      response += `\n   📝 ${routine.description}`;
+      response += `\n   ðŸ“ ${routine.description}`;
     }
     
     if (routine.assignedBy) {
-      response += `\n   👤 Assigned by: ${routine.assignedBy}`;
+      response += `\n   ðŸ‘¤ Assigned by: ${routine.assignedBy}`;
     }
     
     response += `\n\n`;
@@ -4656,7 +4840,7 @@ function generateRoutinesResponse(userInfo, routines, dateQuery) {
 }
 
 /* ---------------------------------------------------
- 📅 Generate Enhanced Schedule Response (Popup-Friendly)
+ ðŸ“… Generate Enhanced Schedule Response (Popup-Friendly)
 --------------------------------------------------- */
 function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   const { appointments, consultations, medications, reminders, assignedRoutines, activities, allEvents } = scheduleData;
@@ -4669,30 +4853,30 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
     day: 'numeric' 
   });
   
-  let response = `📅 **Your Daily Schedule - ${today}**\n\n`;
-  response += `👋 Hello ${userInfo.name}! Here's your schedule for today:\n\n`;
+  let response = `ðŸ“… **Your Daily Schedule - ${today}**\n\n`;
+  response += `ðŸ‘‹ Hello ${userInfo.name}! Here's your schedule for today:\n\n`;
   
   if (totalEvents === 0) {
-    response += `🎉 **No events scheduled today!**\n\n`;
+    response += `ðŸŽ‰ **No events scheduled today!**\n\n`;
     response += `Enjoy your free day! You can:\n`;
-    response += `• Take a relaxing walk\n`;
-    response += `• Read a book\n`;
-    response += `• Connect with family/friends\n`;
-    response += `• Explore learning resources\n`;
-    response += `• Check out available activities\n\n`;
-    response += `💡 *Need something? Ask me about medications, appointments, or activities!*`;
+    response += `â€¢ Take a relaxing walk\n`;
+    response += `â€¢ Read a book\n`;
+    response += `â€¢ Connect with family/friends\n`;
+    response += `â€¢ Explore learning resources\n`;
+    response += `â€¢ Check out available activities\n\n`;
+    response += `ðŸ’¡ *Need something? Ask me about medications, appointments, or activities!*`;
     return response;
   }
   
-  response += `📊 **Today at a Glance:**\n`;
-  response += `├── 📅 Appointments: ${appointments.length}\n`;
-  response += `├── 🏥 Consultations: ${consultations.length}\n`;
-  response += `├── 💊 Medications: ${medications.length}\n`;
-  response += `├── ⏰ Reminders: ${reminders.length}\n`;
-  response += `├── 📋 Routines: ${assignedRoutines.length}\n`;
-  response += `└── 🎯 Activities: ${activities.length}\n\n`;
+  response += `ðŸ“Š **Today at a Glance:**\n`;
+  response += `â”œâ”€â”€ ðŸ“… Appointments: ${appointments.length}\n`;
+  response += `â”œâ”€â”€ ðŸ¥ Consultations: ${consultations.length}\n`;
+  response += `â”œâ”€â”€ ðŸ’Š Medications: ${medications.length}\n`;
+  response += `â”œâ”€â”€ â° Reminders: ${reminders.length}\n`;
+  response += `â”œâ”€â”€ ðŸ“‹ Routines: ${assignedRoutines.length}\n`;
+  response += `â””â”€â”€ ðŸŽ¯ Activities: ${activities.length}\n\n`;
   
-  response += `⏰ **Today's Timeline:**\n\n`;
+  response += `â° **Today's Timeline:**\n\n`;
   
   const morningEvents = allEvents.filter(event => {
     const time = getEventTimeRaw(event);
@@ -4713,7 +4897,7 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   });
   
   if (morningEvents.length > 0) {
-    response += `🌅 **Morning**\n`;
+    response += `ðŸŒ… **Morning**\n`;
     morningEvents.forEach((event, index) => {
       response += formatEventForTimeline(event, index + 1);
     });
@@ -4721,7 +4905,7 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   }
   
   if (afternoonEvents.length > 0) {
-    response += `☀️ **Afternoon**\n`;
+    response += `â˜€ï¸ **Afternoon**\n`;
     afternoonEvents.forEach((event, index) => {
       response += formatEventForTimeline(event, index + 1);
     });
@@ -4729,7 +4913,7 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   }
   
   if (eveningEvents.length > 0) {
-    response += `🌙 **Evening**\n`;
+    response += `ðŸŒ™ **Evening**\n`;
     eveningEvents.forEach((event, index) => {
       response += formatEventForTimeline(event, index + 1);
     });
@@ -4738,21 +4922,21 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   
   const pendingMeds = medications.filter(med => !med.isCompleted);
   if (pendingMeds.length > 0) {
-    response += `💊 **Medication Reminders**\n`;
+    response += `ðŸ’Š **Medication Reminders**\n`;
     response += `You have ${pendingMeds.length} medication${pendingMeds.length > 1 ? 's' : ''} to take today:\n`;
     pendingMeds.forEach(med => {
       const time = med.reminderTime ? formatDisplayTime(med.reminderTime) : 'Scheduled time';
-      response += `• ${med.medicationName} at ${time}\n`;
+      response += `â€¢ ${med.medicationName} at ${time}\n`;
     });
     response += `\n`;
   }
   
   if (activities.length > 0) {
-    response += `🎯 **Today's Activities**\n`;
+    response += `ðŸŽ¯ **Today's Activities**\n`;
     activities.forEach(activity => {
       const time = activity.time ? formatDisplayTime(activity.time) : 'All day';
-      const status = activity.isRegistered ? '✅ Registered' : '💡 Suggested';
-      response += `• ${activity.title} at ${time} - ${status}\n`;
+      const status = activity.isRegistered ? 'âœ… Registered' : 'ðŸ’¡ Suggested';
+      response += `â€¢ ${activity.title} at ${time} - ${status}\n`;
     });
     response += `\n`;
   }
@@ -4766,15 +4950,15 @@ function generateEnhancedScheduleResponse(userInfo, scheduleData, dateQuery) {
   if (upcomingEvents.length > 0) {
     const nextEvent = upcomingEvents[0];
     const timeUntil = getTimeUntil(nextEvent);
-    response += `⏳ **Next Up:** ${getEventIcon(nextEvent.type)} ${nextEvent.title || nextEvent.medicationName} ${timeUntil}\n\n`;
+    response += `â³ **Next Up:** ${getEventIcon(nextEvent.type)} ${nextEvent.title || nextEvent.medicationName} ${timeUntil}\n\n`;
   }
   
-  response += `💡 **Quick Actions:**\n`;
-  response += `• Say "medications" to see all medications\n`;
-  response += `• Say "appointments" for detailed appointments\n`;
-  response += `• Say "reminders" for event reminders\n`;
-  response += `• Say "my routines" for care routines\n`;
-  response += `• Say "activities" for today's activities\n`;
+  response += `ðŸ’¡ **Quick Actions:**\n`;
+  response += `â€¢ Say "medications" to see all medications\n`;
+  response += `â€¢ Say "appointments" for detailed appointments\n`;
+  response += `â€¢ Say "reminders" for event reminders\n`;
+  response += `â€¢ Say "my routines" for care routines\n`;
+  response += `â€¢ Say "activities" for today's activities\n`;
   
   return response;
 }
@@ -4787,10 +4971,10 @@ function generateSpecificElderlyAppointmentsResponse(caregiverInfo, appointments
 
   appointments.forEach((apt, index) => {
     response += `${index + 1}. ${apt.title || apt.reason || 'Appointment'}\n`;
-    response += `   📅 ${formatDisplayDate(apt.date || apt.appointmentDate)}\n`;
-    if (apt.time) response += `   ⏰ ${formatDisplayTime(apt.time)}\n`;
-    if (apt.location) response += `   📍 ${apt.location}\n`;
-    if (apt.doctor || apt.provider) response += `   👨‍⚕️ ${apt.doctor || apt.provider}\n`;
+    response += `   ðŸ“… ${formatDisplayDate(apt.date || apt.appointmentDate)}\n`;
+    if (apt.time) response += `   â° ${formatDisplayTime(apt.time)}\n`;
+    if (apt.location) response += `   ðŸ“ ${apt.location}\n`;
+    if (apt.doctor || apt.provider) response += `   ðŸ‘¨â€âš•ï¸ ${apt.doctor || apt.provider}\n`;
     response += `\n`;
   });
 
@@ -4801,7 +4985,7 @@ function generateSpecificElderlyAppointmentsResponse(caregiverInfo, appointments
 // ENHANCED: Main caregiver schedule function
 async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
   try {
-    console.log("📅 Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
+    console.log("ðŸ“… Getting COMPLETE schedule for caregiver:", userId, "Date query:", dateQuery);
     
     // Get ALL schedule components in parallel with better error handling
     const [
@@ -4843,7 +5027,7 @@ async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
       })
     ]);
 
-    console.log("📊 COMPLETE Schedule results:", {
+    console.log("ðŸ“Š COMPLETE Schedule results:", {
       consultations: caregiverConsultations.length,
       caregiverSpecificConsultations: caregiverSpecificConsultations.length,
       elderlyAppointments: elderlyAppointments.appointments?.length || 0,
@@ -4960,7 +5144,7 @@ async function fetchCaregiverSchedule(userId, dateQuery = 'upcoming') {
     };
 
   } catch (error) {
-    console.error("💥 Error in fetchCaregiverSchedule:", error);
+    console.error("ðŸ’¥ Error in fetchCaregiverSchedule:", error);
     return { 
       success: false, 
       error: error.message, 
@@ -4980,43 +5164,43 @@ function formatEventForTimeline(event, number) {
   const icon = getEventIcon(event.type);
   
   let line = `${number}. ${icon} **${event.title || event.medicationName || 'Untitled'}**\n`;
-  line += `   ⏰ ${time} • ${status}\n`;
+  line += `   â° ${time} â€¢ ${status}\n`;
   
   switch (event.type) {
     case 'medication':
       const dosage = event.dosage ? ` (${event.dosage})` : '';
       const quantity = event.quantity ? `, ${event.quantity} pill${event.quantity > 1 ? 's' : ''}` : '';
-      line += `   💊 ${event.medicationName}${dosage}${quantity}\n`;
+      line += `   ðŸ’Š ${event.medicationName}${dosage}${quantity}\n`;
       break;
     case 'appointment':
     case 'consultation':
       if (event.location) {
-        line += `   📍 ${event.location}\n`;
+        line += `   ðŸ“ ${event.location}\n`;
       }
       if (event.doctor || event.provider) {
-        line += `   👨‍⚕️ ${event.doctor || event.provider}\n`;
+        line += `   ðŸ‘¨â€âš•ï¸ ${event.doctor || event.provider}\n`;
       }
       break;
     case 'assigned_routine':
       if (event.description) {
-        line += `   📝 ${event.description}\n`;
+        line += `   ðŸ“ ${event.description}\n`;
       }
       break;
     case 'activity':
       if (event.category) {
-        line += `   🏷️ ${event.category}\n`;
+        line += `   ðŸ·ï¸ ${event.category}\n`;
       }
       if (event.duration) {
-        line += `   ⏱️ ${event.duration}\n`;
+        line += `   â±ï¸ ${event.duration}\n`;
       }
       if (event.description && event.description !== event.title) {
-        line += `   📝 ${event.description}\n`;
+        line += `   ðŸ“ ${event.description}\n`;
       }
       break;
   }
   
   if (event.notes && event.type !== 'assigned_routine' && event.type !== 'activity') {
-    line += `   📋 ${event.notes}\n`;
+    line += `   ðŸ“‹ ${event.notes}\n`;
   }
   
   line += `\n`;
@@ -5082,30 +5266,30 @@ function getEventTimeRaw(event) {
 function getEventStatus(event) {
   switch (event.type) {
     case 'medication':
-      return event.isCompleted ? '✅ Taken' : '⏰ Pending';
+      return event.isCompleted ? 'âœ… Taken' : 'â° Pending';
     case 'appointment':
     case 'consultation':
-      return event.isCompleted ? '✅ Completed' : '📅 Upcoming';
+      return event.isCompleted ? 'âœ… Completed' : 'ðŸ“… Upcoming';
     case 'reminder':
-      return '🔔 Active';
+      return 'ðŸ”” Active';
     case 'assigned_routine':
-      return '📋 Scheduled';
+      return 'ðŸ“‹ Scheduled';
     case 'activity':
-      return event.isRegistered ? '✅ Registered' : '💡 Suggested';
+      return event.isRegistered ? 'âœ… Registered' : 'ðŸ’¡ Suggested';
     default:
-      return '📅 Scheduled';
+      return 'ðŸ“… Scheduled';
   }
 }
 
 function getEventIcon(eventType) {
   switch (eventType) {
-    case 'appointment': return '📅';
-    case 'consultation': return '🏥';
-    case 'medication': return '💊';
-    case 'reminder': return '⏰';
-    case 'assigned_routine': return '📋';
-    case 'activity': return '🎯';
-    default: return '📌';
+    case 'appointment': return 'ðŸ“…';
+    case 'consultation': return 'ðŸ¥';
+    case 'medication': return 'ðŸ’Š';
+    case 'reminder': return 'â°';
+    case 'assigned_routine': return 'ðŸ“‹';
+    case 'activity': return 'ðŸŽ¯';
+    default: return 'ðŸ“Œ';
   }
 }
 
@@ -5122,11 +5306,12 @@ function getTimeContext(dateQuery) {
 }
 
 /* ---------------------------------------------------
- 🤖 Dialogflow Gateway - ENHANCED WITH ROUTINES
+ ðŸ¤– Dialogflow Gateway - ENHANCED WITH ROUTINES
 --------------------------------------------------- */
+// Update your dialogflowGateway to use hybrid data fetching
 exports.dialogflowGateway = onRequest(
-  { timeoutSeconds: 30, memory: "256MiB", cors: true },
-  async (req, res) => {
+  { region: "asia-southeast1", timeoutSeconds: 30, memory: "256MiB", cors: true },
+  async (req, res) => { 
     res.set("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") return res.status(204).send("");
     if (req.method !== "POST")
@@ -5142,30 +5327,38 @@ exports.dialogflowGateway = onRequest(
       let reply = "";
       let userContext = {};
 
+      // Use hybrid data fetching
+      const data = await getUserDataHybrid(userId, intent);
+      if (!data) {
+        return res.status(404).json({ success: false, error: "User not found", version: VERSION });
+      }
+
+      // Add data source to context
+      userContext.dataSource = data.dataSource;
+
+      // Rest of your existing logic continues...
       if (intent.type === 'bot_info') {
         reply = `I'm your Elderly Care Assistant! I'm here to help you manage your appointments, remember your medications, and keep track of your important information. You can ask me about your schedule, personal details, learning resources, or any other assistance you need.`;
       
       } else if (intent.type === 'comprehensive_schedule') {
-        const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
-        if (!userData) {
-          return res.status(404).json({ success: false, error: "User not found", version: VERSION });
-        }
-        
-        const scheduleData = await getComprehensiveSchedule(userId, intent.dateQuery);
-        reply = generateEnhancedScheduleResponse(userData.userInfo, scheduleData, intent.dateQuery);
+        // Create a hybrid comprehensive schedule function
+        const scheduleData = await getComprehensiveScheduleHybrid(userId, intent.dateQuery);
+        reply = generateEnhancedScheduleResponse(data.userInfo, scheduleData, intent.dateQuery);
         userContext = {
-          userName: userData.userInfo.name,
-          userType: userData.userInfo.userType,
+          userName: data.userInfo.name,
+          userType: data.userInfo.userType,
           appointments: scheduleData.appointments.length,
           consultations: scheduleData.consultations.length,
           medications: scheduleData.medications.length,
           reminders: scheduleData.reminders.length,
           assignedRoutines: scheduleData.assignedRoutines.length,
           totalEvents: scheduleData.allEvents.length,
-          intent: intent
+          intent: intent,
+          dataSource: data.dataSource
         };
       
-      } else if (intent.type === 'user_info') {
+      }
+      else if (intent.type === 'user_info') {
         const data = await getUserData(userId, intent);
         if (!data) {
           return res.status(404).json({ success: false, error: "User not found", version: VERSION });
@@ -5278,7 +5471,7 @@ exports.dialogflowGateway = onRequest(
         };
       
       } else if (intent.type === 'user_preferences') {
-        // 🆕 User preferences handling
+        // ðŸ†• User preferences handling
         const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
         if (!userData) {
           return res.status(404).json({ success: false, error: "User not found", version: VERSION });
@@ -5370,6 +5563,56 @@ else if (intent.type === 'caregiver_consultations') {
   } else {
     reply = "I couldn't find your caregiver information. Please make sure you're logged in correctly.";
   }
+}// In the dialogflowGateway function, update this section:
+else if (intent.type === 'caregiver_elderly_appointments') {
+  // Use the dateQuery from intent (will be 'all' for "all elderly appointments")
+  const appointmentsData = await getElderlyAppointmentsForCaregiverEnhanced(userId, intent.dateQuery);
+  
+  if (appointmentsData.success) {
+    const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+    
+    reply = generateElderlyAppointmentsNotification(
+      userData?.userInfo || { name: 'Caregiver' }, 
+      appointmentsData
+    );
+    
+    userContext = {
+      userName: userData?.userInfo?.name || 'Caregiver',
+      userType: 'caregiver',
+      totalAppointments: appointmentsData.totalAppointments,
+      totalElderly: appointmentsData.totalElderly,
+      dateQuery: intent.dateQuery, // Make sure this is passed through
+      intent: intent
+    };
+  } else {
+    reply = "I couldn't retrieve elderly appointments. Please try again later.";
+  }
+}
+if (intent.type === "health_recommendations") {
+  // Fetch general health recommendations
+  const response = await fetch(
+    "https://gethealthrecommendations-ga4zzowbeq-as.a.run.app",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId }),
+    }
+  );
+  const data = await response.json();
+  return data.displayMessage; // already formatted by the function
+} 
+else if (intent.type === "health_tips") {
+  // Fetch category-based health tips
+  const response = await fetch(
+    "https://gethealthtips-ga4zzowbeq-as.a.run.app",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, category: intent.category || "general" }),
+    }
+  );
+  const data = await response.json();
+  return data.displayMessage; // already formatted
 }
 
 // In the dialogflowGateway function, update this section:
@@ -5396,29 +5639,46 @@ else if (intent.type === 'caregiver_schedule') {
     reply = "I couldn't retrieve your complete schedule. Please try again later.";
   }
 }
-      else if (intent.type === 'caregiver_elderly_appointments') {
-        const appointmentsData = await getElderlyAppointmentsForCaregiverEnhanced(userId, intent.dateQuery);
-        if (appointmentsData.success) {
-          const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
-          
-          // Enhanced response based on specific queries
-          if (intent.specificElderly) {
-            // Filter appointments for specific elderly
-            const filteredAppointments = appointmentsData.appointments.filter(apt => 
-              apt.elderlyName.toLowerCase().includes(intent.specificElderly)
-            );
-            reply = generateSpecificElderlyAppointmentsResponse(
-              userData?.userInfo || { name: 'Caregiver' }, 
-              filteredAppointments, 
-              intent.specificElderly
-            );
-          } else {
-            reply = generateElderlyAppointmentsNotification(
-              userData?.userInfo || { name: 'Caregiver' }, 
-              appointmentsData
-            );
-          }
-          
+      // MODIFIED: Handle 'all' appointments request properly
+if (intent.type === 'caregiver_elderly_appointments') {
+  // Determine the date query based on user input
+  let dateQuery = 'upcoming'; // default
+  
+  if (intent.dateQuery === 'all') {
+    dateQuery = 'all';
+  } else if (intent.dateQuery === 'today') {
+    dateQuery = 'today';
+  } else if (intent.dateQuery === 'past') {
+    dateQuery = 'past';
+  }
+  
+  // You can also check for specific keywords in the message
+  if (intent.message && intent.message.toLowerCase().includes('all appointment')) {
+    dateQuery = 'all';
+  }
+
+  const appointmentsData = await getElderlyAppointmentsForCaregiverEnhanced(userId, dateQuery);
+  
+  if (appointmentsData.success) {
+    const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+    
+    // Enhanced response based on specific queries
+    if (intent.specificElderly) {
+      // Filter appointments for specific elderly
+      const filteredAppointments = appointmentsData.appointments.filter(apt => 
+        apt.elderlyName.toLowerCase().includes(intent.specificElderly.toLowerCase())
+      );
+      reply = generateSpecificElderlyAppointmentsResponse(
+        userData?.userInfo || { name: 'Caregiver' }, 
+        filteredAppointments, 
+        intent.specificElderly
+      );
+    } else {
+      reply = generateElderlyAppointmentsNotification(
+        userData?.userInfo || { name: 'Caregiver' }, 
+        appointmentsData
+      );
+    }
           userContext = {
             userName: userData?.userInfo?.name || 'Caregiver',
             userType: 'caregiver',
@@ -5457,6 +5717,7 @@ else if (intent.type === 'caregiver_schedule') {
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
+      console.error('Error in dialogflowGateway:', error);
       res.status(500).json({
         success: false,
         error: "Internal server error",
@@ -5477,25 +5738,25 @@ function generateScheduleResponse(userInfo, appointments, consultations, intent)
   let response = `Here are your ${timeContext}, ${userInfo.name}:\n\n`;
   
   if (appointments.length > 0) {
-    response += `📅 **Appointments:**\n`;
+    response += `ðŸ“… **Appointments:**\n`;
     appointments.forEach((apt, index) => {
       response += `${index + 1}. **${apt.title}**\n`;
-      response += `   📅 ${formatDisplayDate(apt.date)}\n`;
-      response += `   ⏰ ${apt.time ? formatDisplayTime(apt.time) : 'All day'}\n`;
-      if (apt.location) response += `   📍 ${apt.location}\n`;
-      if (apt.notes) response += `   📝 ${apt.notes}\n`;
+      response += `   ðŸ“… ${formatDisplayDate(apt.date)}\n`;
+      response += `   â° ${apt.time ? formatDisplayTime(apt.time) : 'All day'}\n`;
+      if (apt.location) response += `   ðŸ“ ${apt.location}\n`;
+      if (apt.notes) response += `   ðŸ“ ${apt.notes}\n`;
       response += `\n`;
     });
   }
   
   if (consultations.length > 0) {
-  response += `🏥 **Consultations:**\n`;
+  response += `ðŸ¥ **Consultations:**\n`;
   consultations.forEach((consult, index) => {
     const consultDate = consult.appointmentDate || consult.requestedAt || consult.date;
     response += `${index + 1}. **${consult.reason || 'Medical Consultation'}**\n`;
-    response += `   📅 ${formatDisplayDate(consultDate)}\n`;
-    if (consult.patientName) response += `   👤 ${consult.patientName}\n`;
-    if (consult.status) response += `   📊 Status: ${consult.status}\n`;
+    response += `   ðŸ“… ${formatDisplayDate(consultDate)}\n`;
+    if (consult.patientName) response += `   ðŸ‘¤ ${consult.patientName}\n`;
+    if (consult.status) response += `   ðŸ“Š Status: ${consult.status}\n`;
     response += `\n`;
   });
 }
@@ -5504,8 +5765,9 @@ function generateScheduleResponse(userInfo, appointments, consultations, intent)
 }
 
 /* ---------------------------------------------------
- 👤 Quick Profile
+ ðŸ‘¤ Quick Profile
 --------------------------------------------------- */
+// Update quickProfile endpoint
 exports.quickProfile = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
   async (req, res) => {
@@ -5516,7 +5778,7 @@ exports.quickProfile = onRequest(
       const { userId } = req.method === "POST" ? req.body : req.query;
       if (!userId) return res.status(400).json({ error: "User ID required", version: VERSION });
 
-      const data = await getUserData(userId, { type: 'user_info', subType: 'all' });
+      const data = await getUserDataHybrid(userId, { type: 'user_info', subType: 'all' });
       if (!data) return res.status(404).json({ success: false, error: "User not found", version: VERSION });
 
       res.json({
@@ -5526,6 +5788,7 @@ exports.quickProfile = onRequest(
         consultations: data.consultations.length,
         upcomingAppointments: data.appointments,
         upcomingConsultations: data.consultations,
+        dataSource: data.dataSource, // Include data source in response
         timestamp: new Date().toISOString(),
         version: VERSION,
       });
@@ -5541,7 +5804,51 @@ exports.quickProfile = onRequest(
 );
 
 /* ---------------------------------------------------
- 👨‍⚕️ Caregiver Lookup Endpoint
+ ðŸ”„ Database Fallback Strategy
+--------------------------------------------------- */
+
+async function withDatabaseFallback(primaryOperation, fallbackOperation, operationName) {
+  try {
+    console.log(`ðŸ”„ Attempting ${operationName} with primary database...`);
+    const result = await primaryOperation();
+    
+    if (result && (!Array.isArray(result) || result.length > 0)) {
+      console.log(`âœ… ${operationName} successful with primary database`);
+      return { data: result, source: 'primary' };
+    }
+    
+    // If primary returns empty but successful, try fallback
+    console.log(`ðŸ”„ Primary database returned empty, trying fallback...`);
+    const fallbackResult = await fallbackOperation();
+    console.log(`âœ… ${operationName} completed with fallback database`);
+    return { data: fallbackResult, source: 'fallback' };
+    
+  } catch (primaryError) {
+    console.error(`âŒ Primary database failed for ${operationName}:`, primaryError);
+    
+    try {
+      console.log(`ðŸ”„ Falling back to secondary database...`);
+      const fallbackResult = await fallbackOperation();
+      console.log(`âœ… ${operationName} recovered with fallback database`);
+      return { data: fallbackResult, source: 'fallback' };
+    } catch (fallbackError) {
+      console.error(`ðŸ’¥ Both databases failed for ${operationName}:`, fallbackError);
+      throw new Error(`All database operations failed for ${operationName}`);
+    }
+  }
+}
+
+// Usage example:
+async function getAppointmentsWithFallback(userId, dateQuery) {
+  return await withDatabaseFallback(
+    () => getAppointmentsFromFirestore(userId, dateQuery),
+    () => getAppointmentsFromRTDB(userId, { dateQuery }),
+    'getAppointments'
+  );
+}
+
+/* ---------------------------------------------------
+ ðŸ‘¨â€âš•ï¸ Caregiver Lookup Endpoint
 --------------------------------------------------- */
 exports.getMyCaregivers = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -5578,7 +5885,7 @@ exports.getMyCaregivers = onRequest(
 );
 
 /* ---------------------------------------------------
- 💊 Medication Reminders Endpoints
+ ðŸ’Š Medication Reminders Endpoints
 --------------------------------------------------- */
 exports.getMyMedications = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -5615,7 +5922,7 @@ exports.getMyMedications = onRequest(
 );
 
 /* ---------------------------------------------------
- ⏰ Event Reminders Endpoints
+ â° Event Reminders Endpoints
 --------------------------------------------------- */
 exports.getMyReminders = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -5649,7 +5956,7 @@ exports.getMyReminders = onRequest(
   }
 );
 /* ---------------------------------------------------
- 👨‍⚕️ CAREGIVER COMPREHENSIVE DATA ENDPOINT
+ ðŸ‘¨â€âš•ï¸ CAREGIVER COMPREHENSIVE DATA ENDPOINT
 --------------------------------------------------- */
 
 exports.getCaregiverComprehensiveData = onRequest(
@@ -5662,7 +5969,7 @@ exports.getCaregiverComprehensiveData = onRequest(
       const { userId, dateQuery = 'upcoming' } = req.method === "POST" ? req.body : req.query;
       if (!userId) return res.status(400).json({ error: "User ID required", version: VERSION });
 
-      console.log("🔍 Getting comprehensive data for caregiver:", userId, "Date query:", dateQuery);
+      console.log("ðŸ” Getting comprehensive data for caregiver:", userId, "Date query:", dateQuery);
 
       // Get all caregiver data in parallel
       const [caregiverInfo, assignedElderly, consultations, elderlyAppointments, schedule] = await Promise.all([
@@ -5722,7 +6029,7 @@ exports.getCaregiverComprehensiveData = onRequest(
       res.json(response);
 
     } catch (error) {
-      console.error("💥 Error in getCaregiverComprehensiveData:", error);
+      console.error("ðŸ’¥ Error in getCaregiverComprehensiveData:", error);
       res.status(500).json({
         success: false,
         error: "Internal server error",
@@ -5734,7 +6041,7 @@ exports.getCaregiverComprehensiveData = onRequest(
 );
 
 /* ---------------------------------------------------
- 📚 Learning Resources Endpoints
+ ðŸ“š Learning Resources Endpoints
 --------------------------------------------------- */
 exports.getLearningResources = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -5808,7 +6115,7 @@ exports.getUserLearningProgress = onRequest(
 );
 
 /* ---------------------------------------------------
- 📅 Comprehensive Schedule Endpoint (Popup-Friendly)
+ ðŸ“… Comprehensive Schedule Endpoint (Popup-Friendly)
 --------------------------------------------------- */
 exports.getMySchedule = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -5906,7 +6213,7 @@ function getEventDetails(event) {
 }
 
 /* ---------------------------------------------------
- ❤️ Health Check
+ â¤ï¸ Health Check
 --------------------------------------------------- */
 exports.healthCheck = onRequest(
   { timeoutSeconds: 10, memory: "128MiB", cors: true },
@@ -5939,7 +6246,7 @@ exports.healthCheck = onRequest(
 );
 
 /* ---------------------------------------------------
- 🔔 SCHEDULED NOTIFICATION FUNCTIONS (FIXED)
+ ðŸ”” SCHEDULED NOTIFICATION FUNCTIONS (FIXED)
 --------------------------------------------------- */
 exports.sendDailyMorningNotifications = onSchedule({
   schedule: '0 8 * * *',
@@ -6018,22 +6325,22 @@ function generateDailyNotificationMessage(userName, schedule) {
   const { appointments, consultations, medications, reminders, assignedRoutines, allEvents } = schedule;
   const totalEvents = allEvents.length;
   
-  let message = `📅 Good morning ${userName}! Here's your schedule for today:\n\n`;
+  let message = `ðŸ“… Good morning ${userName}! Here's your schedule for today:\n\n`;
   
   if (totalEvents === 0) {
-    message += `You don't have any events scheduled for today. Enjoy your day! 🎉`;
+    message += `You don't have any events scheduled for today. Enjoy your day! ðŸŽ‰`;
     return message;
   }
   
   message += `You have ${totalEvents} events today:\n`;
-  message += `• 📅 Appointments: ${appointments.length}\n`;
-  message += `• 🏥 Consultations: ${consultations.length}\n`;
-  message += `• 💊 Medications: ${medications.length}\n`;
-  message += `• ⏰ Reminders: ${reminders.length}\n`;
-  message += `• 📋 Routines: ${assignedRoutines.length}\n\n`;
+  message += `â€¢ ðŸ“… Appointments: ${appointments.length}\n`;
+  message += `â€¢ ðŸ¥ Consultations: ${consultations.length}\n`;
+  message += `â€¢ ðŸ’Š Medications: ${medications.length}\n`;
+  message += `â€¢ â° Reminders: ${reminders.length}\n`;
+  message += `â€¢ ðŸ“‹ Routines: ${assignedRoutines.length}\n\n`;
   
   const nextEvents = allEvents.slice(0, 3);
-  message += `⏰ **Next Events:**\n`;
+  message += `â° **Next Events:**\n`;
   
   nextEvents.forEach((event, index) => {
     const time = getEventTime(event);
@@ -6044,13 +6351,13 @@ function generateDailyNotificationMessage(userName, schedule) {
     message += `\n... and ${totalEvents - 3} more events today.`;
   }
   
-  message += `\n\nHave a wonderful day! 🌱`;
+  message += `\n\nHave a wonderful day! ðŸŒ±`;
   
   return message;
 }
 
 /* ---------------------------------------------------
- 🔔 Login Schedule Popup Endpoint
+ ðŸ”” Login Schedule Popup Endpoint
 --------------------------------------------------- */
 exports.getLoginSchedulePopup = onRequest(
   { 
@@ -6059,7 +6366,7 @@ exports.getLoginSchedulePopup = onRequest(
     cors: true 
   },
   async (req, res) => {
-    console.log('🔔 getLoginSchedulePopup called');
+    console.log('ðŸ”” getLoginSchedulePopup called');
     
     // Set CORS headers properly
     res.set("Access-Control-Allow-Origin", "*");
@@ -6076,12 +6383,12 @@ exports.getLoginSchedulePopup = onRequest(
     });
 
     try {
-      console.log('📝 Parsing request...');
+      console.log('ðŸ“ Parsing request...');
       const { userId } = req.method === "POST" ? req.body : req.query;
-      console.log('👤 User ID:', userId);
+      console.log('ðŸ‘¤ User ID:', userId);
       
       if (!userId) {
-        console.log('❌ No user ID provided');
+        console.log('âŒ No user ID provided');
         return res.status(400).json({ 
           success: false, 
           error: "User ID required", 
@@ -6089,7 +6396,7 @@ exports.getLoginSchedulePopup = onRequest(
         });
       }
 
-      console.log('🔍 Getting user data...');
+      console.log('ðŸ” Getting user data...');
       const userDataPromise = getUserData(userId, { 
         type: 'user_info', 
         subType: 'all' 
@@ -6098,10 +6405,10 @@ exports.getLoginSchedulePopup = onRequest(
       // Race between function and our timeout
       const userData = await Promise.race([userDataPromise, timeoutPromise]);
       
-      console.log('✅ User data retrieved:', userData ? 'found' : 'not found');
+      console.log('âœ… User data retrieved:', userData ? 'found' : 'not found');
       
       if (!userData) {
-        console.log('❌ User not found');
+        console.log('âŒ User not found');
         return res.status(404).json({ 
           success: false, 
           error: "User not found", 
@@ -6109,15 +6416,15 @@ exports.getLoginSchedulePopup = onRequest(
         });
       }
 
-      console.log('📅 Getting comprehensive schedule...');
+      console.log('ðŸ“… Getting comprehensive schedule...');
       const scheduleDataPromise = getComprehensiveSchedule(userId, 'today');
       const scheduleData = await Promise.race([scheduleDataPromise, timeoutPromise]);
       
-      console.log('✅ Schedule data retrieved, events:', scheduleData.allEvents.length);
+      console.log('âœ… Schedule data retrieved, events:', scheduleData.allEvents.length);
       
-      console.log('🎯 Generating popup data...');
+      console.log('ðŸŽ¯ Generating popup data...');
       const popupData = generateLoginPopupData(userData.userInfo, scheduleData);
-      console.log('✅ Popup data generated');
+      console.log('âœ… Popup data generated');
       
       const response = {
         success: true,
@@ -6128,12 +6435,12 @@ exports.getLoginSchedulePopup = onRequest(
         version: VERSION,
       };
       
-      console.log('🚀 Sending successful response');
+      console.log('ðŸš€ Sending successful response');
       return res.json(response);
       
     } catch (error) {
-      console.error('💥 ERROR in getLoginSchedulePopup:', error);
-      console.error('🔍 Error stack:', error.stack);
+      console.error('ðŸ’¥ ERROR in getLoginSchedulePopup:', error);
+      console.error('ðŸ” Error stack:', error.stack);
       
       // Different error messages based on error type
       let errorMessage = "Internal server error";
@@ -6178,7 +6485,7 @@ function generateLoginPopupData(userInfo, scheduleData) {
   
   return {
     showPopup: showPopup,
-    title: `📅 Today's Schedule`,
+    title: `ðŸ“… Today's Schedule`,
     subtitle: `Welcome back, ${userInfo.firstName || userInfo.name.split(' ')[0] || 'there'}!`,
     date: today,
     summary: {
@@ -6217,13 +6524,13 @@ function generateLoginPopupData(userInfo, scheduleData) {
 function getTimeBasedGreeting() {
   const hour = new Date().getHours();
   
-  if (hour < 12) return "Good morning! 🌅";
-  else if (hour < 18) return "Good afternoon! ☀️";
-  else return "Good evening! 🌙";
+  if (hour < 12) return "Good morning! ðŸŒ…";
+  else if (hour < 18) return "Good afternoon! â˜€ï¸";
+  else return "Good evening! ðŸŒ™";
 }
 
 /* ---------------------------------------------------
- 🎯 ACTIVITIES FUNCTIONS
+ ðŸŽ¯ ACTIVITIES FUNCTIONS
 --------------------------------------------------- */
 async function getActivitiesForSchedule(userId, dateQuery = 'today') {
   try {
@@ -6435,40 +6742,40 @@ function analyzeActivitiesPreferences(recentActivities) {
 }
 
 function generateActivitiesPreferencesResponse(userInfo, activitiesPreferences) {
-  let response = `🎯 **Your Activities Preferences**, ${userInfo.name}!\n\n`;
+  let response = `ðŸŽ¯ **Your Activities Preferences**, ${userInfo.name}!\n\n`;
   
-  response += `📊 **Activity Level:** ${activitiesPreferences.activityFrequency}\n`;
-  response += `🏷️ **Preferred Categories:** ${activitiesPreferences.preferredCategories.join(', ')}\n`;
-  response += `⭐ **Difficulty Preference:** ${activitiesPreferences.preferredDifficulty}\n`;
-  response += `⏱️ **Preferred Duration:** ${activitiesPreferences.preferredDuration}\n`;
-  response += `❤️ **Your Interests:** ${activitiesPreferences.interests.join(', ')}\n\n`;
+  response += `ðŸ“Š **Activity Level:** ${activitiesPreferences.activityFrequency}\n`;
+  response += `ðŸ·ï¸ **Preferred Categories:** ${activitiesPreferences.preferredCategories.join(', ')}\n`;
+  response += `â­ **Difficulty Preference:** ${activitiesPreferences.preferredDifficulty}\n`;
+  response += `â±ï¸ **Preferred Duration:** ${activitiesPreferences.preferredDuration}\n`;
+  response += `â¤ï¸ **Your Interests:** ${activitiesPreferences.interests.join(', ')}\n\n`;
   
-  response += `📈 **Activity Stats:**\n`;
-  response += `• Total activities: ${activitiesPreferences.totalActivities}\n`;
-  response += `• Engagement level: ${activitiesPreferences.engagementLevel}\n`;
+  response += `ðŸ“ˆ **Activity Stats:**\n`;
+  response += `â€¢ Total activities: ${activitiesPreferences.totalActivities}\n`;
+  response += `â€¢ Engagement level: ${activitiesPreferences.engagementLevel}\n`;
   
   if (activitiesPreferences.favoriteActivity !== 'Not specified') {
-    response += `• Favorite activity: ${activitiesPreferences.favoriteActivity}\n`;
+    response += `â€¢ Favorite activity: ${activitiesPreferences.favoriteActivity}\n`;
   }
   
-  response += `\n💡 **Suggestions:**\n`;
+  response += `\nðŸ’¡ **Suggestions:**\n`;
   
   if (activitiesPreferences.activityFrequency === 'New User') {
-    response += `• Welcome! Start by exploring different activities\n`;
-    response += `• Try our wellness and social activities first\n`;
-    response += `• Join 1-2 activities per week to get started\n`;
+    response += `â€¢ Welcome! Start by exploring different activities\n`;
+    response += `â€¢ Try our wellness and social activities first\n`;
+    response += `â€¢ Join 1-2 activities per week to get started\n`;
   } else if (activitiesPreferences.activityFrequency === 'Occasional') {
-    response += `• Try to join at least 2 activities per week\n`;
-    response += `• Explore different categories to find what you enjoy\n`;
+    response += `â€¢ Try to join at least 2 activities per week\n`;
+    response += `â€¢ Explore different categories to find what you enjoy\n`;
   } else if (activitiesPreferences.activityFrequency === 'Moderate') {
-    response += `• Great! You're maintaining a good activity level\n`;
-    response += `• Consider trying activities in new categories\n`;
+    response += `â€¢ Great! You're maintaining a good activity level\n`;
+    response += `â€¢ Consider trying activities in new categories\n`;
   } else {
-    response += `• Excellent! You're very active\n`;
-    response += `• Share your favorite activities with friends\n`;
+    response += `â€¢ Excellent! You're very active\n`;
+    response += `â€¢ Share your favorite activities with friends\n`;
   }
   
-  response += `• Check the activities section for new opportunities\n`;
+  response += `â€¢ Check the activities section for new opportunities\n`;
   
   return response;
 }
@@ -6486,26 +6793,26 @@ function generateActivitiesResponse(userInfo, activities, dateQuery) {
   const suggestedActivities = activities.filter(act => !act.isRegistered);
   
   if (registeredActivities.length > 0) {
-    response += `✅ **Registered Activities:**\n`;
+    response += `âœ… **Registered Activities:**\n`;
     registeredActivities.forEach((activity, index) => {
       const time = activity.time ? formatDisplayTime(activity.time) : 'All day';
       response += `${index + 1}. **${activity.title}**\n`;
-      response += `   ⏰ ${time} on ${formatDisplayDate(activity.date)}\n`;
-      if (activity.category) response += `   🏷️ ${activity.category}\n`;
-      if (activity.duration) response += `   ⏱️ ${activity.duration}\n`;
-      if (activity.description) response += `   📝 ${activity.description}\n`;
+      response += `   â° ${time} on ${formatDisplayDate(activity.date)}\n`;
+      if (activity.category) response += `   ðŸ·ï¸ ${activity.category}\n`;
+      if (activity.duration) response += `   â±ï¸ ${activity.duration}\n`;
+      if (activity.description) response += `   ðŸ“ ${activity.description}\n`;
       response += `\n`;
     });
   }
   
   if (suggestedActivities.length > 0) {
-    response += `💡 **Suggested Activities:**\n`;
+    response += `ðŸ’¡ **Suggested Activities:**\n`;
     suggestedActivities.forEach((activity, index) => {
       response += `${index + 1}. **${activity.title}**\n`;
-      if (activity.category) response += `   🏷️ ${activity.category}\n`;
-      if (activity.duration) response += `   ⏱️ ${activity.duration}\n`;
-      if (activity.difficulty) response += `   ⭐ ${activity.difficulty}\n`;
-      if (activity.description) response += `   📝 ${activity.description}\n`;
+      if (activity.category) response += `   ðŸ·ï¸ ${activity.category}\n`;
+      if (activity.duration) response += `   â±ï¸ ${activity.duration}\n`;
+      if (activity.difficulty) response += `   â­ ${activity.difficulty}\n`;
+      if (activity.description) response += `   ðŸ“ ${activity.description}\n`;
       response += `\n`;
     });
   }
@@ -6514,7 +6821,7 @@ function generateActivitiesResponse(userInfo, activities, dateQuery) {
 }
 
 /* ---------------------------------------------------
- 🎯 ACTIVITIES API ENDPOINTS
+ ðŸŽ¯ ACTIVITIES API ENDPOINTS
 --------------------------------------------------- */
 exports.getUserActivities = onRequest(
   { timeoutSeconds: 15, memory: "128MiB", cors: true },
@@ -6549,34 +6856,684 @@ exports.getUserActivities = onRequest(
     }
   }
 );
+/* ---------------------------------------------------
+ ðŸŽ¯ ACTIVITIES PREFERENCES FUNCTIONS - HYBRID DATABASE
+--------------------------------------------------- */
+
+// Main function to get activities preferences from both databases
+async function getActivitiesPreferences(userId) {
+  try {
+    console.log("ðŸŽ¯ Getting activities preferences for:", userId);
+    
+    // Try Firestore first
+    let preferences = await getActivitiesPreferencesFromFirestore(userId);
+    let dataSource = 'firestore';
+    
+    // If Firestore fails or returns empty, try Realtime Database
+    if (!preferences || Object.keys(preferences).length === 0) {
+      console.log("ðŸ”„ Firestore returned empty, trying Realtime Database...");
+      preferences = await getActivitiesPreferencesFromRTDB(userId);
+      dataSource = 'realtime-db';
+    }
+    
+    // If both databases return empty, generate default preferences
+    if (!preferences || Object.keys(preferences).length === 0) {
+      console.log("ðŸ”„ Both databases empty, generating default preferences...");
+      preferences = await generateDefaultActivitiesPreferences(userId);
+      dataSource = 'default';
+    }
+    
+    console.log(`âœ… Activities preferences retrieved from: ${dataSource}`);
+    
+    return {
+      success: true,
+      preferences: preferences,
+      dataSource: dataSource,
+      timestamp: new Date().toISOString()
+    };
+    
+  } catch (error) {
+    console.error("ðŸ’¥ Error getting activities preferences:", error);
+    
+    // Fallback to default preferences on error
+    const defaultPreferences = await generateDefaultActivitiesPreferences(userId);
+    
+    return {
+      success: false,
+      preferences: defaultPreferences,
+      dataSource: 'error_fallback',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    };
+  }
+}
+
+// Get activities preferences from Firestore
+async function getActivitiesPreferencesFromFirestore(userId) {
+  try {
+    if (!firestore) {
+      console.log("âŒ Firestore not initialized");
+      return null;
+    }
+    
+    const userDocRef = firestore.collection('users').doc(userId);
+    const userDoc = await userDocRef.get();
+    
+    if (!userDoc.exists) {
+      console.log("ðŸ“­ User not found in Firestore");
+      return null;
+    }
+    
+    const userData = userDoc.data();
+    
+    // Check various possible locations for preferences in Firestore
+    let preferences = null;
+    
+    if (userData.activitiesPreferences) {
+      preferences = userData.activitiesPreferences;
+    } else if (userData.preferences && userData.preferences.activities) {
+      preferences = userData.preferences.activities;
+    } else if (userData.userPreferences && userData.userPreferences.activities) {
+      preferences = userData.userPreferences.activities;
+    } else if (userData.learningData && userData.learningData.preferences) {
+      preferences = userData.learningData.preferences;
+    }
+    
+    // If we found preferences, enhance with user info
+    if (preferences) {
+      preferences.userId = userId;
+      preferences.lastUpdated = userData.lastUpdated || userData.updatedAt || new Date().toISOString();
+      preferences.dataSource = 'firestore';
+    }
+    
+    return preferences;
+    
+  } catch (error) {
+    console.error("âŒ Firestore preferences error:", error);
+    return null;
+  }
+}
+
+// Get activities preferences from Realtime Database
+async function getActivitiesPreferencesFromRTDB(userId) {
+  try {
+    const normalizedKey = normalizeEmailForFirebase(userId);
+    
+    // Try multiple possible paths in RTDB
+    const possiblePaths = [
+      `Account/${normalizedKey}/activitiesPreferences`,
+      `Account/${normalizedKey}/preferences/activities`,
+      `Account/${normalizedKey}/userPreferences/activities`,
+      `users/${normalizedKey}/activitiesPreferences`,
+      `userPreferences/${normalizedKey}/activities`,
+      `activitiesPreferences/${normalizedKey}`
+    ];
+    
+    for (const path of possiblePaths) {
+      try {
+        const preferencesRef = rtdb.ref(path);
+        const snapshot = await preferencesRef.get();
+        
+        if (snapshot.exists()) {
+          console.log(`âœ… Found preferences at: ${path}`);
+          const preferences = snapshot.val();
+          
+          // Enhance with metadata
+          preferences.userId = userId;
+          preferences.lastUpdated = preferences.lastUpdated || new Date().toISOString();
+          preferences.dataSource = 'realtime-db';
+          preferences.foundAtPath = path;
+          
+          return preferences;
+        }
+      } catch (pathError) {
+        console.log(`âŒ Path ${path} not accessible:`, pathError.message);
+        continue;
+      }
+    }
+    
+    // If no preferences found, try to generate from user activities
+    console.log("ðŸ”„ No direct preferences found, generating from user activities...");
+    const generatedPreferences = await generatePreferencesFromUserActivities(userId);
+    
+    return generatedPreferences;
+    
+  } catch (error) {
+    console.error("âŒ RTDB preferences error:", error);
+    return null;
+  }
+}
+
+// Generate preferences by analyzing user's activities
+async function generatePreferencesFromUserActivities(userId) {
+  try {
+    // Get user's recent activities from both databases
+    const recentActivities = await retrieveSelectedActivities(userId);
+    
+    // Analyze activities to generate preferences
+    const preferences = analyzeActivitiesPreferences(recentActivities);
+    
+    // Enhance with user data
+    const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+    
+    if (userData && userData.userInfo) {
+      preferences.userId = userId;
+      preferences.userName = userData.userInfo.name;
+      preferences.userAge = userData.userInfo.age;
+      preferences.generatedFromActivities = true;
+      preferences.activitiesAnalyzed = recentActivities.length;
+      preferences.lastUpdated = new Date().toISOString();
+      preferences.dataSource = 'generated_from_activities';
+    }
+    
+    // Save the generated preferences for future use
+    await saveGeneratedPreferences(userId, preferences);
+    
+    return preferences;
+    
+  } catch (error) {
+    console.error("âŒ Error generating preferences from activities:", error);
+    return generateDefaultActivitiesPreferences(userId);
+  }
+}
+
+// Save generated preferences to database
+async function saveGeneratedPreferences(userId, preferences) {
+  try {
+    // Try saving to Firestore first
+    try {
+      if (firestore) {
+        const userDocRef = firestore.collection('users').doc(userId);
+        await userDocRef.set({
+          activitiesPreferences: preferences,
+          lastUpdated: new Date().toISOString()
+        }, { merge: true });
+        console.log("âœ… Preferences saved to Firestore");
+      }
+    } catch (firestoreError) {
+      console.log("âŒ Could not save to Firestore:", firestoreError.message);
+    }
+    
+    // Try saving to Realtime Database
+    try {
+      const normalizedKey = normalizeEmailForFirebase(userId);
+      const preferencesRef = rtdb.ref(`Account/${normalizedKey}/activitiesPreferences`);
+      await preferencesRef.set(preferences);
+      console.log("âœ… Preferences saved to Realtime Database");
+    } catch (rtdbError) {
+      console.log("âŒ Could not save to Realtime Database:", rtdbError.message);
+    }
+    
+  } catch (error) {
+    console.error("âŒ Error saving generated preferences:", error);
+    // Don't throw error - this is non-critical
+  }
+}
+
+// Generate default activities preferences
+async function generateDefaultActivitiesPreferences(userId) {
+  try {
+    // Get basic user info for better defaults
+    const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+    
+    const defaultPreferences = {
+      userId: userId,
+      userName: userData?.userInfo?.name || 'User',
+      userAge: userData?.userInfo?.age || null,
+      preferredCategories: ['Wellness', 'Social', 'Learning'],
+      preferredDifficulty: 'Easy',
+      preferredDuration: '30-45 mins',
+      activityFrequency: 'New User',
+      interests: ['General wellness', 'Social activities', 'Health education'],
+      totalActivities: 0,
+      favoriteActivity: 'Not specified',
+      engagementLevel: 'New',
+      notificationPreferences: {
+        newActivities: true,
+        reminders: true,
+        recommendations: true
+      },
+      accessibilityNeeds: {
+        mobility: 'Standard',
+        vision: 'Standard',
+        hearing: 'Standard'
+      },
+      timePreferences: {
+        morning: true,
+        afternoon: true,
+        evening: false
+      },
+      socialPreferences: {
+        groupActivities: true,
+        individualActivities: true,
+        virtualActivities: true
+      },
+      generatedAutomatically: true,
+      lastUpdated: new Date().toISOString(),
+      dataSource: 'default_generated'
+    };
+    
+    // Adjust defaults based on user age if available
+    if (userData?.userInfo?.age) {
+      const age = userData.userInfo.age;
+      if (age > 75) {
+        defaultPreferences.preferredDifficulty = 'Very Easy';
+        defaultPreferences.preferredDuration = '20-30 mins';
+        defaultPreferences.accessibilityNeeds.mobility = 'Enhanced';
+      } else if (age > 65) {
+        defaultPreferences.preferredDifficulty = 'Easy';
+        defaultPreferences.preferredDuration = '30-45 mins';
+      }
+      
+      // Adjust based on medical conditions if available
+      if (userData.userInfo.medicalConditions && userData.userInfo.medicalConditions.length > 0) {
+        defaultPreferences.interests.push('Health management');
+        if (userData.userInfo.medicalConditions.some(condition => 
+          condition.toLowerCase().includes('heart') || condition.toLowerCase().includes('cardio'))) {
+          defaultPreferences.preferredDifficulty = 'Light';
+        }
+      }
+    }
+    
+    return defaultPreferences;
+    
+  } catch (error) {
+    console.error("âŒ Error generating default preferences:", error);
+    
+    // Ultimate fallback
+    return {
+      userId: userId,
+      preferredCategories: ['General'],
+      preferredDifficulty: 'Easy',
+      preferredDuration: '30 mins',
+      activityFrequency: 'New User',
+      interests: ['General activities'],
+      totalActivities: 0,
+      engagementLevel: 'New',
+      generatedAutomatically: true,
+      lastUpdated: new Date().toISOString(),
+      dataSource: 'fallback'
+    };
+  }
+}
+
+// Enhanced function to retrieve user's selected activities from both databases
+async function retrieveSelectedActivities(userId) {
+  try {
+    let activities = [];
+    
+    // Try Firestore first
+    try {
+      const firestoreActivities = await getActivitiesFromFirestore(userId);
+      if (firestoreActivities && firestoreActivities.length > 0) {
+        activities = firestoreActivities;
+        console.log(`âœ… Found ${activities.length} activities in Firestore`);
+      }
+    } catch (firestoreError) {
+      console.log("âŒ Firestore activities retrieval failed:", firestoreError.message);
+    }
+    
+    // If Firestore empty, try Realtime Database
+    if (activities.length === 0) {
+      try {
+        const rtdbActivities = await getActivitiesFromRTDB(userId);
+        if (rtdbActivities && rtdbActivities.length > 0) {
+          activities = rtdbActivities;
+          console.log(`âœ… Found ${activities.length} activities in Realtime Database`);
+        }
+      } catch (rtdbError) {
+        console.log("âŒ Realtime Database activities retrieval failed:", rtdbError.message);
+      }
+    }
+    
+    // If both empty, get from learning resources
+    if (activities.length === 0) {
+      try {
+        const learningActivities = await getActivitiesFromLearningResources(userId);
+        if (learningActivities && learningActivities.length > 0) {
+          activities = learningActivities;
+          console.log(`âœ… Found ${activities.length} activities from learning resources`);
+        }
+      } catch (learningError) {
+        console.log("âŒ Learning resources activities retrieval failed:", learningError.message);
+      }
+    }
+    
+    return activities;
+    
+  } catch (error) {
+    console.error("ðŸ’¥ Error retrieving selected activities:", error);
+    return [];
+  }
+}
+
+// Get activities from Firestore
+async function getActivitiesFromFirestore(userId) {
+  try {
+    if (!firestore) {
+      console.log("âŒ Firestore not initialized");
+      return [];
+    }
+    
+    const activitiesRef = firestore.collection('activities');
+    const snapshot = await activitiesRef
+      .where('userId', '==', userId)
+      .orderBy('lastAccessed', 'desc')
+      .limit(20)
+      .get();
+    
+    if (snapshot.empty) {
+      return [];
+    }
+    
+    const activities = [];
+    snapshot.forEach(doc => {
+      activities.push({
+        id: doc.id,
+        ...doc.data()
+      });
+    });
+    
+    return activities;
+    
+  } catch (error) {
+    console.error("âŒ Firestore activities error:", error);
+    return [];
+  }
+}
+
+// Get activities from Realtime Database
+async function getActivitiesFromRTDB(userId) {
+  try {
+    const activities = [];
+    const normalizedKey = normalizeEmailForFirebase(userId);
+    
+    // Check multiple possible paths
+    const possiblePaths = [
+      `userActivities/${normalizedKey}`,
+      `Account/${normalizedKey}/selectedActivities`,
+      `activitiesRegistrations/${normalizedKey}`,
+      `learningData/${normalizedKey}/resourcesClicked`
+    ];
+    
+    for (const path of possiblePaths) {
+      try {
+        const ref = rtdb.ref(path);
+        const snapshot = await ref.get();
+        
+        if (snapshot.exists()) {
+          const data = snapshot.val();
+          
+          if (typeof data === 'object') {
+            Object.entries(data).forEach(([key, value]) => {
+              if (value && typeof value === 'object') {
+                activities.push({
+                  id: key,
+                  ...value
+                });
+              } else if (key !== 'undefined' && value) {
+                // Handle simple key-value pairs (like resourcesClicked)
+                activities.push({
+                  id: key,
+                  title: value.title || `Activity ${key}`,
+                  category: value.category || 'General',
+                  accessedAt: value.timestamp || new Date().toISOString()
+                });
+              }
+            });
+          }
+          
+          if (activities.length > 0) {
+            console.log(`âœ… Found activities at path: ${path}`);
+            break;
+          }
+        }
+      } catch (pathError) {
+        continue;
+      }
+    }
+    
+    return activities.slice(0, 20); // Limit to 20 most recent
+    
+  } catch (error) {
+    console.error("âŒ RTDB activities error:", error);
+    return [];
+  }
+}
+
+// Get activities from learning resources
+async function getActivitiesFromLearningResources(userId) {
+  try {
+    const learningData = await getUserLearningData(userId);
+    
+    if (!learningData || !learningData.learningData) {
+      return [];
+    }
+    
+    const { resourcesClicked = [] } = learningData.learningData;
+    
+    if (resourcesClicked.length === 0) {
+      return [];
+    }
+    
+    // Get the actual resource details
+    const allResources = await getLearningResources();
+    const recentActivities = allResources.filter(resource => 
+      resourcesClicked.includes(resource.id)
+    ).slice(0, 10);
+    
+    return recentActivities.map(resource => ({
+      id: resource.id,
+      title: resource.title,
+      category: resource.category,
+      description: resource.description,
+      accessedAt: resource.lastAccessed || new Date().toISOString(),
+      type: 'learning_resource'
+    }));
+    
+  } catch (error) {
+    console.error("âŒ Learning resources activities error:", error);
+    return [];
+  }
+}
+
+// Enhanced analysis function
+function analyzeActivitiesPreferences(recentActivities) {
+  if (!recentActivities || recentActivities.length === 0) {
+    return {
+      preferredCategories: ['Wellness', 'Social'],
+      preferredDifficulty: 'Easy',
+      preferredDuration: '30-45 mins',
+      activityFrequency: 'New User',
+      interests: ['General wellness', 'Social activities'],
+      totalActivities: 0,
+      favoriteActivity: 'Not specified',
+      engagementLevel: 'New',
+      confidenceScore: 0
+    };
+  }
+
+  const categoryCount = {};
+  const difficultyCount = {};
+  const durationCount = {};
+  const typeCount = {};
+  
+  recentActivities.forEach(activity => {
+    // Category analysis
+    const category = activity.category || 'General';
+    categoryCount[category] = (categoryCount[category] || 0) + 1;
+    
+    // Difficulty analysis
+    const difficulty = activity.difficulty || 'Easy';
+    difficultyCount[difficulty] = (difficultyCount[difficulty] || 0) + 1;
+    
+    // Duration analysis
+    const duration = activity.duration || '30 min';
+    durationCount[duration] = (durationCount[duration] || 0) + 1;
+    
+    // Type analysis
+    const type = activity.type || 'general';
+    typeCount[type] = (typeCount[type] || 0) + 1;
+  });
+
+  // Calculate top preferences
+  const topCategories = Object.entries(categoryCount)
+    .sort(([,a], [,b]) => b - a)
+    .slice(0, 3)
+    .map(([category]) => category);
+    
+  const topDifficulty = Object.entries(difficultyCount)
+    .sort(([,a], [,b]) => b - a)[0]?.[0] || 'Easy';
+    
+  const topDuration = Object.entries(durationCount)
+    .sort(([,a], [,b]) => b - a)[0]?.[0] || '30-45 mins';
+
+  // Calculate frequency level
+  let frequency;
+  if (recentActivities.length > 15) frequency = 'Very Active';
+  else if (recentActivities.length > 8) frequency = 'Active';
+  else if (recentActivities.length > 3) frequency = 'Moderate';
+  else frequency = 'Occasional';
+
+  // Determine interests based on categories
+  const interests = [];
+  topCategories.forEach(category => {
+    if (category.includes('Wellness') || category.includes('Exercise') || category.includes('Health')) {
+      if (!interests.includes('Health & Wellness')) interests.push('Health & Wellness');
+    }
+    if (category.includes('Social') || category.includes('Community')) {
+      if (!interests.includes('Social Activities')) interests.push('Social Activities');
+    }
+    if (category.includes('Learning') || category.includes('Education')) {
+      if (!interests.includes('Learning & Education')) interests.push('Learning & Education');
+    }
+    if (category.includes('Creative') || category.includes('Art')) {
+      if (!interests.includes('Creative Activities')) interests.push('Creative Activities');
+    }
+  });
+  
+  if (interests.length === 0) interests.push('General activities');
+
+  // Calculate confidence score based on data quality
+  const confidenceScore = Math.min(100, Math.floor(
+    (recentActivities.length / 20) * 70 + // 70% based on activity count
+    (topCategories.length / 3) * 30 // 30% based on category diversity
+  ));
+
+  const preferences = {
+    preferredCategories: topCategories,
+    preferredDifficulty: topDifficulty,
+    preferredDuration: topDuration,
+    activityFrequency: frequency,
+    interests: interests,
+    totalActivities: recentActivities.length,
+    favoriteActivity: recentActivities[0]?.title || 'Not specified',
+    engagementLevel: recentActivities.length > 10 ? 'High' : recentActivities.length > 5 ? 'Moderate' : 'Low',
+    confidenceScore: confidenceScore,
+    lastActivityDate: recentActivities[0]?.accessedAt || new Date().toISOString(),
+    analysisDate: new Date().toISOString()
+  };
+
+  return preferences;
+}
+
+/* ---------------------------------------------------
+ ðŸŽ¯ UPDATED ACTIVITIES PREFERENCES API ENDPOINT
+--------------------------------------------------- */
 
 exports.getActivitiesPreferences = onRequest(
-  { timeoutSeconds: 15, memory: "128MiB", cors: true },
+  { 
+    timeoutSeconds: 30, 
+    memory: "256MiB", 
+    cors: true 
+  },
   async (req, res) => {
+    // Set CORS headers
     res.set("Access-Control-Allow-Origin", "*");
-    if (req.method === "OPTIONS") return res.status(204).send("");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+      return res.status(204).send("");
+    }
 
     try {
+      console.log("ðŸŽ¯ Received request for activities preferences");
+      
       const { userId } = req.method === "POST" ? req.body : req.query;
-      if (!userId) return res.status(400).json({ error: "User ID required", version: VERSION });
+      
+      console.log("ðŸ‘¤ User ID:", userId);
 
-      const recentActivities = await retrieveSelectedActivities(userId);
-      const activitiesPreferences = analyzeActivitiesPreferences(recentActivities);
+      if (!userId) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "User ID is required", 
+          version: VERSION 
+        });
+      }
+
+      if (!validateEmail(userId)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid user ID format", 
+          version: VERSION 
+        });
+      }
+
+      // Get user data for context
       const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+      
+      if (!userData) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "User not found", 
+          version: VERSION 
+        });
+      }
 
-      res.json({
-        success: true,
-        userInfo: userData?.userInfo || null,
-        preferences: activitiesPreferences,
-        recentActivities: recentActivities,
-        displayMessage: generateActivitiesPreferencesResponse(userData?.userInfo || { name: 'User' }, activitiesPreferences),
+      // Get activities preferences using hybrid approach
+      const preferencesResult = await getActivitiesPreferences(userId);
+      
+      // Get recent activities for display
+      const recentActivities = await retrieveSelectedActivities(userId);
+      
+      // Generate display messages
+      const displayMessage = generateActivitiesPreferencesResponse(userData.userInfo, preferencesResult.preferences);
+      const activitiesMessage = generateActivitiesResponse(userData.userInfo, recentActivities, 'all');
+
+      // Build response
+      const response = {
+        success: preferencesResult.success,
+        userInfo: userData.userInfo,
+        preferences: preferencesResult.preferences,
+        dataSource: preferencesResult.dataSource,
+        recentActivities: recentActivities.slice(0, 10), // Limit to 10 most recent
+        displayMessage: displayMessage,
+        activitiesMessage: activitiesMessage,
+        summary: {
+          totalPreferences: Object.keys(preferencesResult.preferences).length,
+          totalActivities: recentActivities.length,
+          confidenceScore: preferencesResult.preferences.confidenceScore || 0,
+          dataSourcesChecked: ['firestore', 'realtime-db', 'learning_resources']
+        },
         timestamp: new Date().toISOString(),
         version: VERSION,
-      });
+      };
+
+      // Include error info if applicable
+      if (preferencesResult.error) {
+        response.error = preferencesResult.error;
+      }
+
+      console.log(`âœ… Successfully returned activities preferences from: ${preferencesResult.dataSource}`);
+      return res.json(response);
+
     } catch (error) {
-      res.status(500).json({
+      console.error("ðŸ’¥ ERROR in getActivitiesPreferences endpoint:", error);
+      
+      return res.status(500).json({
         success: false,
-        error: "Internal server error",
+        error: `Internal server error: ${error.message}`,
         version: VERSION,
         timestamp: new Date().toISOString(),
       });
@@ -6585,45 +7542,203 @@ exports.getActivitiesPreferences = onRequest(
 );
 
 /* ---------------------------------------------------
- 🎯 USER STORY FUNCTIONS
+ ðŸŽ¯ UPDATE ACTIVITIES PREFERENCES ENDPOINT
 --------------------------------------------------- */
-function analyzeInteractionsPreferences(userId, userInfo, recentActivities) {
-  const defaultPreferences = {
-    topicsOfInterest: ['Health & Wellness', 'Daily Living'],
-    activeTimes: ['Morning', 'Afternoon'],
-    preferredCommunication: 'Friendly and Supportive',
-    learningStyle: 'Visual and Simple',
-    notificationPreferences: 'Gentle reminders'
-  };
-  
-  if (recentActivities.length === 0) {
-    return defaultPreferences;
+
+exports.updateActivitiesPreferences = onRequest(
+  { 
+    timeoutSeconds: 30, 
+    memory: "256MiB", 
+    cors: true 
+  },
+  async (req, res) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+      return res.status(204).send("");
+    }
+
+    try {
+      const { userId, preferences } = req.body;
+      
+      if (!userId || !preferences) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "User ID and preferences are required", 
+          version: VERSION 
+        });
+      }
+
+      if (!validateEmail(userId)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid user ID format", 
+          version: VERSION 
+        });
+      }
+
+      // Validate preferences structure
+      if (typeof preferences !== 'object') {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Preferences must be an object", 
+          version: VERSION 
+        });
+      }
+
+      // Enhance preferences with metadata
+      const enhancedPreferences = {
+        ...preferences,
+        userId: userId,
+        lastUpdated: new Date().toISOString(),
+        updatedBy: 'user',
+        version: '1.0'
+      };
+
+      // Save to both databases
+      const saveResults = await saveActivitiesPreferences(userId, enhancedPreferences);
+
+      // Get updated preferences for response
+      const updatedPreferences = await getActivitiesPreferences(userId);
+      const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+
+      const response = {
+        success: true,
+        userInfo: userData?.userInfo || null,
+        preferences: updatedPreferences.preferences,
+        dataSource: updatedPreferences.dataSource,
+        saveResults: saveResults,
+        displayMessage: `âœ… Your activities preferences have been updated successfully!`,
+        timestamp: new Date().toISOString(),
+        version: VERSION,
+      };
+
+      return res.json(response);
+
+    } catch (error) {
+      console.error("ðŸ’¥ ERROR in updateActivitiesPreferences endpoint:", error);
+      
+      return res.status(500).json({
+        success: false,
+        error: `Internal server error: ${error.message}`,
+        version: VERSION,
+        timestamp: new Date().toISOString(),
+      });
+    }
   }
-  
-  const categoryCount = {};
-  recentActivities.forEach(activity => {
-    const category = activity.category || 'General';
-    categoryCount[category] = (categoryCount[category] || 0) + 1;
-  });
-  
-  const topCategories = Object.entries(categoryCount)
-    .sort(([,a], [,b]) => b - a)
-    .slice(0, 3)
-    .map(([category]) => category);
-  
-  const enhancedPreferences = {
-    topicsOfInterest: topCategories.length > 0 ? topCategories : defaultPreferences.topicsOfInterest,
-    activeTimes: defaultPreferences.activeTimes,
-    preferredCommunication: defaultPreferences.preferredCommunication,
-    learningStyle: defaultPreferences.learningStyle,
-    notificationPreferences: defaultPreferences.notificationPreferences,
-    engagementLevel: recentActivities.length > 5 ? 'High' : 'Moderate',
-    favoriteTopics: topCategories,
-    totalActivities: recentActivities.length,
-    lastActive: recentActivities.length > 0 ? 'Recently' : 'Not recently'
+);
+
+// Save preferences to both databases
+async function saveActivitiesPreferences(userId, preferences) {
+  const results = {
+    firestore: false,
+    realtimeDb: false,
+    errors: []
   };
-  
-  return enhancedPreferences;
+
+  // Save to Firestore
+  try {
+    if (firestore) {
+      const userDocRef = firestore.collection('users').doc(userId);
+      await userDocRef.set({
+        activitiesPreferences: preferences,
+        lastUpdated: new Date().toISOString()
+      }, { merge: true });
+      results.firestore = true;
+      console.log("âœ… Preferences saved to Firestore");
+    } else {
+      results.errors.push("Firestore not initialized");
+    }
+  } catch (firestoreError) {
+    results.errors.push(`Firestore: ${firestoreError.message}`);
+    console.log("âŒ Could not save to Firestore:", firestoreError.message);
+  }
+
+  // Save to Realtime Database
+  try {
+    const normalizedKey = normalizeEmailForFirebase(userId);
+    const preferencesRef = rtdb.ref(`Account/${normalizedKey}/activitiesPreferences`);
+    await preferencesRef.set(preferences);
+    results.realtimeDb = true;
+    console.log("âœ… Preferences saved to Realtime Database");
+  } catch (rtdbError) {
+    results.errors.push(`Realtime DB: ${rtdbError.message}`);
+    console.log("âŒ Could not save to Realtime Database:", rtdbError.message);
+  }
+
+  return results;
+}
+
+/* ---------------------------------------------------
+ ðŸŽ¯ UPDATED USER STORY FUNCTIONS - HYBRID DATABASE
+--------------------------------------------------- */
+
+async function analyzeInteractionsPreferences(userId, userInfo, recentActivities) {
+  try {
+    // Try to get existing preferences from databases first
+    const existingPreferences = await getActivitiesPreferences(userId);
+    
+    if (existingPreferences.success && existingPreferences.preferences && 
+        Object.keys(existingPreferences.preferences).length > 0) {
+      console.log("âœ… Using existing preferences from database");
+      return {
+        ...existingPreferences.preferences,
+        dataSource: existingPreferences.dataSource,
+        lastRetrieved: new Date().toISOString()
+      };
+    }
+    
+    // Fallback to analysis if no existing preferences
+    const defaultPreferences = {
+      topicsOfInterest: ['Health & Wellness', 'Daily Living'],
+      activeTimes: ['Morning', 'Afternoon'],
+      preferredCommunication: 'Friendly and Supportive',
+      learningStyle: 'Visual and Simple',
+      notificationPreferences: 'Gentle reminders',
+      dataSource: 'analyzed_fallback'
+    };
+    
+    if (recentActivities.length === 0) {
+      return defaultPreferences;
+    }
+    
+    const categoryCount = {};
+    recentActivities.forEach(activity => {
+      const category = activity.category || 'General';
+      categoryCount[category] = (categoryCount[category] || 0) + 1;
+    });
+    
+    const topCategories = Object.entries(categoryCount)
+      .sort(([,a], [,b]) => b - a)
+      .slice(0, 3)
+      .map(([category]) => category);
+    
+    const enhancedPreferences = {
+      topicsOfInterest: topCategories.length > 0 ? topCategories : defaultPreferences.topicsOfInterest,
+      activeTimes: defaultPreferences.activeTimes,
+      preferredCommunication: defaultPreferences.preferredCommunication,
+      learningStyle: defaultPreferences.learningStyle,
+      notificationPreferences: defaultPreferences.notificationPreferences,
+      engagementLevel: recentActivities.length > 5 ? 'High' : 'Moderate',
+      favoriteTopics: topCategories,
+      totalActivities: recentActivities.length,
+      lastActive: recentActivities.length > 0 ? 'Recently' : 'Not recently',
+      dataSource: 'analyzed_from_activities'
+    };
+    
+    return enhancedPreferences;
+    
+  } catch (error) {
+    console.error("âŒ Error in analyzeInteractionsPreferences:", error);
+    return {
+      topicsOfInterest: ['Health & Wellness'],
+      activeTimes: ['Morning', 'Afternoon'],
+      preferredCommunication: 'Friendly',
+      dataSource: 'error_fallback'
+    };
+  }
 }
 
 async function sendMedicalReminders(userId) {
@@ -6682,8 +7797,22 @@ async function storeMedicalReminders(userId, reminders) {
     };
     
     await userRemindersRef.push(reminderLog);
+    
+    // Also try to store in Firestore
+    try {
+      if (firestore) {
+        const remindersCollection = firestore.collection('medicalReminders');
+        await remindersCollection.add({
+          userId: userId,
+          ...reminderLog
+        });
+      }
+    } catch (firestoreError) {
+      console.log("âŒ Could not save to Firestore:", firestoreError.message);
+    }
+    
   } catch (error) {
-    return;
+    console.error("âŒ Error storing medical reminders:", error);
   }
 }
 
@@ -6781,96 +7910,12 @@ async function detectUnusualPatterns(userId, currentActivity, historicalData) {
   }
 }
 
-function generatePreferencesResponse(userInfo, preferences, recentActivities) {
-  let response = `🎯 **Your Personal Preferences**, ${userInfo.name}!\n\n`;
-  
-  response += `✨ **Your Interests:** ${preferences.topicsOfInterest.join(', ')}\n`;
-  response += `⏰ **Active Times:** ${preferences.activeTimes.join(', ')}\n`;
-  response += `💬 **Communication Style:** ${preferences.preferredCommunication}\n\n`;
-  
-  if (preferences.activities) {
-    response += `🏃 **Activity Level:** ${preferences.activities.activityFrequency}\n`;
-    response += `⭐ **Preferred Activity Types:** ${preferences.activities.preferredCategories.join(', ')}\n`;
-    response += `⏱️ **Preferred Duration:** ${preferences.activities.preferredDuration}\n\n`;
-  }
-  
-  if (recentActivities.length > 0) {
-    response += `📚 **Recently Viewed:**\n`;
-    recentActivities.slice(0, 3).forEach(activity => {
-      response += `• ${activity.title} (${activity.category})\n`;
-    });
-  }
-  
-  response += `\n💡 I'll use this information to provide you with better suggestions!`;
-  
-  return response;
-}
-
-function generateMedicalReminderResponse(reminderResult) {
-  if (!reminderResult.sent) {
-    return `✅ You're all caught up with your medications! No pending reminders right now.`;
-  }
-  
-  let response = `💊 **Medication Reminders**\n\n`;
-  response += `You have ${reminderResult.count} medication(s) to take:\n\n`;
-  
-  reminderResult.reminders.forEach((reminder, index) => {
-    response += `${index + 1}. **${reminder.medication}** at ${reminder.time}\n`;
-    if (reminder.dosage) {
-      response += `   💊 Dosage: ${reminder.dosage}\n`;
-    }
-    response += `\n`;
-  });
-  
-  response += `⏰ Don't forget to take your medications on time!`;
-  
-  return response;
-}
-
-function generatePatternCheckResponse(patternResult) {
-  if (!patternResult.detected) {
-    return `✅ Everything looks normal! No unusual patterns detected in your recent activity.`;
-  }
-  
-  let response = `🔍 **Activity Review**\n\n`;
-  response += `I noticed ${patternResult.alerts.length} thing(s) that might need attention:\n\n`;
-  
-  patternResult.alerts.forEach((alert, index) => {
-    response += `${index + 1}. ⚠️ ${alert.message}\n`;
-    if (alert.details) {
-      response += `   📋 ${alert.details}\n`;
-    }
-    response += `\n`;
-  });
-  
-  response += `🔔 Your caregivers have been notified about important changes.`;
-  
-  return response;
-}
-function generatePreferencesResponse(userInfo, preferences, recentActivities) {
-  let response = `🎯 **Your Personal Preferences**, ${userInfo.name}!\n\n`;
-  
-  response += `🌟 **Your Interests:** ${preferences.topicsOfInterest.join(', ')}\n`;
-  response += `🕐 **Active Times:** ${preferences.activeTimes.join(', ')}\n`;
-  response += `💬 **Communication Style:** ${preferences.preferredCommunication}\n\n`;
-  
-  if (recentActivities.length > 0) {
-    response += `📚 **Recently Viewed:**\n`;
-    recentActivities.slice(0, 3).forEach(activity => {
-      response += `• ${activity.title} (${activity.category})\n`;
-    });
-  }
-  
-  response += `\n💡 I'll use this information to provide you with better suggestions!`;
-  
-  return response;
-}
-
 /* ---------------------------------------------------
- 🎯 USER STORY API ENDPOINTS
+ ðŸŽ¯ UPDATED USER STORY API ENDPOINTS
 --------------------------------------------------- */
+
 exports.getUserPreferences = onRequest(
-  { timeoutSeconds: 15, memory: "128MiB", cors: true },
+  { timeoutSeconds: 30, memory: "256MiB", cors: true },
   async (req, res) => {
     res.set("Access-Control-Allow-Origin", "*");
     if (req.method === "OPTIONS") return res.status(204).send("");
@@ -6885,12 +7930,18 @@ exports.getUserPreferences = onRequest(
       }
 
       const recentActivities = await retrieveSelectedActivities(userId);
-      const generalPreferences = analyzeInteractionsPreferences(userId, userData.userInfo, recentActivities);
-      const activitiesPreferences = analyzeActivitiesPreferences(recentActivities);
+      
+      // Use hybrid approach for both general and activities preferences
+      const generalPreferences = await analyzeInteractionsPreferences(userId, userData.userInfo, recentActivities);
+      const activitiesPreferencesResult = await getActivitiesPreferences(userId);
 
       const combinedPreferences = {
         ...generalPreferences,
-        activities: activitiesPreferences
+        activities: activitiesPreferencesResult.preferences,
+        dataSources: {
+          general: generalPreferences.dataSource,
+          activities: activitiesPreferencesResult.dataSource
+        }
       };
 
       res.json({
@@ -6899,11 +7950,12 @@ exports.getUserPreferences = onRequest(
         preferences: combinedPreferences,
         recentActivities: recentActivities,
         displayMessage: generatePreferencesResponse(userData.userInfo, combinedPreferences, recentActivities),
-        activitiesMessage: generateActivitiesPreferencesResponse(userData.userInfo, activitiesPreferences),
+        activitiesMessage: generateActivitiesPreferencesResponse(userData.userInfo, activitiesPreferencesResult.preferences),
         timestamp: new Date().toISOString(),
         version: VERSION,
       });
     } catch (error) {
+      console.error("âŒ Error in getUserPreferences:", error);
       res.status(500).json({
         success: false,
         error: "Internal server error",
@@ -6973,8 +8025,9 @@ exports.checkBehaviorPatterns = onRequest(
     }
   }
 );
+
 /* ---------------------------------------------------
- 👨‍⚕️ CAREGIVER API ENDPOINTS
+ ðŸ‘¨â€âš•ï¸ UPDATED CAREGIVER API ENDPOINTS - HYBRID
 --------------------------------------------------- */
 
 exports.getCaregiverElderly = onRequest(
@@ -7082,7 +8135,6 @@ exports.getCaregiverSchedule = onRequest(
   }
 );
 
-
 exports.getCaregiverElderlyAppointments = onRequest(
   { timeoutSeconds: 30, memory: "256MiB", cors: true },
   async (req, res) => {
@@ -7096,12 +8148,12 @@ exports.getCaregiverElderlyAppointments = onRequest(
     }
 
     try {
-      console.log("📨 Received request for caregiver elderly appointments");
+      console.log("ðŸ“¨ Received request for caregiver elderly appointments");
       
       // Get parameters from both POST body and GET query
       const { userId } = req.method === "POST" ? req.body : req.query;
       
-      console.log("👤 User ID:", userId);
+      console.log("ðŸ‘¤ User ID:", userId);
 
       if (!userId) {
         return res.status(400).json({ 
@@ -7151,11 +8203,11 @@ exports.getCaregiverElderlyAppointments = onRequest(
         version: VERSION,
       };
 
-      console.log(`✅ Successfully returned ${appointmentsData.appointments.length} appointments`);
+      console.log(`âœ… Successfully returned ${appointmentsData.appointments.length} appointments`);
       return res.json(response);
 
     } catch (error) {
-      console.error("💥 FINAL ERROR in endpoint:", error);
+      console.error("ðŸ’¥ FINAL ERROR in endpoint:", error);
       
       return res.status(500).json({
         success: false,
@@ -7168,11 +8220,13 @@ exports.getCaregiverElderlyAppointments = onRequest(
 );
 
 function generateElderlyAppointmentsNotification(caregiverInfo, appointmentsData) {
+  const isAllAppointments = appointmentsData.dateQuery === 'all';
+  
   if (appointmentsData.totalAppointments === 0) {
-    return `No upcoming appointments found for your elderly patients, ${caregiverInfo.name}.`;
+    return `No ${isAllAppointments ? '' : 'upcoming '}appointments found for your elderly patients, ${caregiverInfo.name}.`;
   }
 
-  let response = `Upcoming appointments for your elderly patients, ${caregiverInfo.name}:\n\n`;
+  let response = `${isAllAppointments ? 'All appointments' : 'Upcoming appointments'} for your elderly patients, ${caregiverInfo.name}:\n\n`;
 
   appointmentsData.appointments.forEach((apt, index) => {
     response += `${index + 1}. ${apt.elderlyName} - ${apt.title || apt.reason || 'Appointment'}\n`;
@@ -7184,9 +8238,798 @@ function generateElderlyAppointmentsNotification(caregiverInfo, appointmentsData
     response += `\n`;
   });
 
-  response += `Total: ${appointmentsData.totalAppointments} appointments across ${appointmentsData.totalElderly} elderly patients.`;
+  const timeContext = isAllAppointments ? 'appointments' : 'upcoming appointments';
+  response += `Total: ${appointmentsData.totalAppointments} ${timeContext} across ${appointmentsData.totalElderly} elderly patients.`;
 
   return response;
+}
+
+
+
+/* ---------------------------------------------------
+ ðŸ”„ AUTOMATIC DATABASE SYNCHRONIZATION
+--------------------------------------------------- */
+
+// Real-time sync from RTDB to Firestore (SAFE VERSION)
+exports.syncRTDBtoFirestore = onValueWritten(
+  {
+    ref: '/{node}/{docId}',
+    region: 'asia-southeast1',
+    timeoutSeconds: 60,
+  },
+  async (event) => {
+    const { node, docId } = event.params;
+    const data = event.data.after.val();
+    const syncKey = `firestore-${node}-${docId}`;
+    
+    // Skip if this was recently synced from Firestore
+    if (recentSyncs.has(syncKey)) {
+      recentSyncs.delete(syncKey);
+      return null;
+    }
+    
+    if (!data || node.startsWith('_') || docId.startsWith('_')) {
+      return null;
+    }
+    
+    try {
+      if (data === null) {
+        await firestore.collection(node).doc(docId).delete();
+        console.log(`ðŸ—‘ï¸ RTDB â†’ Firestore: Deleted ${node}/${docId}`);
+      } else {
+        const serializedData = serializeData(data);
+        // Mark as syncing to Firestore
+        recentSyncs.add(`rtdb-${node}-${docId}`);
+        setTimeout(() => recentSyncs.delete(`rtdb-${node}-${docId}`), SYNC_TIMEOUT);
+        
+        await firestore.collection(node).doc(docId).set(serializedData, { merge: true });
+        console.log(`âœ… RTDB â†’ Firestore: Synced ${node}/${docId}`);
+      }
+    } catch (error) {
+      console.error(`âŒ RTDB â†’ Firestore sync error for ${node}/${docId}:`, error);
+    }
+    
+    return null;
+  }
+);
+
+// Real-time sync from Firestore to RTDB (SAFE VERSION)
+exports.syncFirestoreToRTDB = onDocumentWritten(
+  {
+    document: '{collection}/{docId}',
+    region: 'asia-southeast1',
+    timeoutSeconds: 60,
+  },
+  async (event) => {
+    const { collection, docId } = event.params;
+    const data = event.data.after.exists ? event.data.after.data() : null;
+    const syncKey = `rtdb-${collection}-${docId}`;
+    
+    // Skip if this was recently synced from RTDB
+    if (recentSyncs.has(syncKey)) {
+      recentSyncs.delete(syncKey);
+      return null;
+    }
+    
+    if (collection.startsWith('_') || docId.startsWith('_')) {
+      return null;
+    }
+    
+    try {
+      if (!data) {
+        await rtdb.ref(`${collection}/${docId}`).remove();
+        console.log(`ðŸ—‘ï¸ Firestore â†’ RTDB: Deleted ${collection}/${docId}`);
+      } else {
+        const serializedData = serializeData(data);
+        // Mark as syncing to RTDB
+        recentSyncs.add(`firestore-${collection}-${docId}`);
+        setTimeout(() => recentSyncs.delete(`firestore-${collection}-${docId}`), SYNC_TIMEOUT);
+        
+        await rtdb.ref(`${collection}/${docId}`).set(serializedData);
+        console.log(`âœ… Firestore â†’ RTDB: Synced ${collection}/${docId}`);
+      }
+    } catch (error) {
+      console.error(`âŒ Firestore â†’ RTDB sync error for ${collection}/${docId}:`, error);
+    }
+    
+    return null;
+  }
+);
+// Enhanced serializer to handle complex data types
+function serializeData(obj) {
+  if (obj === null || obj === undefined) {
+    return null;
+  }
+  
+  if (Array.isArray(obj)) {
+    return obj.map(item => serializeData(item));
+  }
+  
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    if (obj._firestore) {
+      // Skip Firestore objects
+      return null;
+    }
+    
+    const result = {};
+    for (const [key, value] of Object.entries(obj)) {
+      // Skip internal properties and Firestore metadata
+      if (key.startsWith('_') || key === 'firestore') {
+        continue;
+      }
+      
+      const serializedValue = serializeData(value);
+      if (serializedValue !== undefined) {
+        result[key] = serializedValue;
+      }
+    }
+    return result;
+  }
+  
+  // Handle basic types
+  if (typeof obj === 'string' || typeof obj === 'number' || typeof obj === 'boolean') {
+    return obj;
+  }
+  
+  if (obj instanceof Date) {
+    return obj.toISOString();
+  }
+  
+  return null;
+}
+
+// Batch sync function for initial setup
+exports.initialSyncRTDBtoFirestore = functions.https.onRequest(async (req, res) => {
+  try {
+    const { node, limit = 100 } = req.body;
+    
+    if (!node) {
+      return res.status(400).json({ error: 'Node parameter required' });
+    }
+    
+    const snapshot = await rtdb.ref(node).limitToFirst(parseInt(limit)).get();
+    
+    if (!snapshot.exists()) {
+      return res.json({ message: `No data found in ${node}`, synced: 0 });
+    }
+    
+    const data = snapshot.val();
+    let syncedCount = 0;
+    
+    for (const [docId, docData] of Object.entries(data)) {
+      try {
+        const serializedData = serializeData(docData);
+        await firestore.collection(node).doc(docId).set(serializedData, { merge: true });
+        syncedCount++;
+        console.log(`âœ… Initial sync: ${node}/${docId}`);
+      } catch (error) {
+        console.error(`âŒ Initial sync error for ${node}/${docId}:`, error);
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Initial sync completed for ${node}`,
+      synced: syncedCount,
+      node: node
+    });
+    
+  } catch (error) {
+    console.error('âŒ Initial sync error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Sync status checker
+exports.getSyncStatus = functions.https.onRequest(async (req, res) => {
+  try {
+    const { node, docId } = req.query;
+    
+    let rtdbData = null;
+    let firestoreData = null;
+    
+    // Get RTDB data
+    if (node && docId) {
+      const rtdbSnap = await rtdb.ref(`${node}/${docId}`).get();
+      rtdbData = rtdbSnap.exists() ? rtdbSnap.val() : null;
+    }
+    
+    // Get Firestore data
+    if (node && docId) {
+      const firestoreDoc = await firestore.collection(node).doc(docId).get();
+      firestoreData = firestoreDoc.exists ? firestoreDoc.data() : null;
+    }
+    
+    res.json({
+      success: true,
+      rtdb: rtdbData,
+      firestore: firestoreData,
+      inSync: JSON.stringify(rtdbData) === JSON.stringify(firestoreData),
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/* ---------------------------------------------------
+ ðŸ©º HEALTH RECOMMENDATIONS FUNCTIONS
+--------------------------------------------------- */
+
+// Generate personalized health recommendations based on user data
+async function generateHealthRecommendations(userId) {
+  try {
+    console.log("Generating health recommendations for:", userId);
+    
+    // Get comprehensive user data
+    const [userData, medications, activities, learningData, schedule] = await Promise.all([
+      getUserData(userId, { type: 'user_info', subType: 'all' }),
+      getMedicationReminders(userId, 'today'),
+      getActivitiesForSchedule(userId, 'today'),
+      getUserLearningData(userId),
+      getComprehensiveSchedule(userId, 'today')
+    ]);
+
+    if (!userData) {
+      return {
+        success: false,
+        error: "User not found",
+        recommendations: []
+      };
+    }
+
+    const recommendations = [];
+    const userInfo = userData.userInfo;
+    const now = new Date();
+
+    // 1. MEDICATION-BASED RECOMMENDATIONS
+    const pendingMeds = medications.filter(med => !med.isCompleted);
+    const upcomingMeds = medications.filter(med => {
+      if (!med.reminderTime || med.isCompleted) return false;
+      const medTime = new Date(`${med.date}T${med.reminderTime}`);
+      return medTime > now && medTime < new Date(now.getTime() + 60 * 60 * 1000); // Next hour
+    });
+
+    if (pendingMeds.length > 0) {
+      recommendations.push({
+        type: 'medication_reminder',
+        priority: 'high',
+        title: 'Medication Reminder',
+        message: `You have ${pendingMeds.length} medication${pendingMeds.length > 1 ? 's' : ''} to take today`,
+        details: pendingMeds.map(med => `${med.medicationName} at ${formatDisplayTime(med.reminderTime)}`).join(', '),
+        action: 'view_medications',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 2. ACTIVITY & EXERCISE RECOMMENDATIONS
+    const hasActivityToday = activities.length > 0;
+    const lastActivityTime = await getLastActivityTime(userId);
+    
+    if (!hasActivityToday && shouldRecommendActivity(lastActivityTime)) {
+      recommendations.push({
+        type: 'activity_suggestion',
+        priority: 'medium',
+        title: 'Daily Activity',
+        message: 'Stay active today. Consider a gentle walk or light exercise',
+        details: 'Regular activity helps maintain mobility and overall health',
+        action: 'browse_activities',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 3. HYDRATION REMINDERS
+    recommendations.push({
+      type: 'hydration',
+      priority: 'medium',
+      title: 'Stay Hydrated',
+      message: 'Remember to drink water regularly throughout the day',
+      details: 'Aim for 6-8 glasses of water daily for optimal health',
+      action: 'dismiss',
+      timestamp: new Date().toISOString()
+    });
+
+    // 4. NUTRITION RECOMMENDATIONS
+    const mealTimes = getMealTimes();
+    const nextMeal = getNextMeal(mealTimes);
+    
+    if (nextMeal) {
+      recommendations.push({
+        type: 'nutrition',
+        priority: 'medium',
+        title: 'Healthy Eating',
+        message: `Time for ${nextMeal.meal}. Consider a balanced option`,
+        details: 'Include protein, vegetables, and whole grains for sustained energy',
+        action: 'nutrition_tips',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 5. PERSONALIZED HEALTH TIPS BASED ON USER PROFILE
+    if (userInfo.age && userInfo.age > 65) {
+      recommendations.push({
+        type: 'senior_health',
+        priority: 'low',
+        title: 'Senior Wellness',
+        message: 'Consider balance exercises to prevent falls',
+        details: 'Simple balance exercises can significantly reduce fall risk',
+        action: 'learn_more',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (userInfo.medicalConditions && userInfo.medicalConditions.length > 0) {
+      const conditions = userInfo.medicalConditions.join(', ').toLowerCase();
+      
+      if (conditions.includes('blood pressure') || conditions.includes('heart')) {
+        recommendations.push({
+          type: 'heart_health',
+          priority: 'medium',
+          title: 'Heart Health',
+          message: 'Monitor your blood pressure regularly',
+          details: 'Keep track of your readings and share with your doctor',
+          action: 'learn_more',
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      if (conditions.includes('diabetes') || conditions.includes('blood sugar')) {
+        recommendations.push({
+          type: 'diabetes_care',
+          priority: 'medium',
+          title: 'Diabetes Management',
+          message: 'Check your blood sugar levels as recommended',
+          details: 'Maintain consistent meal times and monitor carbohydrate intake',
+          action: 'learn_more',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    // 6. MENTAL HEALTH & WELLBEING
+    const stressLevel = await assessStressLevel(userId, schedule);
+    if (stressLevel === 'high') {
+      recommendations.push({
+        type: 'mental_health',
+        priority: 'medium',
+        title: 'Relaxation Time',
+        message: 'Take a moment for deep breathing or meditation',
+        details: 'Even 5 minutes of relaxation can reduce stress significantly',
+        action: 'guided_breathing',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 7. SLEEP RECOMMENDATIONS (based on time of day)
+    const sleepRecommendation = getSleepRecommendation();
+    if (sleepRecommendation) {
+      recommendations.push({
+        type: 'sleep',
+        priority: 'low',
+        title: 'Sleep Wellness',
+        message: sleepRecommendation.message,
+        details: sleepRecommendation.details,
+        action: 'sleep_tips',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Sort by priority and limit to top 5
+    const priorityOrder = { high: 3, medium: 2, low: 1 };
+    const sortedRecommendations = recommendations
+      .sort((a, b) => priorityOrder[b.priority] - priorityOrder[a.priority])
+      .slice(0, 5);
+
+    return {
+      success: true,
+      userInfo: userInfo,
+      recommendations: sortedRecommendations,
+      total: sortedRecommendations.length,
+      byPriority: {
+        high: sortedRecommendations.filter(r => r.priority === 'high').length,
+        medium: sortedRecommendations.filter(r => r.priority === 'medium').length,
+        low: sortedRecommendations.filter(r => r.priority === 'low').length
+      },
+      timestamp: new Date().toISOString()
+    };
+
+  } catch (error) {
+    console.error("Error generating health recommendations:", error);
+    return {
+      success: false,
+      error: error.message,
+      recommendations: []
+    };
+  }
+}
+
+// Helper function to get last activity time
+async function getLastActivityTime(userId) {
+  try {
+    const activities = await retrieveSelectedActivities(userId);
+    if (activities.length === 0) return null;
+    
+    // Find the most recent activity
+    const recentActivity = activities.sort((a, b) => 
+      new Date(b.accessedAt || b.date) - new Date(a.accessedAt || a.date)
+    )[0];
+    
+    return recentActivity.accessedAt || recentActivity.date;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Determine if activity should be recommended
+function shouldRecommendActivity(lastActivityTime) {
+  if (!lastActivityTime) return true;
+  
+  const lastActivity = new Date(lastActivityTime);
+  const today = new Date();
+  const daysSinceLastActivity = Math.floor((today - lastActivity) / (1000 * 60 * 60 * 24));
+  
+  return daysSinceLastActivity >= 1; // Recommend if no activity in last 24 hours
+}
+
+// Assess stress level based on schedule density
+function assessStressLevel(userId, schedule) {
+  try {
+    const totalEvents = schedule.allEvents.length;
+    const now = new Date();
+    const next4Hours = new Date(now.getTime() + 4 * 60 * 60 * 1000);
+    
+    const upcomingEvents = schedule.allEvents.filter(event => {
+      const eventTime = new Date(getEventTimeRaw(event));
+      return eventTime > now && eventTime < next4Hours;
+    });
+
+    if (upcomingEvents.length >= 3) return 'high';
+    if (upcomingEvents.length >= 2) return 'medium';
+    return 'low';
+  } catch (error) {
+    return 'low';
+  }
+}
+
+// Get meal times
+function getMealTimes() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  
+  return {
+    breakfast: currentHour < 11 && currentHour >= 7,
+    lunch: currentHour >= 11 && currentHour < 14,
+    dinner: currentHour >= 17 && currentHour < 20
+  };
+}
+
+// Get next meal recommendation
+function getNextMeal(mealTimes) {
+  const now = new Date();
+  const currentHour = now.getHours();
+  
+  if (currentHour < 11 && !mealTimes.breakfast) {
+    return { meal: 'breakfast', time: 'morning' };
+  } else if (currentHour < 14 && !mealTimes.lunch) {
+    return { meal: 'lunch', time: 'midday' };
+  } else if (currentHour < 20 && !mealTimes.dinner) {
+    return { meal: 'dinner', time: 'evening' };
+  }
+  
+  return null;
+}
+
+// Get sleep recommendations based on time of day
+function getSleepRecommendation() {
+  const now = new Date();
+  const currentHour = now.getHours();
+  
+  if (currentHour >= 21 || currentHour < 6) {
+    return {
+      message: 'Wind down for restful sleep',
+      details: 'Avoid screens before bed and create a relaxing bedtime routine'
+    };
+  } else if (currentHour === 14 || currentHour === 15) {
+    return {
+      message: 'Consider a short power nap',
+      details: 'A 20-30 minute nap can boost energy without affecting nighttime sleep'
+    };
+  }
+  
+  return null;
+}
+
+// Generate specific recommendations based on medical conditions
+function generateConditionSpecificRecommendations(medicalConditions) {
+  const recommendations = [];
+  
+  medicalConditions.forEach(condition => {
+    const lowerCondition = condition.toLowerCase();
+    
+    if (lowerCondition.includes('arthritis') || lowerCondition.includes('joint')) {
+      recommendations.push({
+        condition: 'Arthritis',
+        recommendation: 'Try gentle range-of-motion exercises in the morning',
+        tip: 'Apply warm compress to stiff joints before moving'
+      });
+    }
+    
+    if (lowerCondition.includes('blood pressure') || lowerCondition.includes('hypertension')) {
+      recommendations.push({
+        condition: 'Blood Pressure',
+        recommendation: 'Limit sodium intake and monitor your readings',
+        tip: 'Take medications at the same time each day'
+      });
+    }
+    
+    if (lowerCondition.includes('diabetes')) {
+      recommendations.push({
+        condition: 'Diabetes',
+        recommendation: 'Check blood sugar before meals and monitor carbohydrate intake',
+        tip: 'Keep fast-acting glucose nearby in case of low blood sugar'
+      });
+    }
+    
+    if (lowerCondition.includes('heart')) {
+      recommendations.push({
+        condition: 'Heart Health',
+        recommendation: 'Take prescribed medications regularly and monitor for swelling',
+        tip: 'Report any chest discomfort or shortness of breath immediately'
+      });
+    }
+    
+    if (lowerCondition.includes('osteoporosis') || lowerCondition.includes('bone')) {
+      recommendations.push({
+        condition: 'Bone Health',
+        recommendation: 'Ensure adequate calcium and vitamin D intake',
+        tip: 'Practice balance exercises to prevent falls'
+      });
+    }
+  });
+  
+  return recommendations.slice(0, 3); // Return top 3
+}
+
+// Generate response message for health recommendations
+function generateHealthRecommendationsResponse(userInfo, recommendationsData) {
+  if (!recommendationsData.success || recommendationsData.recommendations.length === 0) {
+    return `I don't have any specific health recommendations for you right now, ${userInfo.name}. Keep up with your regular health routines and stay active!`;
+  }
+
+  let response = `Health Recommendations for You, ${userInfo.name}\n\n`;
+  
+  recommendationsData.recommendations.forEach((rec, index) => {
+    const priorityIcon = rec.priority === 'high' ? 'HIGH' : rec.priority === 'medium' ? 'MEDIUM' : 'LOW';
+    
+    response += `${index + 1}. [${priorityIcon}] ${rec.title}\n`;
+    response += `   ${rec.message}\n`;
+    if (rec.details) {
+      response += `   Note: ${rec.details}\n`;
+    }
+    response += `\n`;
+  });
+
+  response += `Total Recommendations: ${recommendationsData.recommendations.length} `;
+  response += `(High: ${recommendationsData.byPriority.high}, Medium: ${recommendationsData.byPriority.medium}, Low: ${recommendationsData.byPriority.low})`;
+
+  return response;
+}
+
+// Generate health tips by category
+function generateHealthTipsByCategory(category, userId) {
+  const allTips = {
+    general: [
+      "Stay hydrated by drinking water throughout the day",
+      "Aim for 7-8 hours of quality sleep each night",
+      "Include fruits and vegetables in every meal",
+      "Take short walks after meals to aid digestion",
+      "Practice deep breathing exercises to reduce stress",
+      "Eat fresh fruits and vegetables daily",
+      "Include fiber-rich foods such as oats and whole grains",
+      "Drink plenty of water throughout the day",
+      "Limit salt, sugar, and fried foods",
+      "Have calcium-rich foods like milk, tofu, and leafy greens",
+      "Eat lean proteins like fish, eggs, and beans",
+      "Avoid skipping meals - maintain a regular eating schedule"
+    ],
+    exercise: [
+      "Start with 10-15 minutes of light activity daily",
+      "Focus on balance exercises to prevent falls",
+      "Try chair exercises if standing is difficult",
+      "Walk in place during TV commercials",
+      "Stretch gently every morning and evening"
+    ],
+    nutrition: [
+      "Eat fresh fruits and vegetables daily",
+      "Include fiber-rich foods such as oats and whole grains",
+      "Drink plenty of water throughout the day",
+      "Limit salt, sugar, and fried foods",
+      "Have calcium-rich foods like milk, tofu, and leafy greens",
+      "Eat lean proteins like fish, eggs, and beans",
+      "Avoid skipping meals - maintain a regular eating schedule",
+      "Choose whole grains over refined carbohydrates",
+      "Include lean protein with each meal",
+      "Limit processed foods and added sugars",
+      "Eat slowly and mindfully",
+      "Stay consistent with meal times"
+    ],
+    medication: [
+      "Use a pill organizer to stay organized",
+      "Set reminders for medication times",
+      "Keep a current medication list with you",
+      "Take medications with food if required",
+      "Don't skip doses - set up refill reminders"
+    ],
+    mental_health: [
+      "Stay connected with friends and family",
+      "Practice gratitude daily",
+      "Try meditation or mindfulness",
+      "Engage in hobbies you enjoy",
+      "Get sunlight exposure when possible"
+    ]
+  };
+
+  const selectedCategory = category && allTips[category.toLowerCase()] ? category.toLowerCase() : 'general';
+  return allTips[selectedCategory].slice(0, 7); // Return top 7 tips
+}
+
+// Generate response for health tips
+function generateHealthTipsResponse(tips, category, userInfo) {
+  const categoryDisplay = category ? category.replace('_', ' ').toLowerCase() : 'general health';
+  const userName = userInfo?.name ? `, ${userInfo.name}` : '';
+  
+  let response = `${categoryDisplay.charAt(0).toUpperCase() + categoryDisplay.slice(1)} Tips${userName}\n\n`;
+  
+  tips.forEach((tip, index) => {
+    response += `${index + 1}. ${tip}\n`;
+  });
+  
+  response += `\nRemember: Small, consistent changes lead to big health benefits!`;
+  
+  return response;
+}
+/* ---------------------------------------------------
+ ðŸ©º HEALTH RECOMMENDATIONS API ENDPOINTS
+--------------------------------------------------- */
+
+exports.getHealthRecommendations = onRequest(
+  { 
+    timeoutSeconds: 120, 
+    memory: "256MiB", 
+    cors: true 
+  },
+  async (req, res) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.set("Access-Control-Allow-Headers", "Content-Type");
+
+    if (req.method === "OPTIONS") {
+      return res.status(204).send("");
+    }
+
+    try {
+      const { userId } = req.method === "POST" ? req.body : req.query;
+      
+      if (!userId) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "User ID is required", 
+          version: VERSION 
+        });
+      }
+
+      if (!validateEmail(userId)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: "Invalid user ID format", 
+          version: VERSION 
+        });
+      }
+
+      // Generate health recommendations
+      const recommendations = await generateHealthRecommendations(userId);
+      
+      // Get user data for response
+      const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+      
+      if (!userData) {
+        return res.status(404).json({ 
+          success: false, 
+          error: "User not found", 
+          version: VERSION 
+        });
+      }
+
+      // Generate condition-specific recommendations
+      const conditionRecommendations = userData.userInfo.medicalConditions && 
+        userData.userInfo.medicalConditions.length > 0 
+          ? generateConditionSpecificRecommendations(userData.userInfo.medicalConditions)
+          : [];
+
+      const response = {
+        success: recommendations.success,
+        userInfo: userData.userInfo,
+        recommendations: recommendations.recommendations,
+        conditionRecommendations: conditionRecommendations,
+        displayMessage: generateHealthRecommendationsResponse(userData.userInfo, recommendations),
+        summary: {
+          total: recommendations.recommendations.length,
+          byPriority: recommendations.byPriority,
+          byType: countRecommendationsByType(recommendations.recommendations)
+        },
+        timestamp: new Date().toISOString(),
+        version: VERSION,
+      };
+
+      if (recommendations.error) {
+        response.error = recommendations.error;
+      }
+
+      return res.json(response);
+
+    } catch (error) {
+      console.error("ERROR in getHealthRecommendations:", error);
+      
+      return res.status(500).json({
+        success: false,
+        error: `Internal server error: ${error.message}`,
+        version: VERSION,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// Get specific health tips based on category
+exports.getHealthTips = onRequest(
+  { 
+    timeoutSeconds: 120, 
+    memory: "128MiB", 
+    cors: true 
+  },
+  async (req, res) => {
+    res.set("Access-Control-Allow-Origin", "*");
+    if (req.method === "OPTIONS") return res.status(204).send("");
+
+    try {
+      const { category, userId } = req.method === "POST" ? req.body : req.query;
+      
+      const healthTips = generateHealthTipsByCategory(category, userId);
+      
+      let userInfo = null;
+      if (userId) {
+        const userData = await getUserData(userId, { type: 'user_info', subType: 'all' });
+        userInfo = userData?.userInfo;
+      }
+
+      res.json({
+        success: true,
+        userInfo: userInfo,
+        category: category || 'general',
+        tips: healthTips,
+        displayMessage: generateHealthTipsResponse(healthTips, category, userInfo),
+        timestamp: new Date().toISOString(),
+        version: VERSION,
+      });
+    } catch (error) {
+      res.status(500).json({
+        success: false,
+        error: "Internal server error",
+        version: VERSION,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }
+);
+
+// Count recommendations by type
+function countRecommendationsByType(recommendations) {
+  const counts = {};
+  recommendations.forEach(rec => {
+    counts[rec.type] = (counts[rec.type] || 0) + 1;
+  });
+  return counts;
 }
 
 
