@@ -1,95 +1,35 @@
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> dc2a12f3851555562b3a4c62aece96e6277fc83c
-# elderly_aiassistant
+# Aged Care Platform with Personal AI Assistants
 
-A new Flutter project.
+**Project ID:** CSIT-25-S3-07  
+**Proposed Title:** Aged Care Platform with Personal AI Assistants  
 
+## Project Description
+
+Elderly individuals often find technology complex and intimidating. To address this, the platform provides a personal AI assistant linked to each user’s account, making navigation effortless and easy to use. With the assistant’s support, users can seamlessly resume their activities from where they left off and remember their favourite activities on the platform. Additionally, the AI assistant continuously learns user behaviors, adapting to their needs and habits for a more personalized and intuitive experience.
+
+## Expected Outcomes
+
+- A dedicated digital platform for aging individuals.  
+- Platform features include:
+  - Social media integration
+  - Learning resources for various topics
+  - Event scheduling and reminders
+  - Social activities and experience sharing  
+- AI Assistant features:
+  - Learns habits of the user and provides proper assistance linked to their account
+  - Functions as a personal assistant with adaptable and intelligent features
+
+For Website 
+- npm start
+
+For flutter application
+- flutter run
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+This project is a Flutter application.  
 
-A few resources to get you started if this is your first Flutter project:
+A few resources to get you started:
 
+- [Flutter Official Documentation](https://docs.flutter.dev/)
 - [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
 - [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
-<<<<<<< HEAD
-=======
-# Getting Started with Create React App
-
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
-
-## Available Scripts
-
-In the project directory, you can run:
-
-### `npm start`
-
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
-
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
-
-### `npm test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
->>>>>>> 24e7672 (Initial commit to AllCareWebsite branch)
-=======
->>>>>>> dc2a12f3851555562b3a4c62aece96e6277fc83c
