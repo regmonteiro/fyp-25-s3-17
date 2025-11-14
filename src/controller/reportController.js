@@ -5,15 +5,12 @@ function isInRange(dateStr, start, end) {
   if (!dateStr) return false;
   const date = new Date(dateStr);
 
-  const startDate = new Date(start);
-  startDate.setHours(0, 0, 0, 0);
-
-  const endDate = new Date(end);
-  endDate.setHours(23, 59, 59, 999);
+  // Always treat start/end as UTC
+  const startDate = new Date(start + "T00:00:00.000Z");
+  const endDate = new Date(end + "T23:59:59.999Z");
 
   return date >= startDate && date <= endDate;
 }
-
 
 export async function generateUsageReport(startDate, endDate) {
   try {
@@ -34,22 +31,22 @@ export async function generateUsageReport(startDate, endDate) {
       // Sort filtered logs by date ascending
       filteredLogs.sort((a, b) => new Date(a.date) - new Date(b.date));
 
-      let loginCount = filteredLogs.length;
+      const loginCount = filteredLogs.length;
       let lastActiveDate = "N/A";
 
       if (loginCount > 0) {
         lastActiveDate = filteredLogs[filteredLogs.length - 1].date;
-      } else if (isInRange(user.lastLoginDate, startDate, endDate)) {
-        loginCount = 1;
+      } else if (user.lastLoginDate) {
         lastActiveDate = user.lastLoginDate;
       }
 
-      console.log(`User ${id}: loginCount=${loginCount}, lastActiveDate=${lastActiveDate}`);
+      // Skip users with no email, no login activity, or unknown type
+      if (!user.email || lastActiveDate === "N/A" || !user.userType || user.userType === "unknown") return;
 
       reports.push({
         id,
-        email: user.email || "N/A",
-        userType: user.userType || "N/A",
+        email: user.email,
+        userType: user.userType,
         loginCount,
         lastActiveDate,
       });
@@ -73,7 +70,10 @@ export async function getAllUserTypeDistribution() {
     const counts = {};
 
     Object.values(data).forEach((user) => {
-      const type = user.userType || "unknown";
+      // Skip unknown users or users without email
+      if (!user.email || !user.userType || user.userType === "unknown") return;
+
+      const type = user.userType;
       counts[type] = (counts[type] || 0) + 1;
     });
 

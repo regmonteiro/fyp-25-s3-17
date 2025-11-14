@@ -1,37 +1,72 @@
-// backend/roleController.js
-const express = require('express');
-const admin = require('firebase-admin');
-const router = express.Router();
+import { ref, get } from "firebase/database";
+import { database } from "../firebaseConfig";
 
-const allowedRoles = ['elderly', 'caregiver', 'admin'];
+function isInRange(dateStr, start, end) {
+  if (!dateStr) return false;
+  const date = new Date(dateStr);
 
-router.post('/assign-role', async (req, res) => {
-  const { email, role } = req.body;
+  const startDate = new Date(start);
+  startDate.setHours(0, 0, 0, 0);
 
-  if (!email || !role) {
-    return res.status(400).json({ success: false, message: 'Email and role are required' });
-  }
+  const endDate = new Date(end);
+  endDate.setHours(23, 59, 59, 999);
 
-  if (!allowedRoles.includes(role)) {
-    return res.status(400).json({ success: false, message: 'Invalid role' });
-  }
+  return date >= startDate && date <= endDate;
+}
 
+export async function getGroupedUserReport(startDate, endDate) {
   try {
-    const usersRef = admin.firestore().collection('Account');
-    const snapshot = await usersRef.where('email', '==', email).get();
+    const accountsRef = ref(database, "Account");
+    const snapshot = await get(accountsRef);
+    if (!snapshot.exists()) return {};
 
-    if (snapshot.empty) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
+    const data = snapshot.val();
+    const groups = {
+      admin: [],
+      caregiver: [],
+      elderly: [],
+      unknown: [],
+    };
 
-    const userDoc = snapshot.docs[0];
-    await userDoc.ref.update({ userType: role });
+    Object.entries(data).forEach(([id, user]) => {
+      const userType = user.userType || "unknown";
 
-    return res.json({ success: true, message: `Role "${role}" assigned to ${email}` });
-  } catch (err) {
-    console.error('Role assignment error:', err);
-    return res.status(500).json({ success: false, message: 'Server error during role assignment' });
+      // Gather logs in range
+      const logs = user.loginLogs ? Object.values(user.loginLogs) : [];
+      const filteredLogs = logs.filter((log) => isInRange(log.date, startDate, endDate));
+      filteredLogs.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+      let loginCount = filteredLogs.length;
+      let lastActiveDate = null;
+
+      if (loginCount > 0) {
+        lastActiveDate = filteredLogs[filteredLogs.length - 1].date;
+      } else if (isInRange(user.lastLoginDate, startDate, endDate)) {
+        loginCount = 1;
+        lastActiveDate = user.lastLoginDate;
+      }
+
+      groups[userType] = groups[userType] || [];
+      groups[userType].push({
+        email: user.email || "N/A",
+        loginCount,
+        lastActiveDate: lastActiveDate ? new Date(lastActiveDate) : null,
+      });
+    });
+
+    // Sort each group by lastActiveDate descending (most recent first)
+    Object.keys(groups).forEach((key) => {
+      groups[key].sort((a, b) => {
+        if (!a.lastActiveDate && !b.lastActiveDate) return 0;
+        if (!a.lastActiveDate) return 1;
+        if (!b.lastActiveDate) return -1;
+        return b.lastActiveDate - a.lastActiveDate;
+      });
+    });
+
+    return groups;
+  } catch (error) {
+    console.error("Error fetching grouped user report:", error);
+    return {};
   }
-});
-
-module.exports = router;
+}
