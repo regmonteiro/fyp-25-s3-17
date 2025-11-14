@@ -1,41 +1,65 @@
-export function createAccountEntity(formData) {
-  const { firstname, lastname, email, dob, phoneNum, password, confirmPassword, userType, elderlyId } = formData;
-
-  const nameRegex = /^[A-Za-z\s]+$/;
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  const today = new Date().toISOString().split('T')[0];
-
-  function validate() {
-    if (!firstname.trim()) return "First name is required.";
-    if (!nameRegex.test(firstname)) return "First name must only contain letters.";
-    if (!lastname.trim()) return "Last name is required.";
-    if (!nameRegex.test(lastname)) return "Last name must only contain letters.";
-    if (!email.trim()) return "Email is required.";
-    if (!emailRegex.test(email)) return "Email format is invalid.";
-    if (!dob) return "Date of birth is required.";
-    if (dob > today) return "Date of birth cannot be in the future.";
-    if (!phoneNum.trim()) return "Phone number is required.";
-    if (password.length < 8) return "Password must be at least 8 characters.";
-    if (password !== confirmPassword) return "Passwords do not match.";
-
-    // Elderly ID required if caregiver
-    if (userType === 'caregiver' && (!elderlyId || !elderlyId.trim())) {
-      return "Elderly email is required for caregiver accounts.";
-    }
-
-    return null;
-  }
-
-  return {
+// src/entity/createAccountEntity.js
+export function createAccountEntity(accountData) {
+  const {
     firstname,
     lastname,
     email,
     dob,
     phoneNum,
     password,
-    confirmPassword,
     userType,
-    elderlyId: userType === 'caregiver' ? elderlyId.trim() : null,
-    validate,
+    elderlyIds = [],   // now an array
+    subscriptionPlan,
+    subscriptionEndDate,
+    paymentDetails
+  } = accountData;
+
+  function validate() {
+    if (!firstname || !lastname || !email || !dob || !phoneNum || !password || !userType) {
+      return "All fields are required";
+    }
+
+    if (!isValidEmail(email)) {
+      return "Please enter a valid email address";
+    }
+
+    if (password.length < 8) {
+      return "Password must be at least 8 characters long";
+    }
+
+    if (userType === "caregiver") {
+      if (!Array.isArray(elderlyIds)) {
+        return "elderlyIds must be an array";
+      }
+      for (const id of elderlyIds) {
+        if (id && !isValidEmail(id)) {
+          return `Invalid elderly email: ${id}`;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function isValidEmail(email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  }
+
+  return {
+    firstname: firstname.trim(),
+    lastname: lastname.trim(),
+    email: email.trim().toLowerCase(),
+    dob,
+    phoneNum,
+    password,
+    userType,
+    elderlyIds: Array.isArray(elderlyIds)
+      ? elderlyIds.map(e => e.trim().toLowerCase())
+      : [],
+    subscriptionPlan,
+    subscriptionEndDate,
+    paymentDetails,
+    validate
   };
 }

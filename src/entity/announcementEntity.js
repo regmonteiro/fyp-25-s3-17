@@ -1,4 +1,4 @@
-// backend/announcementEntity.js
+// Entity/announcementEntity.js
 
 class AnnouncementEntity {
   /**

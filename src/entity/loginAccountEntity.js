@@ -1,4 +1,3 @@
-// src/entity/loginAccountEntity.js
 export function loginAccountEntity(formData) {
   const { email, password } = formData;
 
