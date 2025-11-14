@@ -108,13 +108,14 @@ const FeedbackPage = () => {
 
 const styles = {
   container: {
-    maxWidth: '900px',
+    maxWidth: '100%',
     margin: '50px auto',
-    padding: '0 15px 60px',
+    padding: '10px 15px 60px',
     fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
     backgroundColor: '#fff',
     borderRadius: '18px',
     boxShadow: '0 8px 25px rgba(0,0,0,0.08)',
+    marginTop: '-60px',
   },
   title: {
     fontWeight: '900',

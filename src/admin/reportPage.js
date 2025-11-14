@@ -1,5 +1,5 @@
 // src/admin/ReportPage.js
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { generateUsageReport, getAllUserTypeDistribution } from '../controller/reportController';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer,
@@ -7,6 +7,8 @@ import {
 } from 'recharts';
 import { ref, onValue } from 'firebase/database';
 import { database } from '../firebaseConfig';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
 
 const COLORS = ['#b76ffaff', '#0088FE'];
 const USER_TYPE_COLORS = {
@@ -30,6 +32,8 @@ const ReportPage = () => {
   const [userTypeCount, setUserTypeCount] = useState([]);
   const [selectedUserType, setSelectedUserType] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [isGeneratingPDF, setIsGeneratingPDF] = useState(false);
+  const reportRef = useRef();
 
   useEffect(() => {
     getAllUserTypeDistribution().then(setUserTypeCount);
@@ -75,11 +79,110 @@ const ReportPage = () => {
     }
   };
 
+  const downloadPDF = () => {
+    setIsGeneratingPDF(true);
+    
+    // Create a clone of the report content to avoid affecting the visible UI
+    const reportContent = reportRef.current.cloneNode(true);
+    
+    // Remove the form elements from the cloned content
+    const formElements = reportContent.querySelectorAll('[data-pdf-ignore]');
+    formElements.forEach(el => el.remove());
+    
+    // Create a temporary container for PDF generation
+    const tempContainer = document.createElement('div');
+    tempContainer.style.position = 'absolute';
+    tempContainer.style.left = '-9999px';
+    tempContainer.style.width = '1200px';
+    tempContainer.appendChild(reportContent);
+    document.body.appendChild(tempContainer);
+    
+    // Use a promise to ensure all charts are rendered before capturing
+    const captureCharts = () => {
+      return new Promise(resolve => {
+        // Small delay to ensure all charts are rendered
+        setTimeout(() => {
+          html2canvas(tempContainer, {
+            scale: 2,
+            useCORS: true,
+            logging: false,
+            width: tempContainer.scrollWidth,
+            height: tempContainer.scrollHeight,
+            windowWidth: tempContainer.scrollWidth,
+            windowHeight: tempContainer.scrollHeight,
+            scrollX: 0,
+            scrollY: 0,
+            onclone: (clonedDoc) => {
+              // Ensure all charts are visible in the cloned document
+              const charts = clonedDoc.querySelectorAll('.recharts-wrapper');
+              charts.forEach(chart => {
+                chart.style.visibility = 'visible';
+                chart.style.opacity = '1';
+              });
+            }
+          }).then((canvas) => {
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const title = "Admin Usage Report";
+            const margin = 15;
+            
+            // Add title to PDF
+            pdf.setFontSize(20);
+            pdf.text(title, pdf.internal.pageSize.getWidth() / 2, margin, { align: 'center' });
+            
+            // Add date range to PDF if available
+            if (startDate && endDate) {
+              pdf.setFontSize(12);
+              pdf.text(`Date Range: ${startDate} to ${endDate}`, pdf.internal.pageSize.getWidth() / 2, margin + 10, { align: 'center' });
+            }
+            
+            const imgData = canvas.toDataURL('image/png');
+            const imgWidth = pdf.internal.pageSize.getWidth() - margin * 2;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            
+            let heightLeft = imgHeight;
+            let position = margin + 20;
+            let pageHeight = pdf.internal.pageSize.getHeight() - margin * 2;
+            
+            // Add the image to PDF with pagination
+            pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+            heightLeft -= pageHeight;
+            
+            // Add additional pages if needed
+            while (heightLeft >= 0) {
+              position = heightLeft - imgHeight;
+              pdf.addPage();
+              pdf.addImage(imgData, 'PNG', margin, position, imgWidth, imgHeight);
+              heightLeft -= pageHeight;
+            }
+            
+            // Add page numbers
+            const pageCount = pdf.internal.getNumberOfPages();
+            for (let i = 1; i <= pageCount; i++) {
+              pdf.setPage(i);
+              pdf.setFontSize(10);
+              pdf.text(`Page ${i} of ${pageCount}`, pdf.internal.pageSize.getWidth() - 20, pdf.internal.pageSize.getHeight() - 10);
+            }
+            
+            // Save the PDF
+            pdf.save(`Usage_Report_${startDate}_to_${endDate}.pdf`);
+            
+            // Clean up
+            document.body.removeChild(tempContainer);
+            setIsGeneratingPDF(false);
+            resolve();
+          });
+        }, 500); // Wait for charts to render
+      });
+    };
+    
+    captureCharts();
+  };
+
   return (
-    <div style={styles.container}>
+    <div style={styles.container} ref={reportRef}>
       <h2 style={styles.heading}>Admin Usage Report</h2>
 
-      <div style={styles.form}>
+      <div style={styles.form} data-pdf-ignore>
         <div style={styles.inputGroup}>
           <label style={styles.label}>Start Date:</label>
           <input
@@ -102,7 +205,20 @@ const ReportPage = () => {
           />
         </div>
 
-        <button onClick={handleGenerateReport} style={styles.button}>Generate Report</button>
+        <div style={styles.buttonGroup}>
+          <button onClick={handleGenerateReport} style={styles.button}>Generate Report</button>
+          <button 
+            onClick={downloadPDF} 
+            style={{
+              ...styles.button,
+              ...styles.downloadButton,
+              opacity: (isGeneratingPDF || filteredReportData.length === 0) ? 0.6 : 1
+            }}
+            disabled={isGeneratingPDF || filteredReportData.length === 0}
+          >
+            {isGeneratingPDF ? 'Generating PDF...' : 'Download PDF'}
+          </button>
+        </div>
       </div>
 
       {error && <p style={styles.error}>{error}</p>}
@@ -110,7 +226,7 @@ const ReportPage = () => {
       {filteredReportData.length > 0 && (
         <>
           {/* Filter Buttons */}
-          <div style={styles.filterButtons}>
+          <div style={styles.filterButtons} data-pdf-ignore>
             {['all', 'admin', 'elderly', 'caregiver'].map(type => (
               <button
                 key={type}
@@ -128,7 +244,7 @@ const ReportPage = () => {
           </div>
 
           {/* Search Bar */}
-          <div style={styles.searchBar}>
+          <div style={styles.searchBar} data-pdf-ignore>
             <input
               type="text"
               placeholder="Search by email..."
@@ -284,18 +400,25 @@ const styles = {
     border: '1px solid #ccc',
     fontSize: '14px',
   },
+  buttonGroup: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'center',
+  },
   button: {
     width: '180px',
     height: '42px',
     padding: '10px 20px',
-    borderRadius: '5px',
+    borderRadius: '55px',
     backgroundColor: '#007bff',
     color: 'white',
     border: 'none',
     fontWeight: '600',
     cursor: 'pointer',
-    marginTop: 'auto',
     transition: 'background-color 0.3s ease',
+  },
+  downloadButton: {
+    backgroundColor: '#28a745',
   },
   error: {
     color: 'red',

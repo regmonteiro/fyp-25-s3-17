@@ -12,7 +12,7 @@ function AnnouncementPage() {
   const [loading, setLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
-  const availableGroups = ['elderly', 'caregiver', 'admin'];
+  const availableGroups = ['all users ','elderly', 'caregiver', 'admin'];
 
   useEffect(() => {
     async function loadAnnouncements() {
@@ -159,8 +159,8 @@ function AnnouncementPage() {
 
 const styles = {
   pageContainer: {
-    maxWidth: 800,
-    margin: '2rem auto',
+    maxWidth: 1200,
+    margin: '1rem auto',
     padding: '1rem 2rem 3rem',
     fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
     backgroundColor: '#e6f0fa',  // very light blue background
@@ -180,7 +180,7 @@ const styles = {
     fontSize: '1.6rem',
     fontWeight: '600',
     color: '#004080', // medium blue
-    marginTop: 40,
+    marginTop: 10,
     marginBottom: 16,
     borderBottom: '2px solid #99badd', // soft blue border
     paddingBottom: 6,

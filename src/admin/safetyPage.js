@@ -154,8 +154,8 @@ function SafetyPage() {
 
 const styles = {
   container: {
-    maxWidth: 800,
-    margin: '2rem auto',
+    maxWidth: 1200,
+    margin: '1rem auto',
     padding: '2rem',
     backgroundColor: '#f3f9ff',
     borderRadius: 12,

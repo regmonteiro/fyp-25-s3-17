@@ -95,6 +95,33 @@ function encodeEmail(email) {
   return email.replace(/[.#$/[\]]/g, '_');
 }
 
+function isInRange(dateStr, start, end) {
+  if (!dateStr) return false;
+  const date = new Date(dateStr);
+
+  // Singapore timezone offset in minutes (+8 hours)
+  const SG_OFFSET = 8 * 60 * 60 * 1000;
+
+  // Parse start/end as local Singapore time
+  const startDate = new Date(new Date(start).getTime() - new Date(start).getTimezoneOffset() * 60000 + SG_OFFSET);
+  startDate.setHours(0, 0, 0, 0);
+
+  const endDate = new Date(new Date(end).getTime() - new Date(end).getTimezoneOffset() * 60000 + SG_OFFSET);
+  endDate.setHours(23, 59, 59, 999);
+
+  // Convert UTC date to Singapore time for comparison
+  const dateInSG = new Date(date.getTime() + SG_OFFSET);
+
+  return dateInSG >= startDate && dateInSG <= endDate;
+}
+
+function formatSGDate(dateStr) {
+  if (!dateStr) return "N/A";
+  const date = new Date(dateStr);
+  // toLocaleString with Singapore time zone
+  return date.toLocaleString("en-SG", { timeZone: "Asia/Singapore" });
+}
+
 function RolePage() {
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('');
@@ -141,6 +168,7 @@ function RolePage() {
   };
 
   return (
+    
     <div style={styles.container}>
       <h2 style={styles.title}>Assign User Roles</h2>
 
